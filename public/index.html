@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Soundboard</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; background: #2f3136; color: #dcddde; }
+        .panel { background: #36393f; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; }
+        button, select, input { padding: 0.5rem; margin-top: 0.5rem; background: #5865F2; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #4752C4; }
+        .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.5rem; margin-top: 1rem; }
+        .sound-btn { 
+            background: #4f545c; 
+            word-wrap: break-word; 
+            overflow: hidden; 
+            white-space: normal; 
+            padding: 10px;
+            font-size: 0.85rem;
+            line-height: 1.2;
+}
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h2>Connection</h2>
+        <select id="channelSelect"><option>Loading channels...</option></select>
+        <button onclick="joinChannel()">Join Channel</button>
+        <button onclick="leaveChannel()" style="background: #ed4245;">Leave</button>
+    </div>
+    <div class="panel">
+        <h2>Volume Controls</h2>
+        <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="0.5" onchange="setVolume(this.value)">
+    </div>
+    <div class="panel">
+        <h2>Upload Sound</h2>
+        <input type="file" id="fileInput" accept="audio/*">
+        <button onclick="uploadSound()">Upload</button>
+    </div>
+    <div class="panel">
+        <h2>Soundboard</h2>
+        <div id="soundsList" class="sound-grid"></div>
+    </div>
+
+    <script>
+        async function fetchChannels() {
+            const res = await fetch('/api/channels');
+            const channels = await res.json();
+            const select = document.getElementById('channelSelect');
+            select.innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+        }
+        async function fetchSounds() {
+            const res = await fetch('/api/sounds');
+            const sounds = await res.json();
+            const grid = document.getElementById('soundsList');
+            grid.innerHTML = sounds.map(s => {
+                const escaped = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                return `<button class="sound-btn" data-filename="${escaped}" onclick="playSound(this.dataset.filename)">${escaped}</button>`;
+            }).join('');
+        }
+        async function joinChannel() {
+            const channelId = document.getElementById('channelSelect').value;
+            await fetch('/api/join', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ channelId }) });
+        }
+        async function leaveChannel() { await fetch('/api/leave', { method: 'POST' }); }
+        async function playSound(filename) {
+            const res = await fetch('/api/play', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ filename }) });
+            const msg = await res.text();
+            if (!res.ok) alert(msg);
+        }
+        async function setVolume(volume) { await fetch('/api/volume', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ volume }) }); }
+        async function uploadSound() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput.files[0]) return alert("Select a file first!");
+            const formData = new FormData();
+            formData.append('soundFile', fileInput.files[0]);
+            await fetch('/api/upload', { method: 'POST', body: formData });
+            fileInput.value = '';
+            fetchSounds();
+        }
+        fetchChannels();
+        fetchSounds();
+    </script>
+</body>
+</html>

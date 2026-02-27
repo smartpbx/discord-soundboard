@@ -1,0 +1,11 @@
+services:
+  discord-soundboard:
+    build: .
+    container_name: local-soundboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./sounds:/usr/src/app/sounds
+    env_file:
+      - .env
