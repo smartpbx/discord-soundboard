@@ -339,7 +339,7 @@ app.post('/api/resume', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
-app.post('/api/volume', (req, res) => {
+app.post('/api/volume', requireAdmin, (req, res) => {
     const { volume } = req.body;
     const v = parseFloat(volume);
     if (Number.isFinite(v)) currentVolume = Math.max(0, Math.min(1, v));
@@ -347,7 +347,7 @@ app.post('/api/volume', (req, res) => {
     res.send(`Volume set to ${currentVolume}`);
 });
 
-app.get('/api/volume', (req, res) => res.json({ volume: currentVolume }));
+app.get('/api/volume', requireAuth, (req, res) => res.json({ volume: currentVolume }));
 
 client.login(process.env.DISCORD_TOKEN);
 const PORT = process.env.PORT || 3000;
