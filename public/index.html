@@ -4,82 +4,471 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Discord Soundboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; background: #2f3136; color: #dcddde; }
-        .panel { background: #36393f; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem; }
-        button, select, input { padding: 0.5rem; margin-top: 0.5rem; background: #5865F2; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #4752C4; }
-        .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.5rem; margin-top: 1rem; }
-        .sound-btn { 
-            background: #4f545c; 
-            word-wrap: break-word; 
-            overflow: hidden; 
-            white-space: normal; 
-            padding: 10px;
+        :root {
+            --bg: #0f0f12;
+            --surface: #18181c;
+            --surface-hover: #1f1f24;
+            --border: #2a2a32;
+            --text: #e4e4e7;
+            --text-muted: #a1a1aa;
+            --accent: #7c3aed;
+            --accent-hover: #6d28d9;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --success: #22c55e;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'DM Sans', system-ui, sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .app {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0 0 1.5rem;
+            letter-spacing: -0.02em;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: var(--shadow);
+        }
+        .card-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+        .row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        select {
+            flex: 1;
+            min-width: 180px;
+            padding: 0.6rem 0.75rem;
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font: inherit;
+            cursor: pointer;
+        }
+        select:focus { outline: none; border-color: var(--accent); }
+        .btn {
+            padding: 0.6rem 1rem;
+            border: none;
+            border-radius: var(--radius-sm);
+            font: inherit;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.05s;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-ghost { background: var(--surface-hover); color: var(--text); }
+        .btn-ghost:hover { background: var(--border); }
+        .btn-icon {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+        }
+        .btn-icon svg { width: 20px; height: 20px; }
+        /* Playback player */
+        .player {
+            background: linear-gradient(135deg, var(--surface) 0%, #1a1a20 100%);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .player-idle .player-controls { opacity: 0.6; }
+        .player-now-playing {
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+        .player-now-playing strong { color: var(--text); }
+        .progress-wrap {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 0.75rem;
+            cursor: pointer;
+        }
+        .progress-bar {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.2s;
+        }
+        .progress-wrap.indeterminate .progress-bar {
+            width: 40%;
+            animation: indeterminate 1.5s ease-in-out infinite;
+        }
+        @keyframes indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(350%); }
+        }
+        .progress-time {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
+        /* Volume */
+        .volume-row { align-items: center; gap: 1rem; }
+        .volume-row input[type="range"] {
+            flex: 1;
+            min-width: 120px;
+            accent-color: var(--accent);
+            height: 6px;
+        }
+        .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
+        /* Soundboard */
+        .sound-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 0.75rem;
+        }
+        .sound-item {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .sound-btn {
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.85rem;
+            color: var(--text);
+            font: inherit;
             font-size: 0.85rem;
-            line-height: 1.2;
-}
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            text-align: center;
+            word-break: break-word;
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .sound-btn:hover {
+            background: var(--border);
+            border-color: var(--accent);
+        }
+        .sound-btn:active { transform: scale(0.98); }
+        .sound-edit {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: none;
+            background: var(--surface);
+            border-radius: 4px;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.7;
+            transition: opacity 0.15s;
+        }
+        .sound-edit:hover { opacity: 1; color: var(--accent); }
+        .sound-edit svg { width: 12px; height: 12px; }
+        /* Upload */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius-sm);
+            padding: 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .upload-zone input[type="file"] { display: none; }
+        .upload-zone label { cursor: pointer; display: block; }
+        .upload-zone .browse { color: var(--accent); font-weight: 500; }
+        /* Stop button at top */
+        .top-actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
     </style>
 </head>
 <body>
-    <div class="panel">
-        <h2>Connection</h2>
-        <select id="channelSelect"><option>Loading channels...</option></select>
-        <button onclick="joinChannel()">Join Channel</button>
-        <button onclick="leaveChannel()" style="background: #ed4245;">Leave</button>
-    </div>
-    <div class="panel">
-        <h2>Volume Controls</h2>
-        <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="0.5" onchange="setVolume(this.value)">
-    </div>
-    <div class="panel">
-        <h2>Upload Sound</h2>
-        <input type="file" id="fileInput" accept="audio/*">
-        <button onclick="uploadSound()">Upload</button>
-    </div>
-    <div class="panel">
-        <h2>Soundboard</h2>
-        <div id="soundsList" class="sound-grid"></div>
+    <div class="app">
+        <h1>🔊 Soundboard</h1>
+
+        <div class="top-actions">
+            <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Connection</div>
+            <div class="row">
+                <select id="channelSelect"><option>Loading channels...</option></select>
+                <button type="button" class="btn btn-primary" onclick="joinChannel()">Join Channel</button>
+                <button type="button" class="btn btn-danger" onclick="leaveChannel()">Leave</button>
+            </div>
+        </div>
+
+        <div class="player" id="playerCard">
+            <div class="card-title">Now Playing</div>
+            <div class="player-now-playing" id="nowPlayingText">Nothing playing</div>
+            <div class="progress-wrap" id="progressWrap">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-time" id="progressTime">0:00 / 0:00</div>
+            <div class="player-buttons">
+                <button type="button" class="btn btn-ghost btn-icon" id="playPauseBtn" onclick="togglePlayPause()" title="Play / Pause" disabled>▶</button>
+                <button type="button" class="btn btn-ghost btn-icon" id="stopBtn" onclick="stopPlayback()" title="Stop">⏹</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Volume</div>
+            <div class="row volume-row">
+                <span class="volume-label" id="volumeLabel">50%</span>
+                <input type="range" id="volumeSlider" min="0" max="1" step="0.02" value="0.5" title="Volume">
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Upload Sound</div>
+            <div class="upload-zone">
+                <label><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
+                <input type="file" id="fileInput" accept="audio/*">
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Sounds</div>
+            <div id="soundsList" class="sound-grid"></div>
+        </div>
     </div>
 
     <script>
+        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+        let pausedAt = 0;
+
         async function fetchChannels() {
             const res = await fetch('/api/channels');
             const channels = await res.json();
             const select = document.getElementById('channelSelect');
             select.innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
         }
+
         async function fetchSounds() {
             const res = await fetch('/api/sounds');
             const sounds = await res.json();
             const grid = document.getElementById('soundsList');
             grid.innerHTML = sounds.map(s => {
-                const escaped = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-                return `<button class="sound-btn" data-filename="${escaped}" onclick="playSound(this.dataset.filename)">${escaped}</button>`;
+                const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                const name = esc(s.displayName || s.filename);
+                const filename = esc(s.filename);
+                return `
+                    <div class="sound-item">
+                        <button type="button" class="sound-btn" data-filename="${filename}" onclick="playSound(this.dataset.filename)">${name}</button>
+                        <button type="button" class="sound-edit" data-filename="${filename}" data-displayname="${name}" onclick="editSoundName(this)" title="Edit name" aria-label="Edit name">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                        </button>
+                    </div>`;
             }).join('');
         }
+
+        function editSoundName(btn) {
+            const filename = btn.dataset.filename;
+            const currentName = btn.dataset.displayname || filename;
+            const newName = prompt('Button label:', currentName);
+            if (newName === null) return;
+            fetch('/api/sounds/metadata', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, displayName: newName.trim() || filename })
+            }).then(() => fetchSounds());
+        }
+
         async function joinChannel() {
             const channelId = document.getElementById('channelSelect').value;
-            await fetch('/api/join', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ channelId }) });
+            await fetch('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) });
         }
-        async function leaveChannel() { await fetch('/api/leave', { method: 'POST' }); }
+
+        async function leaveChannel() {
+            await fetch('/api/leave', { method: 'POST' });
+        }
+
         async function playSound(filename) {
-            const res = await fetch('/api/play', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ filename }) });
-            const msg = await res.text();
-            if (!res.ok) alert(msg);
+            const res = await fetch('/api/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert(typeof data === 'string' ? data : (data.message || 'Failed to play'));
+                return;
+            }
+            playback.duration = data.duration ?? null;
+            playback.startTime = Date.now();
+            playback.status = 'playing';
+            playback.displayName = data.displayName ?? filename;
+            playback.filename = filename;
+            pausedAt = 0;
+            updatePlayPauseButton();
         }
-        async function setVolume(volume) { await fetch('/api/volume', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ volume }) }); }
+
+        async function stopPlayback() {
+            await fetch('/api/stop', { method: 'POST' });
+            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+            pausedAt = 0;
+            updateNowPlaying();
+            updatePlayPauseButton();
+        }
+
+        async function togglePlayPause() {
+            if (playback.status === 'playing') {
+                await fetch('/api/pause', { method: 'POST' });
+                pausedAt = (Date.now() - (playback.startTime || 0)) / 1000;
+                if (playback.duration != null) pausedAt = Math.min(pausedAt, playback.duration);
+                playback.status = 'paused';
+            } else if (playback.status === 'paused') {
+                await fetch('/api/resume', { method: 'POST' });
+                playback.status = 'playing';
+            }
+            updatePlayPauseButton();
+        }
+
+        function updatePlayPauseButton() {
+            const btn = document.getElementById('playPauseBtn');
+            const isActive = playback.status === 'playing' || playback.status === 'paused';
+            btn.disabled = !isActive;
+            btn.textContent = playback.status === 'playing' ? '⏸' : '▶';
+            btn.title = playback.status === 'playing' ? 'Pause' : 'Play';
+        }
+
+        function updateNowPlaying() {
+            const card = document.getElementById('playerCard');
+            const text = document.getElementById('nowPlayingText');
+            const wrap = document.getElementById('progressWrap');
+            if (playback.status === 'idle' || !playback.displayName) {
+                text.innerHTML = 'Nothing playing';
+                card.classList.add('player-idle');
+                wrap.classList.add('indeterminate');
+            } else {
+                text.innerHTML = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
+                card.classList.remove('player-idle');
+                if (playback.duration == null) wrap.classList.add('indeterminate');
+                else wrap.classList.remove('indeterminate');
+            }
+        }
+
+        function formatTime(s) {
+            if (s == null || !Number.isFinite(s)) return '0:00';
+            const m = Math.floor(s / 60);
+            const sec = Math.floor(s % 60);
+            return m + ':' + (sec < 10 ? '0' : '') + sec;
+        }
+
+        function refreshPlaybackState() {
+            fetch('/api/playback-state').then(r => r.json()).then(state => {
+                playback.status = state.status;
+                playback.filename = state.filename;
+                playback.displayName = state.displayName ?? state.filename;
+                playback.startTime = state.startTime;
+                playback.duration = state.duration;
+                if (state.status === 'idle') pausedAt = 0;
+                updateNowPlaying();
+                updatePlayPauseButton();
+
+                const bar = document.getElementById('progressBar');
+                const timeEl = document.getElementById('progressTime");
+                const wrap = document.getElementById('progressWrap');
+                if (state.status === 'idle') {
+                    bar.style.width = '0%';
+                    timeEl.textContent = '0:00 / 0:00';
+                    wrap.classList.remove('indeterminate');
+                    return;
+                }
+                let current = 0;
+                const dur = state.duration;
+                if (state.status === 'playing' && state.startTime && dur != null) {
+                    current = (Date.now() - state.startTime) / 1000;
+                    current = Math.min(Math.max(0, current), dur);
+                } else if (state.status === 'paused' && state.startTime && dur != null) {
+                    current = pausedAt;
+                }
+                if (dur != null && dur > 0) {
+                    bar.style.width = (current / dur * 100) + '%';
+                    timeEl.textContent = formatTime(current) + ' / ' + formatTime(dur);
+                    wrap.classList.remove('indeterminate');
+                } else {
+                    timeEl.textContent = formatTime(current) + ' / —';
+                    wrap.classList.add('indeterminate');
+                }
+            }).catch(() => {});
+        }
+
+        function setVolume(volume) {
+            const v = parseFloat(volume);
+            document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
+            fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: v }) });
+        }
+
+        document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
+
         async function uploadSound() {
             const fileInput = document.getElementById('fileInput');
-            if (!fileInput.files[0]) return alert("Select a file first!");
+            if (!fileInput.files[0]) return;
             const formData = new FormData();
             formData.append('soundFile', fileInput.files[0]);
             await fetch('/api/upload', { method: 'POST', body: formData });
             fileInput.value = '';
             fetchSounds();
         }
+
+        document.getElementById('fileInput').addEventListener('change', uploadSound);
+
+        fetch('/api/volume').then(r => r.json()).then(data => {
+            const v = data.volume ?? 0.5;
+            document.getElementById('volumeSlider').value = v;
+            document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
+        });
+
+        setInterval(refreshPlaybackState, 400);
         fetchChannels();
         fetchSounds();
+        updateNowPlaying();
+        updatePlayPauseButton();
     </script>
 </body>
 </html>
