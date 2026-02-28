@@ -1,69 +1,66 @@
 # Proxmox LXC Install Script
 
-Install the Discord Soundboard as an LXC container on your Proxmox host, in the same style as [Proxmox VE Helper-Scripts](https://community-scripts.github.io/ProxmoxVE/).
+Install the Discord Soundboard as an LXC container on your Proxmox host in **one run** (like [Proxmox VE Helper-Scripts](https://community-scripts.github.io/ProxmoxVE/)).
 
 **Repo:** https://github.com/smartpbx/discord-soundboard
 
 ## Prerequisites
 
 - Proxmox VE host with a Debian 12 or Ubuntu 22.04/24.04 template.
-- If you don't have one: **Datacenter → local (storage) → Templates** → “Templates” → download e.g. `debian-12-standard` or `ubuntu-22.04-standard`.
+- If you don't have one: **Datacenter → local (storage) → CT Templates** → “Templates” → download e.g. `debian-12-standard` or `ubuntu-24.04-standard`.
 
-## One-line install (from Proxmox host)
+## One-line install (single run)
 
-Default clone URL is already set to `https://github.com/smartpbx/discord-soundboard.git`:
+Run once; the script creates the container, sets a root password, starts it, and installs the app. **No need to start the LXC or run the script again.**
+
+Uses the **next free container ID** (from `pvesh get /cluster/nextid` or 100, 101, …) unless you set `CTID`:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
 ```
 
-With options (e.g. custom CTID or static IP):
+At the end you get the Web UI URL, root password for the new CT, and update/backup commands.
+
+With options (e.g. fixed CTID or static IP):
 
 ```bash
 CTID=201 IP="192.168.1.201/24" GW="192.168.1.1" bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
 ```
 
-If the script creates a new container, set the root password and start it, then run the **same one-liner again** to finish the install:
-
-```bash
-pct set 200 --password 'YourRootPassword'
-pct start 200
-# then run the one-liner again
-```
-
 ## One-line update (from host)
 
-Pulls latest code and restarts the app. **Your `.env` and `sounds/` (files, folders, names, settings) are not touched.**
+Pulls latest code and restarts the app. **Your `.env` and `sounds/` are not touched.** Requires `CTID` (the script does not remember which CT you used):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
+CTID=200 bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
 ```
 
-Or with the script locally: `./install-discord-soundboard.sh update`
+Or with the script locally: `CTID=200 ./install-discord-soundboard.sh update`
 
 ---
 
 ## Manual / clone-based install
 
 1. Copy `install-discord-soundboard.sh` to your Proxmox host (or clone the repo there).
-2. Run install (default GIT_URL is already `https://github.com/smartpbx/discord-soundboard.git`):
+2. Run install once (default GIT_URL is `https://github.com/smartpbx/discord-soundboard.git`):
 
    ```bash
    chmod +x install-discord-soundboard.sh
-   ./install-discord-soundboard.sh install
+   ./install-discord-soundboard.sh
    ```
 
-   Or override the repo: `export GIT_URL="https://github.com/you/discord-soundboard.git"`
+   The script will use the next free container ID, create the CT, set a random root password, start it, and install the app. At the end it prints the Web UI URL and root password.
 
-3. If the script creates a new container, set root password and start the CT, then run the same command again (see above).
-4. Edit `.env` with your Discord bot token and passwords (see below).
-5. Open the Web UI at `http://<container-ip>:3000` and log in.
+   To force a specific CTID or static IP: `CTID=200 IP="192.168.1.200/24" GW="192.168.1.1" ./install-discord-soundboard.sh`
+
+3. Edit `.env` with your Discord bot token and passwords (see After install).
+4. Open the Web UI at the printed URL (e.g. `http://<container-ip>:3000`) and log in.
 
 ## Options
 
 | Env var      | Default              | Description           |
 |-------------|----------------------|------------------------|
-| `CTID`      | 200                  | Container ID          |
+| `CTID`      | next free ID         | Container ID (optional; script uses pvesh /cluster/nextid or 100+) |
 | `HOSTNAME`  | discord-soundboard   | Container hostname    |
 | `MEMORY`    | 512                  | RAM (MB)               |
 | `CORES`     | 1                    | CPU cores              |
@@ -88,10 +85,10 @@ export GW="192.168.1.1"
 
 Updates **code only**; `.env` and `sounds/` (your files, folders, names, settings) are kept.
 
-**From the Proxmox host:**
+**From the Proxmox host** (set CTID to your container):
 
 ```bash
-./install-discord-soundboard.sh update
+CTID=200 ./install-discord-soundboard.sh update
 ```
 
 Or one-liner:
