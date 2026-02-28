@@ -498,7 +498,13 @@ app.get('/api/channels', requireAdmin, (req, res) => {
             channels.push({ id: channel.id, name: `${guild.name} - ${channel.name}` });
         });
     });
-    res.json({ channels, lastChannelId: lastChannelId || null });
+    const voiceConnected = !!(activeGuildId && getVoiceConnection(activeGuildId));
+    let voiceChannelName = null;
+    if (voiceConnected && lastChannelId) {
+        const ch = client.channels.cache.get(lastChannelId);
+        if (ch) voiceChannelName = `${ch.guild.name} - ${ch.name}`;
+    }
+    res.json({ channels, lastChannelId: lastChannelId || null, voiceConnected, voiceChannelName });
 });
 
 let activeGuildId = null; // Track the server ID
@@ -1028,6 +1034,15 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         state.currentTime = Math.max(0, Math.min((state.duration || 999999), offset + elapsed));
     } else if (status === 'paused' && playbackState.pausedAt != null) {
         state.currentTime = playbackState.pausedAt;
+    }
+    if (req.session.user.role === 'admin' || req.session.user.role === 'superadmin') {
+        state.voiceConnected = !!(activeGuildId && getVoiceConnection(activeGuildId));
+        if (state.voiceConnected && lastChannelId) {
+            const ch = client.channels.cache.get(lastChannelId);
+            state.voiceChannelName = ch ? `${ch.guild.name} - ${ch.name}` : null;
+        } else {
+            state.voiceChannelName = null;
+        }
     }
     res.json(state);
 });

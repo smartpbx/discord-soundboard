@@ -248,9 +248,15 @@
         .top-actions.hidden { display: none; }
         .sounds-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
         .sounds-card-header .card-title { margin-bottom: 0; }
-        .sounds-header-buttons { display: flex; gap: 0.35rem; align-items: center; }
-        .toggle-btn { font-size: 0.8rem; }
-        .toggle-btn.active { background: var(--accent); color: white; }
+        .sounds-options-wrap { position: relative; }
+        .hamburger-btn { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+        .hamburger-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .sounds-options-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 140px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 50; padding: 0.25rem; }
+        .sounds-options-menu.hidden { display: none !important; }
+        .sounds-option-item { display: block; width: 100%; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.85rem; background: none; border: none; border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+        .sounds-option-item:hover { background: var(--surface-hover); }
+        .sounds-option-item.active { background: rgba(124, 58, 237, 0.2); color: var(--accent); }
+        .sounds-option-item.active::before { content: '✓ '; }
         .sound-grid.reorder-mode .sound-item { user-select: none; }
         .sound-item-wrap { display: contents; }
         .sound-grid.reorder-mode .sound-item-wrap { display: flex; flex-direction: column; cursor: grab; }
@@ -272,7 +278,7 @@
         .sounds-card.mobile-active .tags-admin,
         .sounds-card.mobile-active .favorites-section { display: none !important; }
         .sounds-card.mobile-active .mobile-grid-wrap { display: flex; }
-        .sounds-card.mobile-active .sounds-header-buttons .toggle-btn:not(#mobileBtn) { display: none; }
+        .sounds-card.mobile-active .sounds-options-wrap { display: block; }
         /* Mobile view: fullscreen soundboard section */
         .sounds-card.mobile-active {
             position: fixed; inset: 0; z-index: 50; margin: 0; border-radius: 0;
@@ -347,8 +353,16 @@
         .sounds-toolbar .sound-filter-input::placeholder { color: var(--text-muted); }
         .sounds-toolbar .sound-filter-input:focus { outline: none; border-color: var(--accent); }
         .sounds-toolbar .tag-tabs { flex: 1; min-width: 0; margin: 0; }
-        .top-bar-lock { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
-        .top-bar-lock input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--accent); }
+        .top-bar-toggle { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+        .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+        .toggle-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+        .toggle-slider { position: absolute; pointer-events: none; inset: 0; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 20px; transition: 0.2s; }
+        .toggle-slider::before { content: ''; position: absolute; height: 14px; width: 14px; left: 2px; bottom: 2px; background: var(--text-muted); border-radius: 50%; transition: 0.2s; }
+        .toggle-switch input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); background: white; }
+        .top-bar-voice { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; }
+        .top-bar-voice .voice-channel-info { font-size: 0.85rem; color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .top-bar-voice .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
         .sound-panel { margin-top: 1rem; padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); }
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
@@ -398,18 +412,21 @@
         <div id="soundsView" class="main-view">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-            <label class="top-bar-lock admin-only" title="Lock playback for users (superadmin locks everyone)">
-                <span class="top-bar-lock-label">Lock playback</span>
-                <input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)">
+            <label class="top-bar-toggle admin-only" title="When on, only admins can play sounds; users and guests are blocked">
+                <span class="top-bar-toggle-label">Only admins can play</span>
+                <span class="toggle-switch"><input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)"><span class="toggle-slider"></span></span>
             </label>
+            <div class="top-bar-voice admin-only hidden" id="voiceConnectedBar">
+                <span class="voice-channel-info" id="voiceChannelInfo" title="">📢 <span id="voiceChannelName">—</span></span>
+                <button type="button" class="btn btn-danger btn-sm" onclick="leaveChannel()">Leave</button>
+            </div>
         </div>
 
         <div class="card admin-only" id="connectionCard">
             <div class="card-title">Connection</div>
-            <div class="row">
+            <div class="row connection-row">
                 <select id="channelSelect"><option>Loading channels...</option></select>
                 <button type="button" class="btn btn-primary" onclick="joinChannel()">Join Channel</button>
-                <button type="button" class="btn btn-danger" onclick="leaveChannel()">Leave</button>
             </div>
         </div>
 
@@ -447,11 +464,14 @@
         <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
-                <div class="sounds-header-buttons">
-                    <button type="button" class="btn btn-ghost toggle-btn" id="mobileBtn" onclick="toggleMobileView()" title="Mobile view: fullscreen soundboard with responsive grid">Mobile</button>
-                    <button type="button" class="btn btn-ghost toggle-btn" id="compactBtn" onclick="toggleCompact()" title="Compact view: smaller buttons, more on screen">Compact</button>
-                    <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
-                    <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageTagsBtn" onclick="toggleManageTags()" title="Manage tags: reorder, delete, hide">Manage tags</button>
+                <div class="sounds-options-wrap">
+                    <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
+                    <div class="sounds-options-menu hidden" id="soundsOptionsMenu">
+                        <button type="button" class="sounds-option-item" id="mobileBtn" onclick="toggleMobileView(); closeSoundsOptionsMenu();" title="Mobile view: fullscreen soundboard">Mobile</button>
+                        <button type="button" class="sounds-option-item" id="compactBtn" onclick="toggleCompact(); closeSoundsOptionsMenu();" title="Compact view: smaller buttons">Compact</button>
+                        <button type="button" class="sounds-option-item" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
+                        <button type="button" class="sounds-option-item admin-only" id="manageTagsBtn" onclick="toggleManageTags(); closeSoundsOptionsMenu();" title="Manage tags: reorder, delete, hide">Manage tags</button>
+                    </div>
                 </div>
             </div>
             <div class="tags-admin admin-only hidden" id="tagsAdmin">
@@ -616,6 +636,32 @@
             if (mobileView) renderMobileGrid();
         }
 
+        function toggleSoundsOptionsMenu() {
+            const menu = document.getElementById('soundsOptionsMenu');
+            if (!menu) return;
+            const isHidden = menu.classList.contains('hidden');
+            menu.classList.toggle('hidden', !isHidden);
+            if (isHidden) {
+                setTimeout(function() {
+                    document.addEventListener('click', closeSoundsOptionsMenuOnce);
+                }, 0);
+            } else {
+                document.removeEventListener('click', closeSoundsOptionsMenuOnce);
+            }
+        }
+        function closeSoundsOptionsMenu() {
+            const menu = document.getElementById('soundsOptionsMenu');
+            if (menu) menu.classList.add('hidden');
+            document.removeEventListener('click', closeSoundsOptionsMenuOnce);
+        }
+        function closeSoundsOptionsMenuOnce(e) {
+            const wrap = document.querySelector('.sounds-options-wrap');
+            if (wrap && !wrap.contains(e.target)) {
+                closeSoundsOptionsMenu();
+                document.removeEventListener('click', closeSoundsOptionsMenuOnce);
+            }
+        }
+
         function getFavorites() {
             const arr = loadPrefs().favorites;
             return Array.isArray(arr) ? arr.slice(0, 9) : [];
@@ -639,21 +685,23 @@
         }
         function renderFavoritesBar() {
             const bar = document.getElementById('favoritesBar');
+            const section = bar && bar.closest('.favorites-section');
             if (!bar) return;
             const fav = getFavorites();
             const sounds = soundsList || [];
-            bar.innerHTML = [1,2,3,4,5,6,7,8,9].map((n, i) => {
-                const fn = fav[i];
-                const s = fn ? sounds.find(x => x.filename === fn) : null;
+            const used = fav.map(function(fn, i) { return fn ? { n: i + 1, fn: fn } : null; }).filter(Boolean);
+            if (section) section.style.display = used.length ? '' : 'none';
+            bar.innerHTML = used.map(function(item) {
+                const n = item.n, fn = item.fn;
+                const s = sounds.find(function(x) { return x.filename === fn; });
                 const name = s ? (s.displayName || s.filename || '') : '';
                 const label = name ? (name.length > 8 ? name.slice(0, 8) + '…' : name) : '—';
-                const cls = fn ? '' : ' empty';
-                const title = fn ? `${n}: ${(s && s.displayName) || (s && s.filename) || fn} (click to play)` : `${n}: empty (star a sound to add)`;
-                return `<button type="button" class="fav-slot${cls}" data-slot="${n}" data-filename="${(fn || '').replace(/"/g, '&quot;')}" ${fn ? '' : 'disabled'} title="${(title || '').replace(/"/g, '&quot;')}">` +
-                    `<span class="fav-num">${n}</span><span class="fav-label">${(label || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span></button>`;
+                const title = (s && s.displayName) || (s && s.filename) || fn;
+                return '<button type="button" class="fav-slot" data-slot="' + n + '" data-filename="' + (fn || '').replace(/"/g, '&quot;') + '" title="' + (title || '').replace(/"/g, '&quot;') + ' (click to play)">' +
+                    '<span class="fav-num">' + n + '</span><span class="fav-label">' + (label || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</span></button>';
             }).join('');
-            bar.querySelectorAll('.fav-slot:not(.empty)').forEach(btn => {
-                btn.onclick = () => playSound(btn.dataset.filename);
+            bar.querySelectorAll('.fav-slot').forEach(function(btn) {
+                btn.onclick = function() { playSound(btn.dataset.filename); };
             });
         }
 
@@ -898,6 +946,18 @@
             if (lastChannel && channels.some(c => c.id === lastChannel)) {
                 select.value = lastChannel;
                 if (!loadPrefs().lastChannelId) savePrefs({ lastChannelId: lastChannel });
+            }
+            const voiceConnected = data.voiceConnected === true;
+            const voiceChannelName = data.voiceChannelName || '';
+            const connectionCard = document.getElementById('connectionCard');
+            const voiceBar = document.getElementById('voiceConnectedBar');
+            const channelNameEl = document.getElementById('voiceChannelInfo');
+            if (connectionCard) connectionCard.classList.toggle('hidden', voiceConnected);
+            if (voiceBar) voiceBar.classList.toggle('hidden', !voiceConnected);
+            if (channelNameEl) {
+                channelNameEl.title = voiceChannelName ? 'Connected to: ' + voiceChannelName : '';
+                const nameSpan = document.getElementById('voiceChannelName');
+                if (nameSpan) nameSpan.textContent = voiceChannelName || '—';
             }
         }
 
@@ -1520,11 +1580,13 @@
 
         async function joinChannel() {
             const channelId = document.getElementById('channelSelect').value;
-            await api('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) });
+            const res = await api('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) });
+            if (res && res.ok) fetchChannels();
         }
 
         async function leaveChannel() {
-            await api('/api/leave', { method: 'POST' });
+            const res = await api('/api/leave', { method: 'POST' });
+            if (res && res.ok) fetchChannels();
         }
 
         async function playSound(filename, startTime) {
@@ -1809,6 +1871,19 @@
                     drawWaveform(Math.min(current, totalDur), totalDur);
                 }
                 if ((user && user.role) === 'user' || (user && user.role) === 'guest') renderSoundsGrid();
+                if (state.voiceConnected !== undefined && isAdminOrSuperadmin()) {
+                    const connectionCard = document.getElementById('connectionCard');
+                    const voiceBar = document.getElementById('voiceConnectedBar');
+                    const channelNameEl = document.getElementById('voiceChannelInfo');
+                    const voiceChannelName = state.voiceChannelName || '';
+                    if (connectionCard) connectionCard.classList.toggle('hidden', state.voiceConnected);
+                    if (voiceBar) voiceBar.classList.toggle('hidden', !state.voiceConnected);
+                    if (channelNameEl) {
+                        channelNameEl.title = voiceChannelName ? 'Connected to: ' + voiceChannelName : '';
+                        const nameSpan = document.getElementById('voiceChannelName');
+                        if (nameSpan) nameSpan.textContent = voiceChannelName || '—';
+                    }
+                }
             });
         }
 
