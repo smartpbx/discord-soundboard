@@ -406,7 +406,8 @@
         .sound-color-preset:hover { transform: scale(1.1); }
         .sound-color-preset.selected { border-color: var(--text); box-shadow: 0 0 0 1px var(--surface); }
         .sound-color-custom { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
-        .sound-color-custom input[type="color"] { width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 50%; cursor: pointer; background: var(--surface); }
+        .sound-color-input-wrap { width: 24px; height: 24px; border-radius: 50%; overflow: hidden; display: inline-block; border: 1px solid var(--border); flex-shrink: 0; position: relative; }
+        .sound-color-input-wrap input[type="color"] { width: 24px; height: 24px; padding: 0; border: none; cursor: pointer; background: transparent; display: block; transform: scale(2.5); transform-origin: center center; }
         .sound-color-dot { position: absolute; top: 6px; left: 6px; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.2); box-shadow: 0 0 0 1px rgba(255,255,255,0.3); pointer-events: none; }
         .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
         .sound-grid.reorder-mode .sound-drag-handle { display: block; }
@@ -578,7 +579,9 @@
                         <div class="sound-color-presets" id="soundPanelColorPresets"></div>
                         <label class="sound-color-custom">
                             <span>Custom</span>
-                            <input type="color" id="soundPanelColorCustom" value="#7c3aed" title="Custom color" onchange="selectSoundPanelColor(this.value)">
+                            <span class="sound-color-input-wrap">
+                                <input type="color" id="soundPanelColorCustom" value="#7c3aed" title="Custom color" onchange="selectSoundPanelColor(this.value)">
+                            </span>
                         </label>
                         <button type="button" class="btn btn-ghost btn-sm" id="soundPanelColorClear" onclick="clearSoundPanelColor()">Clear</button>
                     </div>
