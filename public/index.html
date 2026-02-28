@@ -447,6 +447,15 @@
         .sound-color-input-wrap { width: 24px; height: 24px; border-radius: 50%; overflow: hidden; display: inline-block; border: 1px solid var(--border); flex-shrink: 0; position: relative; }
         .sound-color-input-wrap input[type="color"] { width: 24px; height: 24px; padding: 0; border: none; cursor: pointer; background: transparent; display: block; transform: scale(2.5); transform-origin: center center; }
         .sound-color-dot { position: absolute; top: 6px; left: 6px; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.2); box-shadow: 0 0 0 1px rgba(255,255,255,0.3); pointer-events: none; }
+        .sound-panel-waveform-wrap { position: relative; width: 100%; height: 80px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0.5rem 0; overflow: hidden; }
+        .sound-panel-waveform-wrap canvas { display: block; width: 100%; height: 100%; cursor: default; }
+        .sound-panel-waveform-handle { position: absolute; top: 0; bottom: 0; width: 10px; background: var(--accent); opacity: 0.8; cursor: ew-resize; z-index: 2; }
+        .sound-panel-waveform-handle:hover { opacity: 1; }
+        .sound-panel-waveform-handle.start { left: 0; }
+        .sound-panel-waveform-handle.end { right: 0; }
+        .sound-panel-preview-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+        .sound-panel-volume-row { display: flex; align-items: center; gap: 0.5rem; }
+        .sound-panel-volume-row input[type="range"] { flex: 1; min-width: 100px; }
         .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
         .sound-grid.reorder-mode .sound-drag-handle { display: block; }
         .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -648,6 +657,28 @@
                 <div class="row"><label>Name</label><input type="text" id="soundPanelName" placeholder="Display name"></div>
                 <div class="row"><label>Tags</label><div class="tags-input-wrap"><input type="text" id="soundPanelTags" placeholder="Add tags (comma or space separated)" class="tags-input" autocomplete="off"><div id="soundPanelTagsSuggestions" class="tags-suggestions hidden"></div></div></div>
                 <div class="row"><label>Duration</label><span id="soundPanelDuration" class="text-muted">—</span></div>
+                <div class="row">
+                    <label>Volume</label>
+                    <div class="sound-panel-volume-row" style="flex:1;">
+                        <input type="range" id="soundPanelVolume" min="0" max="1" step="0.05" value="1" title="Per-sound volume (1 = full)">
+                        <span id="soundPanelVolumeLabel" style="min-width:3rem;font-size:0.85rem;">100%</span>
+                    </div>
+                </div>
+                <div class="row">
+                    <label>Trim</label>
+                    <div style="flex:1;">
+                        <div class="sound-panel-waveform-wrap" id="soundPanelWaveformWrap">
+                            <canvas id="soundPanelWaveform" width="400" height="80"></canvas>
+                            <div class="sound-panel-waveform-handle start" id="soundPanelHandleStart" title="Drag to set start"></div>
+                            <div class="sound-panel-waveform-handle end" id="soundPanelHandleEnd" title="Drag to set end"></div>
+                        </div>
+                        <div class="sound-panel-preview-row">
+                            <span id="soundPanelTrimLabel" class="text-muted" style="font-size:0.85rem;">Start: 0:00 — End: full</span>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="soundPanelPreview()">▶ Preview</button>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="soundPanelResetTrim()">Reset trim</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="row">
                     <label>Color</label>
                     <div class="sound-color-picker">
@@ -2240,11 +2271,18 @@
             tagsEl.addEventListener('blur', tagsEl._acBlur);
         }
 
+        let soundPanelWaveformData = null;
+        let soundPanelWaveformDuration = 0;
+        let soundPanelStartTime = 0;
+        let soundPanelEndTime = null;
+
         function openSoundPanel(s) {
             const panel = document.getElementById('soundPanel');
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
             const durEl = document.getElementById('soundPanelDuration');
+            const volEl = document.getElementById('soundPanelVolume');
+            const volLabel = document.getElementById('soundPanelVolumeLabel');
             const customEl = document.getElementById('soundPanelColorCustom');
             const presetsEl = document.getElementById('soundPanelColorPresets');
             if (!panel || !nameEl || !tagsEl) return;
@@ -2252,6 +2290,11 @@
             nameEl.dataset.filename = (s && s.filename) || '';
             tagsEl.value = (s && (s.tags || []).join(', ')) || '';
             durEl.textContent = (s && s.duration != null) ? formatTime(s.duration) : '—';
+            const vol = (s && typeof s.volume === 'number') ? Math.max(0, Math.min(1, s.volume)) : 1;
+            if (volEl) { volEl.value = String(vol); volEl.dispatchEvent(new Event('input')); }
+            if (volLabel) volLabel.textContent = Math.round(vol * 100) + '%';
+            soundPanelStartTime = (s && typeof s.startTime === 'number' && s.startTime >= 0) ? s.startTime : 0;
+            soundPanelEndTime = (s && typeof s.endTime === 'number' && s.endTime > 0) ? s.endTime : null;
             const color = (s && s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
             if (presetsEl) {
                 presetsEl.innerHTML = SOUND_COLOR_PRESETS.map(function(hex) {
@@ -2263,6 +2306,146 @@
             panel.dataset.soundColor = color || '';
             panel.classList.remove('hidden');
             setupTagsAutocomplete(tagsEl);
+            if (s && s.filename) loadSoundPanelWaveform(s.filename);
+            const volInput = document.getElementById('soundPanelVolume');
+            if (volInput && !volInput.dataset.bound) {
+                volInput.dataset.bound = '1';
+                volInput.addEventListener('input', () => {
+                    const v = parseFloat(volInput.value) || 1;
+                    const lbl = document.getElementById('soundPanelVolumeLabel');
+                    if (lbl) lbl.textContent = Math.round(v * 100) + '%';
+                });
+            }
+        }
+
+        async function loadSoundPanelWaveform(filename) {
+            soundPanelWaveformData = null;
+            soundPanelWaveformDuration = 0;
+            const wrap = document.getElementById('soundPanelWaveformWrap');
+            const canvas = document.getElementById('soundPanelWaveform');
+            if (!wrap || !canvas) return;
+            try {
+                const res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
+                if (!res.ok) return;
+                const buf = await res.arrayBuffer();
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const decoded = await ctx.decodeAudioData(buf);
+                const ch = decoded.getChannelData(0);
+                const duration = decoded.duration;
+                const bars = 300;
+                const step = Math.floor(ch.length / bars);
+                const peaks = [];
+                for (let i = 0; i < bars; i++) {
+                    let min = 0, max = 0;
+                    for (let j = 0; j < step; j++) {
+                        const v = ch[i * step + j];
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                    }
+                    peaks.push({ min, max });
+                }
+                soundPanelWaveformData = peaks;
+                soundPanelWaveformDuration = duration;
+                drawSoundPanelWaveform();
+                setupSoundPanelTrimHandles();
+            } catch (e) { console.warn('Sound panel waveform load failed', e); }
+        }
+
+        function drawSoundPanelWaveform() {
+            const canvas = document.getElementById('soundPanelWaveform');
+            const wrap = document.getElementById('soundPanelWaveformWrap');
+            if (!canvas || !wrap || !soundPanelWaveformData || !soundPanelWaveformData.length) return;
+            const w = wrap.clientWidth || 400;
+            const h = 80;
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            const barCount = soundPanelWaveformData.length;
+            const barW = Math.max(1, (w / barCount) - 0.5);
+            const dur = soundPanelWaveformDuration;
+            const startPct = dur > 0 ? soundPanelStartTime / dur : 0;
+            const endPct = (soundPanelEndTime != null && dur > 0) ? soundPanelEndTime / dur : 1;
+            ctx.clearRect(0, 0, w, h);
+            soundPanelWaveformData.forEach((peak, i) => {
+                const x = (i / barCount) * w;
+                const pct = (i + 0.5) / barCount;
+                const center = h / 2;
+                const halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.45));
+                const inRange = pct >= startPct && pct <= endPct;
+                ctx.fillStyle = inRange ? 'rgba(124, 58, 237, 0.7)' : 'rgba(80, 80, 90, 0.5)';
+                ctx.fillRect(x, center - halfH, barW, halfH * 2);
+            });
+            updateSoundPanelTrimLabel();
+            updateSoundPanelHandlePositions();
+        }
+
+        function updateSoundPanelHandlePositions() {
+            const wrap = document.getElementById('soundPanelWaveformWrap');
+            const handleStart = document.getElementById('soundPanelHandleStart');
+            const handleEnd = document.getElementById('soundPanelHandleEnd');
+            if (!wrap || !handleStart || !handleEnd || soundPanelWaveformDuration <= 0) return;
+            const w = wrap.clientWidth || 400;
+            const dur = soundPanelWaveformDuration;
+            const startPct = dur > 0 ? soundPanelStartTime / dur : 0;
+            const endPct = (soundPanelEndTime != null && dur > 0) ? soundPanelEndTime / dur : 1;
+            handleStart.style.left = Math.max(0, startPct * w - 5) + 'px';
+            handleStart.style.width = '10px';
+            handleEnd.style.right = Math.max(0, (1 - endPct) * w - 5) + 'px';
+            handleEnd.style.left = 'auto';
+            handleEnd.style.width = '10px';
+        }
+
+        function updateSoundPanelTrimLabel() {
+            const el = document.getElementById('soundPanelTrimLabel');
+            if (!el) return;
+            const end = soundPanelEndTime != null ? formatTime(soundPanelEndTime) : 'full';
+            el.textContent = 'Start: ' + formatTime(soundPanelStartTime) + ' — End: ' + end;
+        }
+
+        function setupSoundPanelTrimHandles() {
+            const wrap = document.getElementById('soundPanelWaveformWrap');
+            const handleStart = document.getElementById('soundPanelHandleStart');
+            const handleEnd = document.getElementById('soundPanelHandleEnd');
+            if (!wrap || !handleStart || !handleEnd || soundPanelWaveformDuration <= 0) return;
+            const drag = (isStart) => {
+                const move = (e) => {
+                    const rect = wrap.getBoundingClientRect();
+                    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                    const t = x * soundPanelWaveformDuration;
+                    if (isStart) {
+                        soundPanelStartTime = Math.max(0, soundPanelEndTime != null ? Math.min(t, soundPanelEndTime - 0.1) : Math.min(t, soundPanelWaveformDuration - 0.1));
+                    } else {
+                        soundPanelEndTime = Math.min(soundPanelWaveformDuration, Math.max(t, soundPanelStartTime + 0.1));
+                    }
+                    drawSoundPanelWaveform();
+                };
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', () => { document.removeEventListener('mousemove', move); }, { once: true });
+            };
+            handleStart.onmousedown = (e) => { e.preventDefault(); drag(true); };
+            handleEnd.onmousedown = (e) => { e.preventDefault(); drag(false); };
+            updateSoundPanelHandlePositions();
+            const ro = new ResizeObserver(() => { drawSoundPanelWaveform(); });
+            ro.observe(wrap);
+        }
+
+        function soundPanelPreview() {
+            const nameEl = document.getElementById('soundPanelName');
+            const filename = nameEl && nameEl.dataset.filename;
+            if (!filename) return;
+            let url = '/api/sounds/audio/' + encodeURIComponent(filename);
+            const params = [];
+            if (soundPanelStartTime > 0) params.push('start=' + encodeURIComponent(soundPanelStartTime));
+            if (soundPanelEndTime != null && soundPanelEndTime < soundPanelWaveformDuration) params.push('end=' + encodeURIComponent(soundPanelEndTime));
+            if (params.length) url += '?' + params.join('&');
+            const audio = new Audio(url);
+            audio.play().catch(() => {});
+        }
+
+        function soundPanelResetTrim() {
+            soundPanelStartTime = 0;
+            soundPanelEndTime = null;
+            drawSoundPanelWaveform();
         }
 
         function selectSoundPanelColor(hex) {
@@ -2337,6 +2520,7 @@
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
             const panel = document.getElementById('soundPanel');
+            const volEl = document.getElementById('soundPanelVolume');
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
             const displayName = ((nameEl && nameEl.value) || '').trim() || filename;
@@ -2347,10 +2531,13 @@
                 const c = (panel.dataset.soundColor || '').trim();
                 if (c && /^#[0-9a-fA-F]{6}$/.test(c)) color = c;
             }
+            const volume = volEl ? parseFloat(volEl.value) : 1;
+            const startTime = soundPanelStartTime > 0 ? soundPanelStartTime : null;
+            const endTime = soundPanelEndTime != null && soundPanelEndTime < soundPanelWaveformDuration ? soundPanelEndTime : null;
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, displayName, tags, color: color || null }),
+                body: JSON.stringify({ filename, displayName, tags, color: color || null, volume: Number.isFinite(volume) ? volume : 1, startTime, endTime }),
             });
             if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; }
         }

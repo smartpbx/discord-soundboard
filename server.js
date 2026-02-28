@@ -328,6 +328,18 @@ function setSoundMeta(filename, updates) {
         next.folder = f;
         next.tags = f ? [f] : [];
     }
+    if (updates.volume !== undefined) {
+        const v = typeof updates.volume === 'number' ? Math.max(0, Math.min(1, updates.volume)) : undefined;
+        next.volume = v;
+    }
+    if (updates.startTime !== undefined) {
+        if (updates.startTime === null) delete next.startTime;
+        else if (typeof updates.startTime === 'number' && updates.startTime >= 0) next.startTime = updates.startTime;
+    }
+    if (updates.endTime !== undefined) {
+        if (updates.endTime === null) delete next.endTime;
+        else if (typeof updates.endTime === 'number' && updates.endTime >= 0) next.endTime = updates.endTime;
+    }
     meta[filename] = next;
     saveSoundsMeta(meta);
 }
@@ -342,6 +354,24 @@ function getTags(meta, filename) {
 function getColor(meta, filename) {
     const m = meta[filename];
     if (m && typeof m === 'object' && typeof m.color === 'string' && m.color.trim() !== '') return m.color.trim();
+    return null;
+}
+
+function getSoundVolume(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && typeof m.volume === 'number') return Math.max(0, Math.min(1, m.volume));
+    return null;
+}
+
+function getSoundStartTime(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && typeof m.startTime === 'number' && m.startTime >= 0) return m.startTime;
+    return null;
+}
+
+function getSoundEndTime(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && typeof m.endTime === 'number' && m.endTime >= 0) return m.endTime;
     return null;
 }
 
@@ -848,6 +878,9 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             duration: getDuration(meta, filename),
             tags: getTags(meta, filename),
             color: getColor(meta, filename),
+            volume: getSoundVolume(meta, filename),
+            startTime: getSoundStartTime(meta, filename),
+            endTime: getSoundEndTime(meta, filename),
         }));
         const tagOrder = getTagOrder(meta);
         const hidden = getHiddenTags(meta);
@@ -874,12 +907,31 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
     if (!resolved.startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).send('Not found');
     const ext = path.extname(safeFilename).toLowerCase();
     const mime = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' }[ext] || 'application/octet-stream';
-    res.setHeader('Content-Type', mime);
-    fs.createReadStream(filePath).pipe(res);
+    const start = typeof req.query.start === 'string' ? parseFloat(req.query.start) : null;
+    const end = typeof req.query.end === 'string' ? parseFloat(req.query.end) : null;
+    const needsTrim = (start != null && start > 0) || (end != null && end > 0);
+    if (needsTrim) {
+        const startSec = start != null && start >= 0 ? start : 0;
+        const endSec = end != null && end > startSec ? end : null;
+        const duration = endSec != null ? endSec - startSec : null;
+        const args = ['-nostdin'];
+        if (startSec > 0) args.push('-ss', String(startSec));
+        args.push('-i', filePath);
+        if (duration != null && duration > 0) args.push('-t', String(duration));
+        args.push('-f', 'mp3', '-');
+        res.setHeader('Content-Type', 'audio/mpeg');
+        const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        ff.stdout.pipe(res);
+        ff.stderr.on('data', () => {});
+        ff.on('error', (err) => { console.error('ffmpeg trim error', err); });
+    } else {
+        res.setHeader('Content-Type', mime);
+        fs.createReadStream(filePath).pipe(res);
+    }
 });
 
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
-    const { filename, displayName, tags, color } = req.body;
+    const { filename, displayName, tags, color, volume, startTime, endTime } = req.body;
     const safeFilename = filename && path.basename(filename);
     if (!safeFilename) return res.status(400).send('Filename required');
     const filePath = path.join(SOUNDS_DIR, safeFilename);
@@ -888,9 +940,12 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     if (displayName !== undefined) updates.displayName = displayName != null ? String(displayName) : undefined;
     if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags : (tags ? [tags] : []);
     if (color !== undefined) updates.color = color === null || color === '' ? null : String(color).trim();
+    if (volume !== undefined) updates.volume = typeof volume === 'number' ? Math.max(0, Math.min(1, volume)) : undefined;
+    if (startTime !== undefined) updates.startTime = (startTime === null || startTime === '') ? null : (typeof startTime === 'number' && startTime >= 0 ? startTime : undefined);
+    if (endTime !== undefined) updates.endTime = (endTime === null || endTime === '') ? null : (typeof endTime === 'number' && endTime >= 0 ? endTime : undefined);
     setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename) });
 });
 
 app.get('/api/tags', requireAuth, (req, res) => {
@@ -1328,9 +1383,17 @@ app.post('/api/play', requireAuth, (req, res) => {
         }
     }
 
+    const metaStart = getSoundStartTime(meta, safeFilename);
+    const metaEnd = getSoundEndTime(meta, safeFilename);
+    let effectiveDuration = duration;
+    if (duration != null && (metaStart != null || metaEnd != null)) {
+        const start = metaStart != null ? metaStart : 0;
+        const end = metaEnd != null && metaEnd <= duration ? metaEnd : duration;
+        effectiveDuration = Math.max(0, end - start);
+    }
     const maxDur = isGuest ? getGuestMaxDuration() : getUserMaxDuration();
-    if ((role === 'user' || isGuest) && duration != null && duration > maxDur) {
-        return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
+    if ((role === 'user' || isGuest) && effectiveDuration != null && effectiveDuration > maxDur) {
+        return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(effectiveDuration)}s.` });
     }
 
     if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') {
@@ -1353,12 +1416,25 @@ app.post('/api/play', requireAuth, (req, res) => {
         return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
     }
 
-    const startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : 0;
+    const metaVolume = getSoundVolume(meta, safeFilename);
+    let startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : (metaStart != null ? metaStart : 0);
+    const maxEnd = metaEnd != null ? metaEnd : (duration != null ? duration : 999999);
+    if (startTime >= maxEnd) return res.status(400).json({ error: 'Start position is past the end of the trimmed sound.' });
+    let endTime = metaEnd != null && metaEnd > startTime ? metaEnd : null;
+    const playDuration = endTime != null ? endTime - startTime : null;
+    const volMult = metaVolume != null ? metaVolume : 1;
+    const effectiveVolume = Math.max(0, Math.min(1, currentVolume * volMult));
 
     try {
         let stream;
-        if (startTime > 0) {
-            const ff = spawn('ffmpeg', ['-nostdin', '-ss', String(startTime), '-i', filePath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        const needsFfmpeg = startTime > 0 || playDuration != null;
+        if (needsFfmpeg) {
+            const args = ['-nostdin'];
+            if (startTime > 0) args.push('-ss', String(startTime));
+            args.push('-i', filePath);
+            if (playDuration != null && playDuration > 0) args.push('-t', String(playDuration));
+            args.push('-f', 'mp3', '-');
+            const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
             stream = ff.stdout;
             let errBuf = '';
             ff.stderr.on('data', (chunk) => { errBuf += chunk.toString(); });
@@ -1372,7 +1448,7 @@ app.post('/api/play', requireAuth, (req, res) => {
             inlineVolume: true,
             metadata: { filename: safeFilename, displayName },
         });
-        resource.volume.setVolume(currentVolume);
+        resource.volume.setVolume(effectiveVolume);
         player.play(resource);
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
         if (isGuest) {
@@ -1387,7 +1463,7 @@ app.post('/api/play', requireAuth, (req, res) => {
             displayName,
             startTime: Date.now(),
             startTimeOffset: startTime,
-            duration,
+            duration: playDuration != null ? playDuration : duration,
             startedBy,
         };
         addToRecentlyPlayedServer(safeFilename, displayName, startedBy?.username ?? null, Date.now());
