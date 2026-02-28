@@ -181,18 +181,20 @@
         .sound-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
         .sound-btn:active:not(:disabled) { transform: scale(0.98); }
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
-        .sound-edit {
-            position: absolute; top: 4px; right: 4px;
+        .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+        .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
+        .sound-preview, .sound-edit {
             width: 24px; height: 24px; padding: 0;
             border: none; background: var(--surface);
             border-radius: 4px; color: var(--text-muted);
             cursor: pointer; display: flex; align-items: center; justify-content: center;
-            opacity: 0; pointer-events: none; transition: opacity 0.15s;
+            transition: color 0.15s;
         }
-        .sound-item:hover .sound-edit { opacity: 0.7; pointer-events: auto; }
-        .sound-edit:hover { opacity: 1; color: var(--accent); }
+        .sound-preview:hover, .sound-edit:hover { color: var(--accent); }
+        .sound-preview.playing { color: var(--accent); }
         .sound-edit.hidden { display: none; }
-        .sound-edit svg { width: 12px; height: 12px; }
+        .sound-preview svg, .sound-edit svg { width: 12px; height: 12px; }
+        .sound-grid.reorder-mode .sound-preview { pointer-events: none; }
         .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
         .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
@@ -213,6 +215,7 @@
         .sound-grid.reorder-mode .sound-item-wrap.drag-over { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
         .sound-grid.reorder-mode .sound-btn { pointer-events: none; }
         .sound-grid.reorder-mode .sound-edit { pointer-events: none; }
+        .sound-grid.reorder-mode .sound-item-actions { pointer-events: none; }
         .settings-row { align-items: center; gap: 0.5rem; }
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
@@ -979,6 +982,7 @@
                 let title = '';
                 if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play'));
                 else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
+                const editBtn = isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : '';
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
@@ -986,7 +990,10 @@
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
-                        ${isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
+                        <div class="sound-item-actions">
+                            <button type="button" class="sound-preview" data-filename="${filename}" title="Preview (play locally)" onclick="event.stopPropagation(); previewSound(this.dataset.filename, this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg></button>
+                            ${editBtn}
+                        </div>
                     </div>`;
                 return `<div class="sound-item-wrap" data-filename="${filename}" ${reorderMode && isAdmin ? 'draggable="true"' : ''}>${inner}</div>`;
             }).join('');
@@ -1041,6 +1048,40 @@
             selectedSound = filename;
             renderSoundsGrid();
             openSoundPanel(s || { filename, displayName: filename, duration: null, folder: null });
+        }
+
+        let previewAudio = null;
+        let previewBtn = null;
+        let previewId = 0;
+        function previewSound(filename, btn) {
+            if (!filename) return;
+            if (previewBtn === btn && previewAudio) {
+                previewAudio.pause();
+                previewAudio = null;
+                btn.classList.remove('playing');
+                return;
+            }
+            if (previewAudio) {
+                previewAudio.pause();
+                previewAudio = null;
+                if (previewBtn) previewBtn.classList.remove('playing');
+            }
+            const id = ++previewId;
+            const url = '/api/sounds/audio/' + encodeURIComponent(filename);
+            fetch(url, { credentials: 'include' }).then(r => {
+                if (!r.ok) throw new Error('Preview failed');
+                return r.arrayBuffer();
+            }).then(buf => {
+                if (id !== previewId) return;
+                const blob = new Blob([buf]);
+                const audio = new Audio(URL.createObjectURL(blob));
+                audio.addEventListener('ended', () => { URL.revokeObjectURL(audio.src); previewAudio = null; if (previewBtn) previewBtn.classList.remove('playing'); });
+                audio.addEventListener('error', () => { if (audio.src) URL.revokeObjectURL(audio.src); previewAudio = null; if (previewBtn) previewBtn.classList.remove('playing'); });
+                previewAudio = audio;
+                previewBtn = btn;
+                btn.classList.add('playing');
+                audio.play().catch(() => { previewAudio = null; btn.classList.remove('playing'); });
+            }).catch(() => { if (id === previewId) { previewAudio = null; btn.classList.remove('playing'); } });
         }
 
         function closeSoundPanel() {
