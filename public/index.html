@@ -33,17 +33,44 @@
             color: var(--text);
             line-height: 1.5;
         }
-        .app {
-            max-width: 720px;
-            margin: 0 auto;
+        .app { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
+        .app.hidden { display: none; }
+        .login-screen {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             padding: 1.5rem;
         }
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin: 0 0 1.5rem;
-            letter-spacing: -0.02em;
+        .login-screen.hidden { display: none; }
+        .login-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2rem;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: var(--shadow);
         }
+        .login-card h1 { font-size: 1.5rem; margin: 0 0 1.5rem; }
+        .login-card label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.35rem; }
+        .login-card input {
+            width: 100%;
+            padding: 0.65rem 0.75rem;
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font: inherit;
+            margin-bottom: 1rem;
+        }
+        .login-card input:focus { outline: none; border-color: var(--accent); }
+        .login-card .btn { width: 100%; padding: 0.75rem; margin-top: 0.5rem; }
+        .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
+        .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+        .header-row h1 { font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+        .user-badge { font-size: 0.75rem; color: var(--text-muted); }
+        .user-badge span { color: var(--accent); font-weight: 500; }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -52,23 +79,11 @@
             margin-bottom: 1rem;
             box-shadow: var(--shadow);
         }
-        .card-title {
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-muted);
-            margin-bottom: 0.75rem;
-        }
-        .row {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            flex-wrap: wrap;
-        }
+        .card.admin-only { }
+        .card-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.75rem; }
+        .row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
         select {
-            flex: 1;
-            min-width: 180px;
+            flex: 1; min-width: 180px;
             padding: 0.6rem 0.75rem;
             background: var(--surface-hover);
             border: 1px solid var(--border);
@@ -88,23 +103,15 @@
             transition: background 0.15s, transform 0.05s;
         }
         .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary { background: var(--accent); color: white; }
-        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
         .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
         .btn-ghost { background: var(--surface-hover); color: var(--text); }
-        .btn-ghost:hover { background: var(--border); }
-        .btn-icon {
-            width: 40px;
-            height: 40px;
-            padding: 0;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: var(--radius-sm);
-        }
+        .btn-ghost:hover:not(:disabled) { background: var(--border); }
+        .btn-icon { width: 40px; height: 40px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
         .btn-icon svg { width: 20px; height: 20px; }
-        /* Playback player */
         .player {
             background: linear-gradient(135deg, var(--surface) 0%, #1a1a20 100%);
             border: 1px solid var(--border);
@@ -113,63 +120,35 @@
             margin-bottom: 1rem;
         }
         .player-idle .player-controls { opacity: 0.6; }
-        .player-now-playing {
-            font-size: 0.9rem;
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-            color: var(--text-muted);
-        }
+        .player-now-playing { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.5rem; color: var(--text-muted); }
         .player-now-playing strong { color: var(--text); }
-        .progress-wrap {
-            height: 6px;
-            background: var(--border);
-            border-radius: 3px;
-            overflow: hidden;
-            margin-bottom: 0.75rem;
-            cursor: pointer;
-        }
-        .progress-bar {
-            height: 100%;
-            background: var(--accent);
-            border-radius: 3px;
-            width: 0%;
-            transition: width 0.2s;
-        }
-        .progress-wrap.indeterminate .progress-bar {
-            width: 40%;
-            animation: indeterminate 1.5s ease-in-out infinite;
-        }
-        @keyframes indeterminate {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(350%); }
-        }
-        .progress-time {
-            font-size: 0.7rem;
-            color: var(--text-muted);
+        .waveform-wrap {
+            height: 48px;
+            background: rgba(0,0,0,0.2);
+            border-radius: var(--radius-sm);
             margin-bottom: 0.5rem;
-        }
-        .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
-        /* Volume */
-        .volume-row { align-items: center; gap: 1rem; }
-        .volume-row input[type="range"] {
-            flex: 1;
-            min-width: 120px;
-            accent-color: var(--accent);
-            height: 6px;
-        }
-        .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
-        /* Soundboard */
-        .sound-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 0.75rem;
-        }
-        .sound-item {
+            overflow: hidden;
             position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: stretch;
         }
+        .waveform-wrap canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+        .waveform-placeholder {
+            height: 48px;
+            background: var(--border);
+            border-radius: var(--radius-sm);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+        .progress-time { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
+        .volume-row { align-items: center; gap: 1rem; }
+        .volume-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
+        .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
+        .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+        .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; }
         .sound-btn {
             background: var(--surface-hover);
             border: 1px solid var(--border);
@@ -188,56 +167,55 @@
             align-items: center;
             justify-content: center;
         }
-        .sound-btn:hover {
-            background: var(--border);
-            border-color: var(--accent);
-        }
-        .sound-btn:active { transform: scale(0.98); }
+        .sound-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
+        .sound-btn:active:not(:disabled) { transform: scale(0.98); }
+        .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-edit {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            width: 24px;
-            height: 24px;
-            padding: 0;
-            border: none;
-            background: var(--surface);
-            border-radius: 4px;
-            color: var(--text-muted);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0.7;
-            transition: opacity 0.15s;
+            position: absolute; top: 4px; right: 4px;
+            width: 24px; height: 24px; padding: 0;
+            border: none; background: var(--surface);
+            border-radius: 4px; color: var(--text-muted);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            opacity: 0.7; transition: opacity 0.15s;
         }
         .sound-edit:hover { opacity: 1; color: var(--accent); }
+        .sound-edit.hidden { display: none; }
         .sound-edit svg { width: 12px; height: 12px; }
-        /* Upload */
-        .upload-zone {
-            border: 2px dashed var(--border);
-            border-radius: var(--radius-sm);
-            padding: 1rem;
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 0.9rem;
-        }
+        .sound-duration { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
+        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
         .upload-zone input[type="file"] { display: none; }
         .upload-zone label { cursor: pointer; display: block; }
         .upload-zone .browse { color: var(--accent); font-weight: 500; }
-        /* Stop button at top */
         .top-actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .top-actions.hidden { display: none; }
     </style>
 </head>
 <body>
-    <div class="app">
-        <h1>🔊 Soundboard</h1>
+    <div class="login-screen" id="loginScreen">
+        <div class="login-card">
+            <h1>🔊 Soundboard</h1>
+            <form id="loginForm" onsubmit="return doLogin(event)">
+                <label for="loginUser">Username</label>
+                <input type="text" id="loginUser" name="username" placeholder="admin or user" autocomplete="username" required>
+                <label for="loginPass">Password</label>
+                <input type="password" id="loginPass" name="password" placeholder="Password" autocomplete="current-password" required>
+                <button type="submit" class="btn btn-primary">Log in</button>
+                <div class="login-error" id="loginError"></div>
+            </form>
+        </div>
+    </div>
 
-        <div class="top-actions">
+    <div class="app" id="app">
+        <div class="header-row">
+            <h1>🔊 Soundboard</h1>
+            <div class="user-badge">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span> <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem;" onclick="logout()">Log out</button></div>
+        </div>
+
+        <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
         </div>
 
-        <div class="card">
+        <div class="card admin-only" id="connectionCard">
             <div class="card-title">Connection</div>
             <div class="row">
                 <select id="channelSelect"><option>Loading channels...</option></select>
@@ -249,8 +227,9 @@
         <div class="player" id="playerCard">
             <div class="card-title">Now Playing</div>
             <div class="player-now-playing" id="nowPlayingText">Nothing playing</div>
-            <div class="progress-wrap" id="progressWrap">
-                <div class="progress-bar" id="progressBar"></div>
+            <div class="waveform-placeholder" id="waveformPlaceholder">Waveform will appear when a sound is playing</div>
+            <div class="waveform-wrap" id="waveformWrap" style="display: none;">
+                <canvas id="waveformCanvas" width="600" height="48"></canvas>
             </div>
             <div class="progress-time" id="progressTime">0:00 / 0:00</div>
             <div class="player-buttons">
@@ -259,7 +238,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card admin-only" id="volumeCard">
             <div class="card-title">Volume</div>
             <div class="row volume-row">
                 <span class="volume-label" id="volumeLabel">50%</span>
@@ -267,7 +246,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card admin-only" id="uploadCard">
             <div class="card-title">Upload Sound</div>
             <div class="upload-zone">
                 <label><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
@@ -282,28 +261,105 @@
     </div>
 
     <script>
+        const CREDENTIALS = 'include';
+        const MAX_USER_DURATION = 7;
+        let user = null;
         let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
         let pausedAt = 0;
+        let waveformData = null;
+        let waveformDuration = 0;
+
+        async function api(path, opts = {}) {
+            const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
+            if (res.status === 401) { showLogin(); return null; }
+            return res;
+        }
+
+        async function checkAuth() {
+            const res = await api('/api/me');
+            if (!res) return false;
+            if (res.ok) {
+                user = await res.json();
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('app').classList.remove('hidden');
+                document.getElementById('currentUsername').textContent = user.username;
+                document.getElementById('currentRole').textContent = user.role === 'admin' ? '(admin)' : '(user)';
+                if (user.role === 'user') {
+                    document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+                    document.getElementById('topActions').classList.add('hidden');
+                    document.getElementById('playPauseBtn').classList.add('hidden');
+                    document.getElementById('stopBtn').classList.add('hidden');
+                }
+                return true;
+            }
+            showLogin();
+            return false;
+        }
+
+        function showLogin() {
+            user = null;
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('app').classList.add('hidden');
+        }
+
+        async function doLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('loginUser').value.trim();
+            const password = document.getElementById('loginPass').value;
+            document.getElementById('loginError').textContent = '';
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: CREDENTIALS,
+                body: JSON.stringify({ username, password }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                document.getElementById('loginError').textContent = data.error || 'Login failed';
+                return false;
+            }
+            await checkAuth();
+            fetchChannels();
+            fetchSounds();
+            fetch('/api/volume', { credentials: CREDENTIALS }).then(r => r.json()).then(d => {
+                const v = d.volume ?? 0.5;
+                document.getElementById('volumeSlider').value = v;
+                document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
+            }).catch(() => {});
+            return false;
+        }
+
+        async function logout() {
+            await fetch('/api/logout', { method: 'POST', credentials: CREDENTIALS });
+            showLogin();
+        }
 
         async function fetchChannels() {
-            const res = await fetch('/api/channels');
+            if (user?.role !== 'admin') return;
+            const res = await api('/api/channels');
+            if (!res || !res.ok) return;
             const channels = await res.json();
             const select = document.getElementById('channelSelect');
             select.innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
         }
 
         async function fetchSounds() {
-            const res = await fetch('/api/sounds');
+            const res = await api('/api/sounds');
+            if (!res || !res.ok) return;
             const sounds = await res.json();
             const grid = document.getElementById('soundsList');
+            const isUser = user?.role === 'user';
             grid.innerHTML = sounds.map(s => {
                 const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
                 const filename = esc(s.filename);
+                const dur = s.duration;
+                const tooLong = isUser && dur != null && dur > MAX_USER_DURATION;
                 return `
                     <div class="sound-item">
-                        <button type="button" class="sound-btn" data-filename="${filename}" onclick="playSound(this.dataset.filename)">${name}</button>
-                        <button type="button" class="sound-edit" data-filename="${filename}" data-displayname="${name}" onclick="editSoundName(this)" title="Edit name" aria-label="Edit name">
+                        <button type="button" class="sound-btn ${tooLong ? 'disabled' : ''}" data-filename="${filename}" data-duration="${dur ?? ''}" ${tooLong ? 'disabled title="Only sounds 7s or shorter allowed for your role"' : ''} onclick="playSound(this.dataset.filename)">${name}</button>
+                        ${dur != null ? `<div class="sound-duration">${formatTime(dur)}</div>` : ''}
+                        <button type="button" class="sound-edit ${isUser ? 'hidden' : ''}" data-filename="${filename}" data-displayname="${name}" onclick="editSoundName(this)" title="Edit name" aria-label="Edit name">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                         </button>
                     </div>`;
@@ -318,24 +374,26 @@
             fetch('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, displayName: newName.trim() || filename })
+                credentials: CREDENTIALS,
+                body: JSON.stringify({ filename, displayName: newName.trim() || filename }),
             }).then(() => fetchSounds());
         }
 
         async function joinChannel() {
             const channelId = document.getElementById('channelSelect').value;
-            await fetch('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) });
+            await api('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) });
         }
 
         async function leaveChannel() {
-            await fetch('/api/leave', { method: 'POST' });
+            await api('/api/leave', { method: 'POST' });
         }
 
         async function playSound(filename) {
-            const res = await fetch('/api/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+            const res = await api('/api/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+            if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert(typeof data === 'string' ? data : (data.message || 'Failed to play'));
+                alert(data.error || data.message || 'Failed to play');
                 return;
             }
             playback.duration = data.duration ?? null;
@@ -345,24 +403,89 @@
             playback.filename = filename;
             pausedAt = 0;
             updatePlayPauseButton();
+            loadWaveform(filename);
+        }
+
+        async function loadWaveform(filename) {
+            waveformData = null;
+            waveformDuration = 0;
+            document.getElementById('waveformPlaceholder').style.display = 'block';
+            document.getElementById('waveformWrap').style.display = 'none';
+            if (!filename) return;
+            try {
+                const res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
+                if (!res.ok) return;
+                const buf = await res.arrayBuffer();
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const decoded = await ctx.decodeAudioData(buf);
+                const ch = decoded.getChannelData(0);
+                const duration = decoded.duration;
+                const bars = 120;
+                const step = Math.floor(ch.length / bars);
+                const peaks = [];
+                for (let i = 0; i < bars; i++) {
+                    let min = 0, max = 0;
+                    for (let j = 0; j < step; j++) {
+                        const v = ch[i * step + j];
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                    }
+                    peaks.push({ min, max });
+                }
+                waveformData = peaks;
+                waveformDuration = duration;
+                document.getElementById('waveformPlaceholder').style.display = 'none';
+                document.getElementById('waveformWrap').style.display = 'block';
+                drawWaveform(0);
+            } catch (e) {
+                console.warn('Waveform load failed', e);
+            }
+        }
+
+        function drawWaveform(currentTime) {
+            const canvas = document.getElementById('waveformCanvas');
+            const wrap = document.getElementById('waveformWrap');
+            if (!wrap || wrap.style.display === 'none' || !waveformData || !waveformData.length) return;
+            const w = canvas.width = canvas.offsetWidth;
+            const h = canvas.height = 48;
+            const ctx = canvas.getContext('2d');
+            const barCount = waveformData.length;
+            const barW = Math.max(1, (w / barCount) - 1);
+            const progress = waveformDuration > 0 ? currentTime / waveformDuration : 0;
+            const playheadX = progress * w;
+            ctx.clearRect(0, 0, w, h);
+            waveformData.forEach((peak, i) => {
+                const x = (i / barCount) * w;
+                const center = h / 2;
+                const halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.4));
+                const isPast = x + barW < playheadX;
+                ctx.fillStyle = isPast ? 'rgba(124, 58, 237, 0.6)' : 'rgba(42, 42, 50, 0.8)';
+                ctx.fillRect(x, center - halfH, barW, halfH * 2);
+            });
         }
 
         async function stopPlayback() {
-            await fetch('/api/stop', { method: 'POST' });
+            const res = await api('/api/stop', { method: 'POST' });
+            if (!res) return;
             playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
             pausedAt = 0;
+            waveformData = null;
+            waveformDuration = 0;
+            document.getElementById('waveformPlaceholder').style.display = 'block';
+            document.getElementById('waveformPlaceholder').textContent = 'Waveform will appear when a sound is playing';
+            document.getElementById('waveformWrap').style.display = 'none';
             updateNowPlaying();
             updatePlayPauseButton();
         }
 
         async function togglePlayPause() {
             if (playback.status === 'playing') {
-                await fetch('/api/pause', { method: 'POST' });
+                await api('/api/pause', { method: 'POST' });
                 pausedAt = (Date.now() - (playback.startTime || 0)) / 1000;
                 if (playback.duration != null) pausedAt = Math.min(pausedAt, playback.duration);
                 playback.status = 'paused';
             } else if (playback.status === 'paused') {
-                await fetch('/api/resume', { method: 'POST' });
+                await api('/api/resume', { method: 'POST' });
                 playback.status = 'playing';
             }
             updatePlayPauseButton();
@@ -370,6 +493,7 @@
 
         function updatePlayPauseButton() {
             const btn = document.getElementById('playPauseBtn');
+            if (!btn || btn.classList.contains('hidden')) return;
             const isActive = playback.status === 'playing' || playback.status === 'paused';
             btn.disabled = !isActive;
             btn.textContent = playback.status === 'playing' ? '⏸' : '▶';
@@ -379,16 +503,12 @@
         function updateNowPlaying() {
             const card = document.getElementById('playerCard');
             const text = document.getElementById('nowPlayingText');
-            const wrap = document.getElementById('progressWrap');
             if (playback.status === 'idle' || !playback.displayName) {
                 text.innerHTML = 'Nothing playing';
                 card.classList.add('player-idle');
-                wrap.classList.add('indeterminate');
             } else {
                 text.innerHTML = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
                 card.classList.remove('player-idle');
-                if (playback.duration == null) wrap.classList.add('indeterminate');
-                else wrap.classList.remove('indeterminate');
             }
         }
 
@@ -400,7 +520,10 @@
         }
 
         function refreshPlaybackState() {
-            fetch('/api/playback-state').then(r => r.json()).then(state => {
+            if (!user) return;
+            api('/api/playback-state').then(async (res) => {
+                if (!res || !res.ok) return;
+                const state = await res.json();
                 playback.status = state.status;
                 playback.filename = state.filename;
                 playback.displayName = state.displayName ?? state.filename;
@@ -410,38 +533,38 @@
                 updateNowPlaying();
                 updatePlayPauseButton();
 
-                const bar = document.getElementById('progressBar');
-                const timeEl = document.getElementById('progressTime");
-                const wrap = document.getElementById('progressWrap');
-                if (state.status === 'idle') {
-                    bar.style.width = '0%';
-                    timeEl.textContent = '0:00 / 0:00';
-                    wrap.classList.remove('indeterminate');
-                    return;
-                }
+                const timeEl = document.getElementById('progressTime');
                 let current = 0;
                 const dur = state.duration;
-                if (state.status === 'playing' && state.startTime && dur != null) {
+                if (state.status === 'playing' && state.startTime != null && dur != null) {
                     current = (Date.now() - state.startTime) / 1000;
                     current = Math.min(Math.max(0, current), dur);
-                } else if (state.status === 'paused' && state.startTime && dur != null) {
+                } else if (state.status === 'paused' && dur != null) {
                     current = pausedAt;
                 }
-                if (dur != null && dur > 0) {
-                    bar.style.width = (current / dur * 100) + '%';
-                    timeEl.textContent = formatTime(current) + ' / ' + formatTime(dur);
-                    wrap.classList.remove('indeterminate');
-                } else {
-                    timeEl.textContent = formatTime(current) + ' / —';
-                    wrap.classList.add('indeterminate');
+                timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
+
+                if (waveformData && waveformDuration > 0) {
+                    if (state.status === 'playing' && state.startTime) current = (Date.now() - state.startTime) / 1000;
+                    else if (state.status === 'paused') current = pausedAt;
+                    drawWaveform(Math.min(current, waveformDuration));
                 }
-            }).catch(() => {});
+            });
         }
+
+        document.getElementById('waveformWrap')?.addEventListener('click', (e) => {
+            if (!waveformData || waveformDuration <= 0 || user?.role !== 'admin') return;
+            const canvas = document.getElementById('waveformCanvas');
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) / rect.width;
+            const t = x * waveformDuration;
+            // Optional: could send seek to server (not implemented)
+        });
 
         function setVolume(volume) {
             const v = parseFloat(volume);
             document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
-            fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume: v }) });
+            fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: CREDENTIALS, body: JSON.stringify({ volume: v }) });
         }
 
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
@@ -451,24 +574,22 @@
             if (!fileInput.files[0]) return;
             const formData = new FormData();
             formData.append('soundFile', fileInput.files[0]);
-            await fetch('/api/upload', { method: 'POST', body: formData });
+            await fetch('/api/upload', { method: 'POST', credentials: CREDENTIALS, body: formData });
             fileInput.value = '';
             fetchSounds();
         }
 
         document.getElementById('fileInput').addEventListener('change', uploadSound);
 
-        fetch('/api/volume').then(r => r.json()).then(data => {
-            const v = data.volume ?? 0.5;
-            document.getElementById('volumeSlider').value = v;
-            document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
-        });
-
-        setInterval(refreshPlaybackState, 400);
-        fetchChannels();
-        fetchSounds();
-        updateNowPlaying();
-        updatePlayPauseButton();
+        (async function init() {
+            const ok = await checkAuth();
+            if (!ok) return;
+            setInterval(refreshPlaybackState, 400);
+            fetchChannels();
+            fetchSounds();
+            updateNowPlaying();
+            updatePlayPauseButton();
+        })();
     </script>
 </body>
 </html>

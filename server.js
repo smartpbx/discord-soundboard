@@ -265,7 +265,7 @@ app.post('/api/play', requireAuth, (req, res) => {
     if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
 
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) {
-        return res.status(400).send('Join a voice channel first');
+        return res.status(400).json({ error: 'Join a voice channel first' });
     }
 
     const meta = loadSoundsMeta();
