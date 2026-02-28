@@ -1500,7 +1500,7 @@
             if (!filename) return;
             const displayName = ((nameEl && nameEl.value) || '').trim() || filename;
             const tagsRaw = ((tagsEl && tagsEl.value) || '').trim();
-            const tags = tagsRaw ? tagsRaw.split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
+            const tags = tagsRaw ? tagsRaw.split(/[,\s]+/).map(t => t.trim()).filter(Boolean) : [];
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
