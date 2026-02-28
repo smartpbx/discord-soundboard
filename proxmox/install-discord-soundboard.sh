@@ -149,6 +149,24 @@ if ! pct status "${CTID}" | grep -q running; then
     done
 fi
 
+# Ensure container has DNS so apt/curl can resolve (new CTs often have none at first)
+echo "[*] Ensuring container DNS..."
+if ! pct exec "${CTID}" -- getent hosts deb.debian.org &>/dev/null; then
+    # No resolution: set fallback nameservers if resolv.conf is empty or has none
+    pct exec "${CTID}" -- bash -c 'if ! grep -q "^nameserver" /etc/resolv.conf 2>/dev/null; then echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf; fi'
+    echo "[*] Waiting for DNS to be usable..."
+    for i in $(seq 1 15); do
+        if pct exec "${CTID}" -- getent hosts deb.debian.org &>/dev/null; then
+            break
+        fi
+        sleep 2
+    done
+    if ! pct exec "${CTID}" -- getent hosts deb.debian.org &>/dev/null; then
+        echo "[!] Container still cannot resolve DNS. Check network/DHCP; or set resolv.conf manually and re-run."
+        exit 1
+    fi
+fi
+
 # Run container-side install script (same pattern as community-scripts install/AppName-install.sh)
 # Install curl in container first (minimal template may not have it), then fetch and run install script inside CT.
 INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install/discord-soundboard-install.sh}"
