@@ -2877,14 +2877,24 @@
 
         async function togglePlayPause() {
             if (playback.status === 'playing') {
-                await api('/api/pause', { method: 'POST' });
+                const res = await api('/api/pause', { method: 'POST' });
+                if (!res || !res.ok) {
+                    const d = res ? await res.json().catch(() => ({})) : {};
+                    alert(d.error || 'Could not pause.');
+                    return;
+                }
                 const offset = playback.startTimeOffset || 0;
                 const maxPos = playback.duration != null ? offset + playback.duration : 999999;
                 pausedAt = offset + (Date.now() - (playback.startTime || 0)) / 1000;
                 pausedAt = Math.min(pausedAt, maxPos);
                 playback.status = 'paused';
             } else if (playback.status === 'paused') {
-                await api('/api/resume', { method: 'POST' });
+                const res = await api('/api/resume', { method: 'POST' });
+                if (!res || !res.ok) {
+                    const d = res ? await res.json().catch(() => ({})) : {};
+                    alert(d.error || 'Could not resume.');
+                    return;
+                }
                 playback.startTime = Date.now();
                 playback.startTimeOffset = pausedAt;
                 playback.status = 'playing';

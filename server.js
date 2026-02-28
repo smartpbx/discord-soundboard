@@ -11,7 +11,7 @@ const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, entersState } = require('@discordjs/voice');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -1528,18 +1528,34 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
-app.post('/api/pause', requireAdmin, (req, res) => {
+app.post('/api/pause', requireAdmin, async (req, res) => {
     const role = req.session.user.role;
     const startedBy = playbackState.startedBy;
     if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
         return res.status(403).json({ error: 'Only superadmin can pause admin playback.' });
     }
-    const offset = playbackState.startTimeOffset || 0;
-    const maxPos = (playbackState.duration != null && playbackState.duration > 0) ? offset + playbackState.duration : 999999;
-    const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
-    playbackState.pausedAt = Math.max(0, Math.min(maxPos, offset + elapsed));
-    player.pause(true);
-    res.json({ ok: true });
+    const status = player.state.status;
+    if (status === AudioPlayerStatus.Idle) {
+        return res.status(400).json({ error: 'Nothing is playing.' });
+    }
+    if (status === AudioPlayerStatus.Paused || status === AudioPlayerStatus.AutoPaused) {
+        return res.json({ ok: true });
+    }
+    try {
+        if (status === AudioPlayerStatus.Buffering) {
+            await entersState(player, AudioPlayerStatus.Playing, 3000);
+        }
+        const offset = playbackState.startTimeOffset || 0;
+        const maxPos = (playbackState.duration != null && playbackState.duration > 0) ? offset + playbackState.duration : 999999;
+        const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
+        playbackState.pausedAt = Math.max(0, Math.min(maxPos, offset + elapsed));
+        const paused = player.pause(true);
+        if (!paused) return res.status(500).json({ error: 'Could not pause playback.' });
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Pause error:', err);
+        res.status(500).json({ error: err.message || 'Could not pause playback.' });
+    }
 });
 
 app.post('/api/resume', requireAdmin, (req, res) => {
@@ -1548,11 +1564,15 @@ app.post('/api/resume', requireAdmin, (req, res) => {
     if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
         return res.status(403).json({ error: 'Only superadmin can resume admin playback.' });
     }
+    if (player.state.status !== AudioPlayerStatus.Paused && player.state.status !== AudioPlayerStatus.AutoPaused) {
+        return res.json({ ok: true });
+    }
     const fromPaused = playbackState.pausedAt ?? 0;
     playbackState.startTime = Date.now();
     playbackState.startTimeOffset = fromPaused;
     playbackState.pausedAt = undefined;
-    player.unpause();
+    const unpaused = player.unpause();
+    if (!unpaused) return res.status(500).json({ error: 'Could not resume playback.' });
     res.json({ ok: true });
 });
 
