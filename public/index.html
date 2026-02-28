@@ -205,12 +205,18 @@
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
         .user-locked-msg { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
-        .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+        .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
         .folder-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
         .folder-tab:hover { border-color: var(--accent); }
         .folder-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
         .folder-tab.delete { padding: 0.2rem 0.4rem; font-size: 0.75rem; color: var(--text-muted); }
         .folder-tab.delete:hover { color: var(--danger); }
+        .folder-tab-wrap { display: inline-flex; align-items: center; gap: 0.15rem; }
+        .folder-tabs.manage-mode .folder-tab-wrap { cursor: grab; }
+        .folder-tabs.manage-mode .folder-tab-wrap:active { cursor: grabbing; }
+        .folder-tabs.manage-mode .folder-tab-wrap.dragging { opacity: 0.5; }
+        .folder-tabs.manage-mode .folder-tab-wrap.drag-over { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+        .folder-tab-rename { width: 6rem; padding: 0.2rem 0.4rem; font-size: 0.85rem; background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius-sm); color: var(--text); }
         .folders-admin { margin-bottom: 0.75rem; }
         .folders-admin .row { gap: 0.35rem; }
         .top-bar-lock { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
@@ -297,6 +303,7 @@
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
+                <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageFoldersBtn" onclick="toggleManageFolders()" title="Manage folders: rename, reorder, delete">Manage folders</button>
             </div>
             <div class="folders-admin admin-only" id="foldersAdmin">
                 <div class="row">
@@ -334,6 +341,7 @@
         let foldersList = [];
         let selectedFolder = null;
         let selectedSound = null;
+        let manageFoldersMode = false;
 
         async function api(path, opts = {}) {
             const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
@@ -459,14 +467,104 @@
         function renderFolderTabs() {
             const container = document.getElementById('folderTabs');
             const isAdmin = user?.role === 'admin';
+            const showManage = isAdmin && manageFoldersMode;
+            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             let html = '<button type="button" class="folder-tab' + (selectedFolder === null ? ' active' : '') + '" data-folder="" onclick="selectFolder(null)">All</button>';
             (foldersList || []).forEach(f => {
-                const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                 const active = selectedFolder === f;
-                html += '<button type="button" class="folder-tab' + (active ? ' active' : '') + '" data-folder="' + esc(f) + '" onclick="selectFolder(this.dataset.folder)">' + esc(f) + '</button>';
-                if (isAdmin) html += '<button type="button" class="folder-tab delete" data-folder="' + esc(f) + '" onclick="deleteFolder(this.dataset.folder)" title="Delete folder">✕</button>';
+                if (showManage) {
+                    html += '<div class="folder-tab-wrap" data-folder="' + esc(f) + '" draggable="true">';
+                    html += '<button type="button" class="folder-tab' + (active ? ' active' : '') + '" data-folder="' + esc(f) + '" onclick="selectFolder(this.dataset.folder)" ondblclick="event.preventDefault(); startRenameFolder(this.dataset.folder)" title="Double-click to rename">' + esc(f) + '</button>';
+                    html += '<button type="button" class="folder-tab delete" data-folder="' + esc(f) + '" onclick="event.stopPropagation(); deleteFolder(this.dataset.folder)" title="Delete folder">✕</button>';
+                    html += '</div>';
+                } else {
+                    html += '<button type="button" class="folder-tab' + (active ? ' active' : '') + '" data-folder="' + esc(f) + '" onclick="selectFolder(this.dataset.folder)">' + esc(f) + '</button>';
+                }
             });
             container.innerHTML = html;
+            container.classList.toggle('manage-mode', showManage);
+            document.getElementById('manageFoldersBtn')?.classList.toggle('active', manageFoldersMode);
+            if (showManage) setupFolderTabDragDrop(container);
+        }
+
+        function setupFolderTabDragDrop(container) {
+            container.addEventListener('dragstart', (e) => {
+                const wrap = e.target.closest('.folder-tab-wrap');
+                if (!wrap) return;
+                e.dataTransfer.setData('text/plain', wrap.dataset.folder || '');
+                e.dataTransfer.effectAllowed = 'move';
+                e.stopPropagation();
+                wrap.classList.add('dragging');
+            });
+            container.addEventListener('dragend', (e) => {
+                e.target.closest('.folder-tab-wrap')?.classList.remove('dragging');
+                container.querySelectorAll('.folder-tab-wrap').forEach(el => el.classList.remove('drag-over'));
+            });
+            container.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                const wrap = e.target.closest('.folder-tab-wrap');
+                container.querySelectorAll('.folder-tab-wrap').forEach(el => el.classList.remove('drag-over'));
+                if (wrap) wrap.classList.add('drag-over');
+            });
+            container.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const fromName = e.dataTransfer.getData('text/plain');
+                const toWrap = e.target.closest('.folder-tab-wrap');
+                container.querySelectorAll('.folder-tab-wrap').forEach(el => el.classList.remove('drag-over'));
+                if (!fromName || !toWrap) return;
+                const wraps = [...container.querySelectorAll('.folder-tab-wrap')];
+                const fromIdx = wraps.findIndex(w => w.dataset.folder === fromName);
+                const toIdx = wraps.findIndex(w => w === toWrap);
+                if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+                const order = wraps.map(w => w.dataset.folder);
+                const [removed] = order.splice(fromIdx, 1);
+                order.splice(toIdx, 0, removed);
+                const res = await api('/api/folders', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folders: order }) });
+                if (res && res.ok) { foldersList = await res.json(); renderFolderTabs(); fetchSounds(); }
+            });
+        }
+
+        function toggleManageFolders() {
+            manageFoldersMode = !manageFoldersMode;
+            renderFolderTabs();
+        }
+
+        function startRenameFolder(currentName) {
+            const container = document.getElementById('folderTabs');
+            const wrap = container ? [...container.querySelectorAll('.folder-tab-wrap')].find(w => w.dataset.folder === currentName) : null;
+            if (!wrap) return;
+            const tabBtn = wrap.querySelector('.folder-tab:not(.delete)');
+            if (!tabBtn) return;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'folder-tab-rename';
+            input.value = currentName;
+            tabBtn.style.display = 'none';
+            wrap.insertBefore(input, tabBtn);
+            input.focus();
+            input.select();
+            function finish() {
+                const newName = input.value.trim();
+                input.remove();
+                tabBtn.style.display = '';
+                if (newName && newName !== currentName) {
+                    api('/api/folders/rename', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ oldName: currentName, newName }) }).then(async (res) => {
+                        if (res && res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            if (data.folders) foldersList = data.folders;
+                            else await fetchFolders();
+                            if (selectedFolder === currentName) selectedFolder = newName;
+                            renderFolderTabs();
+                            fetchSounds();
+                        }
+                    });
+                }
+            }
+            input.addEventListener('blur', finish);
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(); if (e.key === 'Escape') { input.value = currentName; finish(); } });
         }
 
         function selectFolder(folder) {
@@ -520,7 +618,7 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 return `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="${reorderMode ? 'true' : 'false'}">
+                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="false">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">${name}</button>
                         ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
@@ -528,7 +626,8 @@
                     </div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
-            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = reorderMode; });
+            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = false; });
+            grid.querySelectorAll('.sound-drag-handle').forEach(h => { h.draggable = reorderMode; });
             const msg = document.getElementById('userLockedMsg');
             if (msg && isUser && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');
@@ -699,8 +798,10 @@
 
         function getCurrentPlaybackTime() {
             if (playback.status === 'playing' && playback.startTime != null) {
+                const start = Number(playback.startTime);
+                if (!Number.isFinite(start)) return 0;
                 const offset = playback.startTimeOffset || 0;
-                let current = offset + (Date.now() - playback.startTime) / 1000;
+                let current = offset + (Date.now() - start) / 1000;
                 if (playback.duration != null) current = Math.min(current, playback.duration);
                 return Math.max(0, current);
             }
@@ -780,19 +881,23 @@
             api('/api/playback-state').then(async (res) => {
                 if (!res || !res.ok) return;
                 const state = await res.json();
+                if (state.status === 'idle' && playback.status === 'playing' && playback.startTime != null) {
+                    const started = Number(playback.startTime);
+                    if (Number.isFinite(started) && (Date.now() - started) < 1500) return;
+                }
                 playback.status = state.status;
                 playback.filename = state.filename;
                 playback.displayName = state.displayName ?? state.filename;
-                playback.startTime = state.startTime;
-                playback.duration = state.duration;
+                if (state.startTime != null) playback.startTime = Number(state.startTime);
+                if (state.duration != null) playback.duration = state.duration;
                 if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.status === 'idle') pausedAt = 0;
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; }
                 updateNowPlaying();
                 updatePlayPauseButton();
 
                 const timeEl = document.getElementById('progressTime');
                 let current = getCurrentPlaybackTime();
-                const dur = state.duration;
+                const dur = playback.duration;
                 timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
 
                 if (waveformData && waveformDuration > 0) {
@@ -870,8 +975,9 @@
                     if (!reorderMode) return;
                     const item = e.target.closest('.sound-item');
                     if (!item) return;
-                    e.dataTransfer.setData('text/plain', item.dataset.filename);
+                    e.dataTransfer.setData('text/plain', item.dataset.filename || '');
                     e.dataTransfer.effectAllowed = 'move';
+                    e.stopPropagation();
                     item.classList.add('dragging');
                 });
                 grid.addEventListener('dragend', (e) => {
@@ -881,6 +987,7 @@
                 grid.addEventListener('dragover', (e) => {
                     if (!reorderMode) return;
                     e.preventDefault();
+                    e.stopPropagation();
                     e.dataTransfer.dropEffect = 'move';
                     const item = e.target.closest('.sound-item');
                     grid.querySelectorAll('.sound-item').forEach(el => el.classList.remove('drag-over'));
@@ -889,6 +996,7 @@
                 grid.addEventListener('drop', async (e) => {
                     if (!reorderMode) return;
                     e.preventDefault();
+                    e.stopPropagation();
                     grid.querySelectorAll('.sound-item').forEach(el => el.classList.remove('drag-over'));
                     const fromFilename = e.dataTransfer.getData('text/plain');
                     const toItem = e.target.closest('.sound-item');

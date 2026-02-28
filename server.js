@@ -309,6 +309,26 @@ app.patch('/api/folders', requireAdmin, (req, res) => {
     res.json(safe);
 });
 
+app.patch('/api/folders/rename', requireAdmin, (req, res) => {
+    const { oldName, newName } = req.body;
+    const oldN = typeof oldName === 'string' ? oldName.trim() : '';
+    const newN = typeof newName === 'string' ? newName.trim() : '';
+    if (!oldN || !newN) return res.status(400).json({ error: 'oldName and newName required' });
+    if (oldN === newN) return res.json({ ok: true });
+    const meta = loadSoundsMeta();
+    const folders = getFolders(meta);
+    if (!folders.includes(oldN)) return res.status(404).json({ error: 'Folder not found' });
+    if (folders.includes(newN)) return res.status(400).json({ error: 'Target folder name already exists' });
+    meta._folders = folders.map(f => f === oldN ? newN : f);
+    Object.keys(meta).forEach(key => {
+        if (key.startsWith('_')) return;
+        const m = meta[key];
+        if (m && typeof m === 'object' && m.folder === oldN) m.folder = newN;
+    });
+    saveSoundsMeta(meta);
+    res.json({ ok: true, folders: meta._folders });
+});
+
 app.delete('/api/folders/:name', requireAdmin, (req, res) => {
     const name = decodeURIComponent(req.params.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Folder name required' });
@@ -430,7 +450,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         const meta = player.state.resource.metadata;
         state.filename = meta.filename;
         state.displayName = meta.displayName ?? meta.filename;
-        state.startTime = playbackState.startTime || Date.now();
+        state.startTime = typeof playbackState.startTime === 'number' ? playbackState.startTime : Date.now();
         if (state.duration == null && playbackState.filename === meta.filename) state.duration = playbackState.duration;
     }
     res.json(state);
