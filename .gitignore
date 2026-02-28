@@ -4,12 +4,8 @@
 # Dependencies
 node_modules/
 
-# Uploads and user data (never overwrite on git pull)
-sounds/*.mp3
-sounds/*.wav
-sounds/*.ogg
-sounds/*.webm
-sounds/sounds.json
+# Uploads and user data (local only; never commit or overwrite on pull)
+sounds/
 
 # OS and editor
 .DS_Store
