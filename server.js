@@ -9,7 +9,7 @@ const sodium = require('libsodium-wrappers');
 function startApp() {
 const express = require('express');
 const multer = require('multer');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus } = require('@discordjs/voice');
 
@@ -47,7 +47,46 @@ function setSoundMeta(filename, updates) {
     const next = typeof cur === 'object' && cur !== null ? { ...cur } : (typeof cur === 'string' ? { displayName: cur } : {});
     if (updates.displayName !== undefined) next.displayName = updates.displayName;
     if (updates.duration !== undefined) next.duration = updates.duration;
+    if (updates.folder !== undefined) next.folder = updates.folder === null || updates.folder === '' ? null : String(updates.folder);
     meta[filename] = next;
+    saveSoundsMeta(meta);
+}
+
+function getFolder(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && m.folder != null) return m.folder;
+    return null;
+}
+
+function getFolders(meta) {
+    const list = meta._folders;
+    return Array.isArray(list) ? list.filter(f => typeof f === 'string' && f.trim() !== '') : [];
+}
+
+function setFolders(folders) {
+    const meta = loadSoundsMeta();
+    meta._folders = Array.isArray(folders) ? folders.filter(f => typeof f === 'string' && f.trim() !== '') : [];
+    saveSoundsMeta(meta);
+}
+
+function getSoundOrder(meta) {
+    const order = meta._order;
+    return Array.isArray(order) ? order.filter(f => typeof f === 'string') : [];
+}
+
+function setSoundOrder(order) {
+    const meta = loadSoundsMeta();
+    meta._order = order;
+    saveSoundsMeta(meta);
+}
+
+function getPlaybackLocked(meta) {
+    return meta._playbackLocked === true;
+}
+
+function setPlaybackLocked(locked) {
+    const meta = loadSoundsMeta();
+    meta._playbackLocked = locked === true;
     saveSoundsMeta(meta);
 }
 
@@ -207,13 +246,27 @@ app.get('/api/sounds', requireAuth, (req, res) => {
         if (err) return res.status(500).send('Error reading sounds directory');
         const meta = loadSoundsMeta();
         const audioFiles = (files || []).filter(f => f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.ogg'));
-        const list = audioFiles.map(filename => ({
+        const order = getSoundOrder(meta);
+        const orderSet = new Set(order);
+        const ordered = order.filter(f => audioFiles.includes(f));
+        const rest = audioFiles.filter(f => !orderSet.has(f));
+        const sorted = [...ordered, ...rest];
+        const list = sorted.map(filename => ({
             filename,
             displayName: getDisplayName(meta, filename),
             duration: getDuration(meta, filename),
+            folder: getFolder(meta, filename),
         }));
         res.json(list);
     });
+});
+
+app.patch('/api/sounds/order', requireAdmin, (req, res) => {
+    const { order } = req.body;
+    if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array' });
+    const safe = order.filter(f => typeof f === 'string' && /\.(mp3|wav|ogg)$/i.test(f));
+    setSoundOrder(safe);
+    res.json({ order: safe });
 });
 
 app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
@@ -230,14 +283,58 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
 });
 
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
-    const { filename, displayName } = req.body;
+    const { filename, displayName, folder } = req.body;
     const safeFilename = filename && path.basename(filename);
     if (!safeFilename) return res.status(400).send('Filename required');
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-    setSoundMeta(safeFilename, { displayName: displayName != null ? String(displayName) : undefined });
+    const updates = {};
+    if (displayName !== undefined) updates.displayName = displayName != null ? String(displayName) : undefined;
+    if (folder !== undefined) updates.folder = folder === null || folder === '' ? null : String(folder);
+    setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), folder: getFolder(meta, safeFilename) });
+});
+
+app.get('/api/folders', requireAuth, (req, res) => {
+    const meta = loadSoundsMeta();
+    res.json(getFolders(meta));
+});
+
+app.patch('/api/folders', requireAdmin, (req, res) => {
+    const { folders } = req.body;
+    if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
+    const safe = folders.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim());
+    setFolders(safe);
+    res.json(safe);
+});
+
+app.delete('/api/folders/:name', requireAdmin, (req, res) => {
+    const name = decodeURIComponent(req.params.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Folder name required' });
+    const meta = loadSoundsMeta();
+    const folders = getFolders(meta);
+    if (!folders.includes(name)) return res.status(404).json({ error: 'Folder not found' });
+    Object.keys(meta).forEach(key => {
+        if (key.startsWith('_')) return;
+        const m = meta[key];
+        if (m && typeof m === 'object' && m.folder === name) m.folder = null;
+    });
+    meta._folders = folders.filter(f => f !== name);
+    saveSoundsMeta(meta);
+    res.json({ ok: true });
+});
+
+app.get('/api/settings', requireAuth, (req, res) => {
+    const meta = loadSoundsMeta();
+    res.json({ playbackLocked: getPlaybackLocked(meta) });
+});
+
+app.patch('/api/settings', requireAdmin, (req, res) => {
+    const { playbackLocked } = req.body;
+    if (typeof playbackLocked !== 'boolean') return res.status(400).json({ error: 'playbackLocked must be boolean' });
+    setPlaybackLocked(playbackLocked);
+    res.json({ playbackLocked });
 });
 
 app.post('/api/upload', requireAdmin, upload.single('soundFile'), (req, res) => {
@@ -280,8 +377,22 @@ app.post('/api/play', requireAuth, (req, res) => {
         return res.status(403).json({ error: `Only sounds ${MAX_USER_SOUND_DURATION} seconds or shorter are allowed for your role. This sound is ${Math.ceil(duration)}s.` });
     }
 
+    if (req.session.user.role === 'user' && getPlaybackLocked(meta)) {
+        return res.status(403).json({ error: 'Playback is currently locked by an admin.' });
+    }
+
+    const startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : 0;
+
     try {
-        const stream = fs.createReadStream(filePath);
+        let stream;
+        if (startTime > 0) {
+            const ff = spawn('ffmpeg', ['-ss', String(startTime), '-i', filePath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'ignore'] });
+            stream = ff.stdout;
+            ff.on('error', (err) => { console.error('ffmpeg spawn error', err); });
+            ff.stderr.on('data', () => {});
+        } else {
+            stream = fs.createReadStream(filePath);
+        }
         const resource = createAudioResource(stream, {
             inputType: StreamType.Arbitrary,
             inlineVolume: true,
@@ -296,7 +407,7 @@ app.post('/api/play', requireAuth, (req, res) => {
             startTime: Date.now(),
             duration,
         };
-        res.json({ ok: true, duration, displayName });
+        res.json({ ok: true, duration, displayName, startTimeOffset: startTime });
     } catch (err) {
         console.error('Play error:', err);
         res.status(500).send('Failed to play audio');
@@ -317,7 +428,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         const meta = player.state.resource.metadata;
         state.filename = meta.filename;
         state.displayName = meta.displayName ?? meta.filename;
-        if (!state.startTime) state.startTime = Date.now();
+        state.startTime = playbackState.startTime || Date.now();
         if (state.duration == null && playbackState.filename === meta.filename) state.duration = playbackState.duration;
     }
     res.json(state);
