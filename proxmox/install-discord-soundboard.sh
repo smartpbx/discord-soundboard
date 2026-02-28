@@ -111,8 +111,7 @@ if ! pct status "${CTID}" &>/dev/null; then
         --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0
 
     ROOT_PASSWORD="${ROOT_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
-    echo "[*] Setting root password and starting container..."
-    pct set "${CTID}" --password "${ROOT_PASSWORD}"
+    echo "[*] Starting container..."
     pct start "${CTID}"
 
     echo "[*] Waiting for container to boot..."
@@ -126,7 +125,9 @@ if ! pct status "${CTID}" &>/dev/null; then
         echo "[!] Container did not become ready in time. Check: pct status ${CTID}"
         exit 1
     fi
-    echo "[+] Container ${CTID} is running. Root password: ${ROOT_PASSWORD} (change with: pct set ${CTID} --password 'newpass')"
+    echo "[*] Setting root password..."
+    echo "root:${ROOT_PASSWORD}" | pct exec "${CTID}" -- chpasswd
+    echo "[+] Container ${CTID} is running. Root password: ${ROOT_PASSWORD} (change with: pct exec ${CTID} -- passwd)"
 fi
 
 # Container must be running
