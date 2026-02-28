@@ -4,11 +4,12 @@
 # Dependencies
 node_modules/
 
-# Uploads and generated data (optional: remove if you want to track sounds)
-# sounds/*.mp3
-# sounds/*.wav
-# sounds/*.ogg
-# sounds/sounds.json
+# Uploads and user data (never overwrite on git pull)
+sounds/*.mp3
+sounds/*.wav
+sounds/*.ogg
+sounds/*.webm
+sounds/sounds.json
 
 # OS and editor
 .DS_Store

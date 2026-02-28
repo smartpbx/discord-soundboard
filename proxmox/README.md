@@ -2,6 +2,8 @@
 
 Install the Discord Soundboard as an LXC container on your Proxmox host, in the same style as [Proxmox VE Helper-Scripts](https://community-scripts.github.io/ProxmoxVE/).
 
+**Repo:** https://github.com/smartpbx/discord-soundboard
+
 ## Prerequisites
 
 - Proxmox VE host with a Debian 12 or Ubuntu 22.04/24.04 template.
@@ -9,16 +11,16 @@ Install the Discord Soundboard as an LXC container on your Proxmox host, in the 
 
 ## One-line install (from Proxmox host)
 
-Replace `YOUR_USER` with your GitHub username (or org). Use `main` or your default branch:
+Default clone URL is already set to `https://github.com/smartpbx/discord-soundboard.git`:
 
 ```bash
-GIT_URL="https://github.com/YOUR_USER/discord-soundboard.git" bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
 ```
 
 With options (e.g. custom CTID or static IP):
 
 ```bash
-GIT_URL="https://github.com/YOUR_USER/discord-soundboard.git" CTID=201 IP="192.168.1.201/24" GW="192.168.1.1" bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
+CTID=201 IP="192.168.1.201/24" GW="192.168.1.1" bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)"
 ```
 
 If the script creates a new container, set the root password and start it, then run the **same one-liner again** to finish the install:
@@ -29,29 +31,33 @@ pct start 200
 # then run the one-liner again
 ```
 
-## One-line update
+## One-line update (from host)
 
-After you push changes to the repo, run (same URL, add `update` at the end):
+Pulls latest code and restarts the app. **Your `.env` and `sounds/` (files, folders, names, settings) are not touched.**
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
 ```
+
+Or with the script locally: `./install-discord-soundboard.sh update`
 
 ---
 
 ## Manual / clone-based install
 
-1. Copy `install-discord-soundboard.sh` to your Proxmox host (or clone your repo there).
-2. Set your Git repo URL and run install:
+1. Copy `install-discord-soundboard.sh` to your Proxmox host (or clone the repo there).
+2. Run install (default GIT_URL is already `https://github.com/smartpbx/discord-soundboard.git`):
 
    ```bash
    chmod +x install-discord-soundboard.sh
-   export GIT_URL="https://github.com/YOUR_USER/discord-soundboard.git"
    ./install-discord-soundboard.sh install
    ```
 
+   Or override the repo: `export GIT_URL="https://github.com/you/discord-soundboard.git"`
+
 3. If the script creates a new container, set root password and start the CT, then run the same command again (see above).
-4. Open the Web UI at `http://<container-ip>:3000` and log in (admin/user passwords are set in `.env`).
+4. Edit `.env` with your Discord bot token and passwords (see below).
+5. Open the Web UI at `http://<container-ip>:3000` and log in.
 
 ## Options
 
@@ -64,7 +70,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/discord-soundb
 | `DISK`      | 8                    | Root disk (GB)         |
 | `STORAGE`   | local-lvm            | Storage name           |
 | `BRIDGE`    | vmbr0                | Bridge                 |
-| `GIT_URL`   | (from repo)          | Git clone URL          |
+| `GIT_URL`   | https://github.com/smartpbx/discord-soundboard.git | Git clone URL |
 | `IP`        | (DHCP)               | Optional static IP     |
 | `GW`        | (none)               | Optional gateway       |
 
@@ -80,28 +86,60 @@ export GW="192.168.1.1"
 
 ## Update (after code changes)
 
-From the Proxmox host (one-liner):
+Updates **code only**; `.env` and `sounds/` (your files, folders, names, settings) are kept.
 
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
-```
-
-Or if you have the script locally:
+**From the Proxmox host:**
 
 ```bash
 ./install-discord-soundboard.sh update
 ```
 
-Both run inside the container: `git pull`, `npm install`, and `systemctl restart discord-soundboard`.
+Or one-liner:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install-discord-soundboard.sh)" update
+```
+
+**From inside the LXC console** (after `pct enter 200` or via SSH into the container):
+
+```bash
+update
+```
+
+Or explicitly: `cd /opt/discord-soundboard && ./scripts/update.sh`
+
+## Backup and restore
+
+Full export/import of `.env`, `sounds/` (all audio files, `sounds.json` with names, folders, order).
+
+**Backup (inside container):**
+
+```bash
+pct exec 200 -- bash -c 'cd /opt/discord-soundboard && ./scripts/backup.sh'
+# Creates e.g. /opt/discord-soundboard/discord-soundboard-backup-20260227-123456.tar.gz
+```
+
+Copy backup off the container:
+
+```bash
+pct pull 200 /opt/discord-soundboard/discord-soundboard-backup-YYYYMMDD-HHMMSS.tar.gz ./
+```
+
+**Restore:** copy tarball into container, then restore:
+
+```bash
+pct push 200 ./discord-soundboard-backup-YYYYMMDD-HHMMSS.tar.gz /opt/discord-soundboard/
+pct exec 200 -- bash -c 'cd /opt/discord-soundboard && ./scripts/restore.sh /opt/discord-soundboard/discord-soundboard-backup-YYYYMMDD-HHMMSS.tar.gz'
+```
 
 ## After install
 
 - **Edit .env (token, passwords):**  
   `pct exec 200 -- nano /opt/discord-soundboard/.env`  
-  Then: `systemctl restart discord-soundboard`
+  Set `DISCORD_TOKEN` (from [Discord Developer Portal](https://discord.com/developers/applications)), `ADMIN_PASSWORD`, `USER_PASSWORD`, and optionally `SESSION_SECRET`. Then: `pct exec 200 -- systemctl restart discord-soundboard`
 
 - **Logs:**  
   `pct exec 200 -- journalctl -u discord-soundboard -f`
 
 - **Sounds:**  
-  Upload via the Web UI, or copy files into the container (sounds live under `/opt/discord-soundboard/sounds`).
+  Upload via the Web UI; files and metadata live under `/opt/discord-soundboard/sounds/`. Back them up with `./scripts/backup.sh` (see Backup and restore above).

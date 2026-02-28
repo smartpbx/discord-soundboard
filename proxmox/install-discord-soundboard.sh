@@ -36,8 +36,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; fi
 # --- Update (run on host) ---
 do_update() {
     echo "[*] Updating Discord Soundboard in CT ${CTID}..."
-    pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && git pull && npm install && systemctl restart discord-soundboard"
-    echo "[+] Update done. Service restarted."
+    pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && chmod +x scripts/*.sh 2>/dev/null; git pull && npm install && systemctl restart discord-soundboard"
+    echo "[+] Update done. Service restarted. Your .env and sounds/ were not changed."
 }
 
 if [[ "${1:-}" == "update" ]]; then
@@ -93,6 +93,7 @@ pct exec "${CTID}" -- bash -c "curl -fsSL https://deb.nodesource.com/setup_22.x 
 
 echo "[*] Cloning app to ${APP_DIR}..."
 pct exec "${CTID}" -- bash -c "rm -rf ${APP_DIR} && git clone '${GIT_URL}' ${APP_DIR}"
+pct exec "${CTID}" -- bash -c "chmod +x ${APP_DIR}/scripts/*.sh 2>/dev/null || true"
 
 echo "[*] Installing npm dependencies..."
 pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && npm install"
@@ -135,7 +136,13 @@ pct exec "${CTID}" -- systemctl daemon-reload
 pct exec "${CTID}" -- systemctl enable discord-soundboard
 pct exec "${CTID}" -- systemctl start discord-soundboard
 
+# Optional: allow running "update" from anywhere in the LXC console
+pct exec "${CTID}" -- bash -c "echo '#!/bin/sh' > /usr/local/bin/update && echo 'export APP_DIR=${APP_DIR}' >> /usr/local/bin/update && echo 'exec \${APP_DIR}/scripts/update.sh' >> /usr/local/bin/update && chmod +x /usr/local/bin/update"
+
 echo "[+] Done. Discord Soundboard is running in CT ${CTID}."
 echo "    Web UI: http://<container-ip>:3000"
 echo "    Logs:   pct exec ${CTID} -- journalctl -u discord-soundboard -f"
-echo "    Update: $0 update  (or: pct exec ${CTID} -- bash -c 'cd ${APP_DIR} && git pull && npm install && systemctl restart discord-soundboard')"
+echo "    Update (from host): $0 update"
+echo "    Update (in LXC):    pct exec ${CTID} -- update   OR  pct exec ${CTID} -- bash -c 'cd ${APP_DIR} && ./scripts/update.sh'"
+echo "    Backup (in LXC):    pct exec ${CTID} -- bash -c 'cd ${APP_DIR} && ./scripts/backup.sh'"
+echo "    Restore:            pct push ${CTID} backup.tar.gz ${APP_DIR}/ && pct exec ${CTID} -- bash -c 'cd ${APP_DIR} && ./scripts/restore.sh ${APP_DIR}/backup.tar.gz'"
