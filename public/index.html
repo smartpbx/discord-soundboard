@@ -871,7 +871,7 @@
         let userMaxDuration = 7;
         let userCooldownSec = 0;
         let userLastPlayTime = 0;
-        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
+        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
         let playbackLockedBy = null;
         let playbackSuperadminOnly = false;
         let guestLastPlayTime = 0;
@@ -2138,9 +2138,7 @@
             renderSoundsGrid();
         }
 
-        function renderSoundsGrid() {
-            const grid = document.getElementById('soundsList');
-            const filtered = getFilteredSounds();
+        function getPlayabilityState() {
             const isUser = (user && user.role) === 'user';
             const isGuest = (user && user.role) === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
@@ -2151,6 +2149,36 @@
             const canPlay = ((!isUser && !isGuest) && !((user && user.role) === 'admin' && superadminPlaying)) || ((!playbackLocked && !playbackSuperadminOnly) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
             const maxDur = isGuest ? (guestMaxDuration || 7) : (userMaxDuration || 7);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
+            return { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying };
+        }
+        function updatePlayabilityOnly() {
+            const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
+            function updateBtn(btn, dur) {
+                const disabled = !canPlay || tooLong(dur);
+                btn.disabled = disabled;
+                btn.classList.toggle('disabled', disabled);
+                let title = '';
+                if (!canPlay) title = cannotOverride ? (superadminPlaying && (user && user.role) === 'admin' ? 'A superadmin is playing. You cannot override.' : 'An admin or superadmin is playing. You cannot override.') : (playbackSuperadminOnly ? 'Only superadmin can play.' : (playbackLocked ? 'Playback is locked' : ((isGuest && guestCooldown > 0) || (isUser && userCooldown > 0) ? 'Wait ' + (isGuest ? guestCooldown : userCooldown) + 's before playing again' : 'Cannot play')));
+                else if (tooLong(dur)) title = 'Only sounds ' + maxDur + 's or shorter allowed';
+                btn.title = title;
+            }
+            const grid = document.getElementById('soundsList');
+            if (grid) grid.querySelectorAll('.sound-btn').forEach(function(btn) { updateBtn(btn, parseFloat(btn.dataset.duration)); });
+            const mobileArea = document.getElementById('mobileGridArea');
+            if (mobileArea) {
+                const soundsByFile = {};
+                (soundsList || []).forEach(function(s) { soundsByFile[s.filename] = s.duration; });
+                mobileArea.querySelectorAll('.mobile-grid-btn').forEach(function(btn) {
+                    const fn = btn.dataset.filename;
+                    const dur = fn && soundsByFile[fn] != null ? soundsByFile[fn] : null;
+                    updateBtn(btn, dur);
+                });
+            }
+        }
+        function renderSoundsGrid() {
+            const grid = document.getElementById('soundsList');
+            const filtered = getFilteredSounds();
+            const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -2658,6 +2686,7 @@
             playback.duration = (data.duration != null ? data.duration : null);
             playback.startTime = Date.now();
             playback.startTimeOffset = (data.startTimeOffset != null ? data.startTimeOffset : 0);
+            playback.originalStartTimeOffset = playback.startTimeOffset;
             playback.serverCurrentTime = undefined;
             playback.status = 'playing';
             playback.displayName = (data.displayName != null ? data.displayName : filename);
@@ -2707,7 +2736,8 @@
                 waveformCache[filename] = { peaks: peaks, duration: duration };
                 document.getElementById('waveformPlaceholder').style.display = 'none';
                 document.getElementById('waveformWrap').style.display = 'block';
-                drawWaveform(Math.min(getCurrentPlaybackTime(), duration), duration);
+                const total = (playback.duration != null && playback.duration > 0) ? playback.duration : duration;
+                drawWaveform(Math.min(getCurrentPlaybackTime(), total), total);
             } catch (e) {
                 console.warn('Waveform load failed', e);
             }
@@ -2723,13 +2753,23 @@
             canvas.height = h;
             const ctx = canvas.getContext('2d');
             const barCount = waveformData.length;
-            const barW = Math.max(1, (w / barCount) - 1);
-            const total = totalDuration != null && totalDuration > 0 ? totalDuration : waveformDuration;
-            const progress = total > 0 ? Math.min(1, currentTime / total) : 0;
+            const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+            const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
+            const isTrimmed = trimStart > 0 || (trimDuration < waveformDuration - 0.01);
+            let barsToDraw = waveformData;
+            if (isTrimmed && waveformDuration > 0) {
+                const startBar = Math.max(0, Math.floor((trimStart / waveformDuration) * barCount));
+                const endBar = Math.min(barCount, Math.ceil(((trimStart + trimDuration) / waveformDuration) * barCount));
+                barsToDraw = waveformData.slice(startBar, endBar);
+            }
+            const drawBarCount = barsToDraw.length;
+            const barW = drawBarCount > 0 ? Math.max(1, (w / drawBarCount) - 1) : 0;
+            const total = totalDuration != null && totalDuration > 0 ? totalDuration : trimDuration;
+            const progress = total > 0 ? (isTrimmed && trimDuration > 0 ? Math.min(1, Math.max(0, (currentTime - trimStart) / trimDuration)) : Math.min(1, currentTime / total)) : 0;
             const playheadX = progress * w;
             ctx.clearRect(0, 0, w, h);
-            waveformData.forEach((peak, i) => {
-                const x = (i / barCount) * w;
+            barsToDraw.forEach((peak, i) => {
+                const x = (i / drawBarCount) * w;
                 const center = h / 2;
                 const halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.4));
                 const isPast = x + barW < playheadX;
@@ -2750,8 +2790,10 @@
                     const start = Number(playback.startTime);
                     if (!Number.isFinite(start)) return 0;
                     const offset = playback.startTimeOffset || 0;
+                    const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
+                    const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                     let current = offset + (Date.now() - start) / 1000;
-                    if (playback.duration != null) current = Math.min(current, playback.duration);
+                    current = Math.min(current, maxPos);
                     return Math.max(0, current);
                 }
                 if (playback.status === 'paused') return pausedAt;
@@ -2760,8 +2802,10 @@
             if (playback.serverCurrentTime != null) {
                 if (playback.status === 'playing') {
                     const elapsed = (Date.now() - lastServerCurrentTimeReceivedAt) / 1000;
+                    const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
+                    const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                     let current = playback.serverCurrentTime + elapsed;
-                    if (playback.duration != null) current = Math.min(current, playback.duration);
+                    current = Math.min(current, maxPos);
                     return Math.max(0, current);
                 }
                 return playback.serverCurrentTime;
@@ -2770,21 +2814,32 @@
                 const start = Number(playback.startTime);
                 if (!Number.isFinite(start)) return 0;
                 const offset = playback.startTimeOffset || 0;
+                const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
+                const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                 let current = offset + (Date.now() - start) / 1000;
-                if (playback.duration != null) current = Math.min(current, playback.duration);
+                current = Math.min(current, maxPos);
                 return Math.max(0, current);
             }
             if (playback.status === 'paused') return pausedAt;
             return 0;
         }
 
+        let lastProgressTimeStr = '';
         function tickWaveform() {
             const isActive = playback.status === 'playing' || playback.status === 'paused';
             if (isActive) {
                 const current = getCurrentPlaybackTime();
-                const timeEl = document.getElementById('progressTime');
                 const dur = playback.duration;
-                if (timeEl) timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
+                const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+                const displayCurrent = trimStart > 0 || (dur != null && dur < waveformDuration - 0.01) ? Math.max(0, current - trimStart) : current;
+                const str = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
+                if (str !== lastProgressTimeStr) {
+                    lastProgressTimeStr = str;
+                    const timeEl = document.getElementById('progressTime');
+                    if (timeEl) timeEl.textContent = str;
+                }
+            } else {
+                lastProgressTimeStr = '';
             }
             if (waveformData && waveformDuration > 0 && isActive) {
                 const current = getCurrentPlaybackTime();
@@ -2793,14 +2848,14 @@
             }
             if ((user && user.role) === 'guest') {
                 const r = getGuestCooldownRemaining();
-                if (r > 0 && r !== lastGuestCooldownShown) { lastGuestCooldownShown = r; renderSoundsGrid(); }
-                else if (r === 0 && lastGuestCooldownShown > 0) { lastGuestCooldownShown = 0; renderSoundsGrid(); }
+                if (r > 0 && r !== lastGuestCooldownShown) { lastGuestCooldownShown = r; updatePlayabilityOnly(); }
+                else if (r === 0 && lastGuestCooldownShown > 0) { lastGuestCooldownShown = 0; updatePlayabilityOnly(); }
                 else if (r === 0) lastGuestCooldownShown = -1;
             }
             if ((user && user.role) === 'user') {
                 const r = getUserCooldownRemaining();
-                if (r > 0 && r !== lastUserCooldownShown) { lastUserCooldownShown = r; renderSoundsGrid(); }
-                else if (r === 0 && lastUserCooldownShown > 0) { lastUserCooldownShown = 0; renderSoundsGrid(); }
+                if (r > 0 && r !== lastUserCooldownShown) { lastUserCooldownShown = r; updatePlayabilityOnly(); }
+                else if (r === 0 && lastUserCooldownShown > 0) { lastUserCooldownShown = 0; updatePlayabilityOnly(); }
                 else if (r === 0) lastUserCooldownShown = -1;
             }
         }
@@ -2808,7 +2863,7 @@
         async function stopPlayback() {
             const res = await api('/api/stop', { method: 'POST' });
             if (!res) return;
-            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
+            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
             pausedAt = 0;
             waveformData = null;
             waveformDuration = 0;
@@ -2824,8 +2879,9 @@
             if (playback.status === 'playing') {
                 await api('/api/pause', { method: 'POST' });
                 const offset = playback.startTimeOffset || 0;
+                const maxPos = playback.duration != null ? offset + playback.duration : 999999;
                 pausedAt = offset + (Date.now() - (playback.startTime || 0)) / 1000;
-                if (playback.duration != null) pausedAt = Math.min(pausedAt, playback.duration);
+                pausedAt = Math.min(pausedAt, maxPos);
                 playback.status = 'paused';
             } else if (playback.status === 'paused') {
                 await api('/api/resume', { method: 'POST' });
@@ -2856,19 +2912,28 @@
             if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop'; }
         }
 
+        let lastNowPlayingHtml = '';
         function updateNowPlaying() {
             const card = document.getElementById('playerCard');
             const text = document.getElementById('nowPlayingText');
+            let html;
             if (playback.status === 'idle' || !playback.displayName) {
-                text.innerHTML = 'Nothing playing';
-                card.classList.add('player-idle');
+                html = 'Nothing playing';
+                if (html !== lastNowPlayingHtml) {
+                    lastNowPlayingHtml = html;
+                    text.innerHTML = html;
+                    card.classList.add('player-idle');
+                }
             } else {
-                let html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
+                html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
                 if (playback.startedBy && playback.startedBy.username) {
                     html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
                 }
-                text.innerHTML = html;
-                card.classList.remove('player-idle');
+                if (html !== lastNowPlayingHtml) {
+                    lastNowPlayingHtml = html;
+                    text.innerHTML = html;
+                    card.classList.remove('player-idle');
+                }
             }
         }
 
@@ -2892,7 +2957,7 @@
             if (playbackPollingStarted) return;
             playbackPollingStarted = true;
             refreshPlaybackState();
-            setTimeout(() => setInterval(refreshPlaybackState, 400), 600);
+            setTimeout(() => setInterval(refreshPlaybackState, 1000), 600);
         }
         function startPendingCountPolling() {
             if (pendingCountPollingStarted || (user && user.role) !== 'superadmin') return;
@@ -2904,10 +2969,12 @@
 
         function refreshPlaybackState() {
             if (!user) return;
+            const prevStatus = playback.status;
+            const prevStartedByRole = playback.startedBy && playback.startedBy.role;
+            const prevFilename = playback.filename;
             api('/api/playback-state').then(async (res) => {
                 if (!res || !res.ok) return;
                 const state = await res.json();
-                const prevFilename = playback.filename;
                 if (state.status === 'idle' && playback.status === 'playing' && playback.startTime != null) {
                     const started = Number(playback.startTime);
                     if (Number.isFinite(started) && (Date.now() - started) < 3000) return;
@@ -2919,8 +2986,11 @@
                 const amLocal = state.startedBy && state.startedBy.username === (user && user.username);
                 if (!amLocal) {
                     if (state.startTime != null) playback.startTime = Number(state.startTime);
-                    if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
                 }
+                if (state.startTimeOffset != null) playback.startTimeOffset = Number(state.startTimeOffset);
+                else if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
+                if (state.filename && waveformFilename !== state.filename && state.startTimeOffset != null) playback.originalStartTimeOffset = Number(state.startTimeOffset);
+                else if (playback.originalStartTimeOffset === undefined) playback.originalStartTimeOffset = playback.startTimeOffset || 0;
                 if (state.duration != null) playback.duration = state.duration;
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
@@ -2934,13 +3004,19 @@
                 const timeEl = document.getElementById('progressTime');
                 let current = getCurrentPlaybackTime();
                 const dur = playback.duration;
-                timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
+                const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+                const displayCurrent = trimStart > 0 || (dur != null && dur < (waveformDuration || 999999) - 0.01) ? Math.max(0, current - trimStart) : current;
+                if (timeEl) timeEl.textContent = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
 
                 const totalDur = dur != null ? dur : waveformDuration;
+                const maxPos = trimStart > 0 && dur != null ? trimStart + dur : 999999;
                 if (waveformData && totalDur > 0) {
-                    drawWaveform(Math.min(current, totalDur), totalDur);
+                    drawWaveform(Math.min(current, maxPos), totalDur);
                 }
-                renderSoundsGrid();
+                const statusChanged = prevStatus !== playback.status;
+                const startedByChanged = prevStartedByRole !== (playback.startedBy && playback.startedBy.role);
+                const filenameChanged = prevFilename !== playback.filename;
+                if (statusChanged || startedByChanged || filenameChanged) renderSoundsGrid();
                 if (state.voiceConnected !== undefined && isAdminOrSuperadmin()) {
                     const connectionCard = document.getElementById('connectionCard');
                     const voiceBar = document.getElementById('voiceConnectedBar');
@@ -2961,9 +3037,11 @@
             if (!waveformData || waveformDuration <= 0 || !playback.filename) return;
             const canvas = document.getElementById('waveformCanvas');
             const rect = canvas.getBoundingClientRect();
-            const x = (e.clientX - rect.left) / rect.width;
-            const t = Math.max(0, Math.min(waveformDuration, x * waveformDuration));
-            if (t < waveformDuration - 0.5) playSound(playback.filename, Number(t));
+            const xNorm = (e.clientX - rect.left) / rect.width;
+            const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+            const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
+            const t = trimStart + Math.max(0, Math.min(trimDuration, xNorm * trimDuration));
+            if (t < trimStart + trimDuration - 0.5) playSound(playback.filename, Number(t));
         });
 
         function setVolume(volume) {
@@ -3111,7 +3189,7 @@
             renderRecentlyPlayed();
             startPlaybackPolling();
             startSoundsPolling();
-            setInterval(tickWaveform, 100);
+            setInterval(tickWaveform, 250);
             fetchChannels();
             fetchSounds();
             updateNowPlaying();

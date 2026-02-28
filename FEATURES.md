@@ -50,8 +50,6 @@ Features to implement, in rough priority order.
 - [x] Recently played (last 5, waveform background, who played & when)
 - [x] Remember preferences
 - [x] Pending uploads badge on Superadmin tab
-
-
 ### How to update data mount on older installs
 For an existing container
 To add the data mount to a container that was created before this change:

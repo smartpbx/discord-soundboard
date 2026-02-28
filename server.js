@@ -1470,7 +1470,8 @@ app.post('/api/play', requireAuth, (req, res) => {
             startedBy,
         };
         addToRecentlyPlayedServer(safeFilename, displayName, startedBy?.username ?? null, Date.now());
-        res.json({ ok: true, duration, displayName, startTimeOffset: startTime, startedBy });
+        const playDurationRes = playDuration != null ? playDuration : duration;
+        res.json({ ok: true, duration: playDurationRes, displayName, startTimeOffset: startTime, startedBy });
     } catch (err) {
         console.error('Play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play audio' });
@@ -1494,8 +1495,9 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         state.startTime = typeof playbackState.startTime === 'number' ? playbackState.startTime : Date.now();
         if (state.duration == null && playbackState.filename === meta.filename) state.duration = playbackState.duration;
         const offset = playbackState.startTimeOffset || 0;
+        const maxPos = (state.duration != null && state.duration > 0) ? offset + state.duration : 999999;
         const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
-        state.currentTime = Math.max(0, Math.min((state.duration || 999999), offset + elapsed));
+        state.currentTime = Math.max(0, Math.min(maxPos, offset + elapsed));
     } else if (status === 'paused' && playbackState.pausedAt != null) {
         state.currentTime = playbackState.pausedAt;
     }
@@ -1532,8 +1534,9 @@ app.post('/api/pause', requireAdmin, (req, res) => {
         return res.status(403).json({ error: 'Only superadmin can pause admin playback.' });
     }
     const offset = playbackState.startTimeOffset || 0;
+    const maxPos = (playbackState.duration != null && playbackState.duration > 0) ? offset + playbackState.duration : 999999;
     const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
-    playbackState.pausedAt = Math.max(0, Math.min((playbackState.duration || 999999), offset + elapsed));
+    playbackState.pausedAt = Math.max(0, Math.min(maxPos, offset + elapsed));
     player.pause(true);
     res.json({ ok: true });
 });
