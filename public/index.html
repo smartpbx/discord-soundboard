@@ -435,6 +435,26 @@
         let soundFilter = '';
         let lastGuestCooldownShown = -1;
 
+        const PREFS_KEY = 'soundboard-prefs';
+        function loadPrefs() {
+            try {
+                const raw = localStorage.getItem(PREFS_KEY);
+                return raw ? JSON.parse(raw) : {};
+            } catch { return {}; }
+        }
+        function savePrefs(prefs) {
+            try {
+                const merged = { ...loadPrefs(), ...prefs };
+                localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
+            } catch (e) {}
+        }
+        function applyPrefs() {
+            const prefs = loadPrefs();
+            soundFilter = prefs.soundFilter || '';
+            const filterInput = document.getElementById('soundFilterInput');
+            if (filterInput) filterInput.value = soundFilter;
+        }
+
         async function api(path, opts = {}) {
             const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
             if (res.status === 401) { showLogin(); return null; }
@@ -511,6 +531,7 @@
                 return;
             }
             await checkAuth();
+            applyPrefs();
             startPlaybackPolling();
             fetchSounds();
             fetchFolders();
@@ -534,6 +555,7 @@
                 return false;
             }
             await checkAuth();
+            applyPrefs();
             startPlaybackPolling();
             fetchChannels();
             fetchSounds();
@@ -557,7 +579,9 @@
             if (!res || !res.ok) return;
             const channels = await res.json();
             const select = document.getElementById('channelSelect');
+            const lastChannel = loadPrefs().lastChannelId;
             select.innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+            if (lastChannel && channels.some(c => c.id === lastChannel)) select.value = lastChannel;
         }
 
         async function fetchSettings() {
@@ -781,6 +805,8 @@
             const res = await api('/api/folders');
             if (!res || !res.ok) return;
             foldersList = await res.json();
+            const prefs = loadPrefs();
+            if (prefs.lastFolder != null && foldersList.includes(prefs.lastFolder)) selectedFolder = prefs.lastFolder;
             renderFolderTabs();
         }
 
@@ -890,6 +916,7 @@
 
         function selectFolder(folder) {
             selectedFolder = folder || null;
+            savePrefs({ lastFolder: selectedFolder });
             renderFolderTabs();
             renderSoundsGrid();
         }
@@ -1341,8 +1368,11 @@
 
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
 
+        document.getElementById('channelSelect')?.addEventListener('change', (e) => savePrefs({ lastChannelId: e.target.value }));
+
         document.getElementById('soundFilterInput')?.addEventListener('input', (e) => {
             soundFilter = (e.target.value || '').trim();
+            savePrefs({ soundFilter });
             renderSoundsGrid();
         });
 
@@ -1394,6 +1424,7 @@
             fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;
+            applyPrefs();
             startPlaybackPolling();
             setInterval(tickWaveform, 100);
             fetchChannels();
