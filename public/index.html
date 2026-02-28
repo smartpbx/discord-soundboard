@@ -1142,9 +1142,17 @@
             ctx.fillRect(Math.floor(playheadX), 0, 2, h);
         }
 
+        let lastServerCurrentTimeReceivedAt = 0;
         function getCurrentPlaybackTime() {
-            const isRemoteViewer = playback.startedBy && playback.startedBy.username !== user?.username;
-            if (isRemoteViewer && playback.serverCurrentTime != null) return playback.serverCurrentTime;
+            if (playback.serverCurrentTime != null) {
+                if (playback.status === 'playing') {
+                    const elapsed = (Date.now() - lastServerCurrentTimeReceivedAt) / 1000;
+                    let current = playback.serverCurrentTime + elapsed;
+                    if (playback.duration != null) current = Math.min(current, playback.duration);
+                    return Math.max(0, current);
+                }
+                return playback.serverCurrentTime;
+            }
             if (playback.status === 'playing' && playback.startTime != null) {
                 const start = Number(playback.startTime);
                 if (!Number.isFinite(start)) return 0;
@@ -1275,8 +1283,8 @@
                 if (state.startTime != null) playback.startTime = Number(state.startTime);
                 if (state.duration != null) playback.duration = state.duration;
                 if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
-                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; waveformData = null; waveformFilename = null; }
+                if (state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();
