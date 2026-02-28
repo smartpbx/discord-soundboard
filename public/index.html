@@ -180,9 +180,33 @@
         }
         .progress-time { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; }
         .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
-        .volume-row { align-items: center; gap: 1rem; }
-        .volume-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
+        .volume-btn-wrap { display: flex; align-items: center; }
+        .volume-btn { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.6rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+        .volume-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .volume-btn-icon { font-size: 1rem; }
+        .volume-btn-pct { font-weight: 500; color: var(--text-muted); }
+        .volume-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 200px; padding: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; }
+        .volume-menu.hidden { display: none !important; }
+        .volume-menu-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+        .volume-menu-close { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0.2rem; font-size: 1rem; line-height: 1; }
+        .volume-menu-close:hover { color: var(--text); }
+        .volume-menu-row { display: flex; align-items: center; gap: 0.75rem; }
+        .volume-menu-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
         .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
+        .volume-menu-check { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+        .volume-menu-check input { accent-color: var(--accent); }
+        .volume-card-expanded .volume-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+        .volume-card-expanded .volume-card-header .card-title { margin-bottom: 0; }
+        .volume-expanded-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+        .volume-expanded-check input { accent-color: var(--accent); }
+        .volume-card-row { display: flex; align-items: center; gap: 1rem; }
+        .volume-card-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
+        .sounds-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+        .upload-toggle-btn { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
+        .upload-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+        .upload-card-header .card-title { margin-bottom: 0; }
+        .upload-close-btn { padding: 0.25rem 0.4rem; font-size: 1rem; line-height: 1; color: var(--text-muted); }
+        .upload-close-btn:hover { color: var(--text); }
         .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.25rem; }
         .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; min-height: 100px; }
         .sound-btn {
@@ -212,6 +236,7 @@
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
+        .sound-item.favorited .sound-item-actions { opacity: 1; pointer-events: auto; }
         .sound-preview, .sound-edit, .sound-fav {
             width: 24px; height: 24px; padding: 0;
             border: none; background: var(--surface);
@@ -244,8 +269,9 @@
         .upload-zone input[type="file"] { display: none; }
         .upload-zone label { cursor: pointer; display: block; }
         .upload-zone .browse { color: var(--accent); font-weight: 500; }
-        .top-actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .top-actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
         .top-actions.hidden { display: none; }
+        .top-actions-right { margin-left: auto; }
         .sounds-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
         .sounds-card-header .card-title { margin-bottom: 0; }
         .sounds-options-wrap { position: relative; }
@@ -420,6 +446,26 @@
                 <span class="voice-channel-info" id="voiceChannelInfo" title="">📢 <span id="voiceChannelName">—</span></span>
                 <button type="button" class="btn btn-danger btn-sm" onclick="leaveChannel()">Leave</button>
             </div>
+            <div class="volume-btn-wrap admin-only top-actions-right" style="position:relative">
+                <button type="button" class="volume-btn" id="volumeBtn" onclick="toggleVolumeMenu()" title="Volume">
+                    <span class="volume-btn-icon">🔊</span>
+                    <span class="volume-btn-pct" id="volumeBtnPct">50%</span>
+                </button>
+                <div class="volume-menu hidden" id="volumeMenu">
+                    <div class="volume-menu-header">
+                        <span>Volume</span>
+                        <button type="button" class="volume-menu-close" onclick="closeVolumeMenu()" title="Close">✕</button>
+                    </div>
+                    <div class="volume-menu-row">
+                        <span class="volume-label" id="volumeLabel">50%</span>
+                        <input type="range" id="volumeSlider" min="0" max="1" step="0.02" value="0.5" title="Volume">
+                    </div>
+                    <label class="volume-menu-check">
+                        <input type="checkbox" id="volumeExpandedCheck" onchange="setVolumeExpanded(this.checked)">
+                        <span>Always show volume</span>
+                    </label>
+                </div>
+            </div>
         </div>
 
         <div class="card admin-only" id="connectionCard">
@@ -444,16 +490,25 @@
             </div>
         </div>
 
-        <div class="card admin-only" id="volumeCard">
-            <div class="card-title">Volume</div>
-            <div class="row volume-row">
-                <span class="volume-label" id="volumeLabel">50%</span>
-                <input type="range" id="volumeSlider" min="0" max="1" step="0.02" value="0.5" title="Volume">
+        <div class="card admin-only volume-card-expanded hidden" id="volumeCard">
+            <div class="volume-card-header">
+                <span class="card-title">Volume</span>
+                <label class="volume-expanded-check">
+                    <input type="checkbox" id="volumeExpandedCheckCard" onchange="setVolumeExpanded(this.checked)">
+                    <span>Always show volume</span>
+                </label>
+            </div>
+            <div class="volume-card-row">
+                <span class="volume-label" id="volumeLabelCard">50%</span>
+                <input type="range" id="volumeSliderCard" min="0" max="1" step="0.02" value="0.5" title="Volume">
             </div>
         </div>
 
-        <div class="card" id="uploadCard">
-            <div class="card-title">Upload Sound</div>
+        <div class="card upload-card-collapsible hidden" id="uploadCard">
+            <div class="upload-card-header">
+                <span class="card-title">Upload Sound</span>
+                <button type="button" class="btn btn-ghost upload-close-btn" onclick="hideUploadSection()" title="Close">✕</button>
+            </div>
             <div class="upload-zone" id="uploadZone">
                 <label for="fileInput"><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
                 <input type="file" id="fileInput" accept="audio/*">
@@ -464,14 +519,17 @@
         <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
-                <div class="sounds-options-wrap">
+                <div class="sounds-header-actions">
+                    <button type="button" class="btn btn-ghost upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound">Upload</button>
+                    <div class="sounds-options-wrap">
                     <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
                     <div class="sounds-options-menu hidden" id="soundsOptionsMenu">
                         <button type="button" class="sounds-option-item" id="mobileBtn" onclick="toggleMobileView(); closeSoundsOptionsMenu();" title="Mobile view: fullscreen soundboard">Mobile</button>
                         <button type="button" class="sounds-option-item" id="compactBtn" onclick="toggleCompact(); closeSoundsOptionsMenu();" title="Compact view: smaller buttons">Compact</button>
-                        <button type="button" class="sounds-option-item" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
+                        <button type="button" class="sounds-option-item admin-only" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
                         <button type="button" class="sounds-option-item admin-only" id="manageTagsBtn" onclick="toggleManageTags(); closeSoundsOptionsMenu();" title="Manage tags: reorder, delete, hide">Manage tags</button>
                     </div>
+                </div>
                 </div>
             </div>
             <div class="tags-admin admin-only hidden" id="tagsAdmin">
@@ -616,6 +674,7 @@
             if (soundsCard) soundsCard.classList.toggle('mobile-active', mobileView);
             if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
             if (mobileView) renderMobileGrid();
+            applyVolumeExpanded();
         }
         function toggleCompact() {
             compactMode = !compactMode;
@@ -920,11 +979,11 @@
             startPlaybackPolling();
             fetchChannels();
             fetchSounds();
-            fetch('/api/volume', { credentials: CREDENTIALS }).then(r => r.json()).then(d => {
+            fetch('/api/volume', { credentials: CREDENTIALS }).then(function(r) { return r.json(); }).then(function(d) {
                 const v = (d.volume != null ? d.volume : 0.5);
-                document.getElementById('volumeSlider').value = v;
-                document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
-            }).catch(() => {});
+                setVolume(String(v));
+                applyVolumeExpanded();
+            }).catch(function() {});
             return false;
         }
 
@@ -988,12 +1047,9 @@
                 if (d.maxUploadBytes !== undefined) { const g = document.getElementById('maxUploadBytesInput'); if (g) g.value = Math.round(d.maxUploadBytes / 1024); }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
-                const v = Math.max(0, Math.min(1, d.volume));
-                const slider = document.getElementById('volumeSlider');
-                const label = document.getElementById('volumeLabel');
-                if (slider) slider.value = v;
-                if (label) label.textContent = Math.round(v * 100) + '%';
+                setVolume(String(Math.max(0, Math.min(1, d.volume))));
             }
+            applyVolumeExpanded();
             if ((user && user.role) === 'superadmin' && d.pendingCount !== undefined) {
                 updatePendingBadge(d.pendingCount);
             }
@@ -1003,21 +1059,36 @@
         function updateUploadCardVisibility() {
             const card = document.getElementById('uploadCard');
             const hint = document.getElementById('uploadHint');
+            const btn = document.getElementById('uploadToggleBtn');
             if (!card || !hint) return;
             const canDirect = isAdminOrSuperadmin();
             const canPending = ((user && user.role) === 'user' || (user && user.role) === 'guest') && (typeof userUploadEnabled !== 'undefined' ? userUploadEnabled : false);
+            const canUpload = canDirect || canPending;
+            if (btn) btn.classList.toggle('hidden', !canUpload);
             if (canDirect) {
-                card.classList.remove('hidden');
                 hint.textContent = '';
             } else if (canPending) {
-                card.classList.remove('hidden');
                 const maxSec = maxUploadDuration || 7;
                 const maxKB = Math.round((maxUploadBytes || 2097152) / 1024);
                 hint.textContent = 'Uploads go to a moderation queue. Max ' + maxSec + 's, ' + maxKB + 'KB. A superadmin must approve before they appear.';
             } else {
-                card.classList.add('hidden');
                 hint.textContent = '';
             }
+            if (!canUpload) card.classList.add('hidden');
+        }
+        function toggleUploadSection() {
+            const card = document.getElementById('uploadCard');
+            const btn = document.getElementById('uploadToggleBtn');
+            if (!card || !btn) return;
+            const isHidden = card.classList.contains('hidden');
+            card.classList.toggle('hidden', !isHidden);
+            btn.classList.toggle('hidden', isHidden);
+        }
+        function hideUploadSection() {
+            const card = document.getElementById('uploadCard');
+            const btn = document.getElementById('uploadToggleBtn');
+            if (card) card.classList.add('hidden');
+            if (btn) btn.classList.remove('hidden');
         }
 
         async function setGuestEnabled(enabled) {
@@ -1389,8 +1460,9 @@
                 const favActive = favIdx >= 0 ? ' active' : '';
                 const favTitle = favIdx >= 0 ? `Favorite slot ${favIdx + 1} (click to remove)` : 'Add to favorites (1–9)';
                 const favBtn = `<button type="button" class="sound-fav${favActive}" data-filename="${filename}" title="${favTitle}" onclick="event.stopPropagation(); toggleFavorite(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
+                const favorited = favIdx >= 0 ? ' favorited' : '';
                 const inner = `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
+                    <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
@@ -1898,11 +1970,65 @@
 
         function setVolume(volume) {
             const v = parseFloat(volume);
-            document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
+            const pct = Math.round(v * 100) + '%';
+            const label = document.getElementById('volumeLabel');
+            const labelCard = document.getElementById('volumeLabelCard');
+            const btnPct = document.getElementById('volumeBtnPct');
+            const slider = document.getElementById('volumeSlider');
+            const sliderCard = document.getElementById('volumeSliderCard');
+            if (label) label.textContent = pct;
+            if (labelCard) labelCard.textContent = pct;
+            if (btnPct) btnPct.textContent = pct;
+            if (slider) slider.value = v;
+            if (sliderCard) sliderCard.value = v;
             fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: CREDENTIALS, body: JSON.stringify({ volume: v }) });
         }
 
-        document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
+        function setVolumeExpanded(expanded) {
+            savePrefs({ volumeExpanded: !!expanded });
+            applyVolumeExpanded();
+        }
+        function applyVolumeExpanded() {
+            const expanded = loadPrefs().volumeExpanded === true;
+            const card = document.getElementById('volumeCard');
+            const wrap = document.querySelector('.volume-btn-wrap');
+            const check = document.getElementById('volumeExpandedCheck');
+            const checkCard = document.getElementById('volumeExpandedCheckCard');
+            if (card) card.classList.toggle('hidden', !expanded);
+            if (wrap) wrap.classList.toggle('hidden', expanded);
+            if (check) check.checked = expanded;
+            if (checkCard) checkCard.checked = expanded;
+            if (expanded) closeVolumeMenu();
+        }
+
+        function toggleVolumeMenu() {
+            const menu = document.getElementById('volumeMenu');
+            if (!menu) return;
+            const isHidden = menu.classList.contains('hidden');
+            menu.classList.toggle('hidden', !isHidden);
+            if (isHidden) {
+                setTimeout(function() { document.addEventListener('click', closeVolumeMenuOnce); }, 0);
+            } else {
+                document.removeEventListener('click', closeVolumeMenuOnce);
+            }
+        }
+        function closeVolumeMenu() {
+            const menu = document.getElementById('volumeMenu');
+            if (menu) menu.classList.add('hidden');
+            document.removeEventListener('click', closeVolumeMenuOnce);
+        }
+        function closeVolumeMenuOnce(e) {
+            const wrap = document.querySelector('.volume-btn-wrap');
+            if (wrap && !wrap.contains(e.target)) {
+                closeVolumeMenu();
+                document.removeEventListener('click', closeVolumeMenuOnce);
+            }
+        }
+
+        var vs = document.getElementById('volumeSlider');
+        var vsc = document.getElementById('volumeSliderCard');
+        if (vs) vs.addEventListener('input', function(e) { setVolume(e.target.value); });
+        if (vsc) vsc.addEventListener('input', function(e) { setVolume(e.target.value); });
 
         const cs = document.getElementById('channelSelect'); if (cs) cs.addEventListener('change', (e) => savePrefs({ lastChannelId: e.target.value }));
 
@@ -1929,6 +2055,7 @@
             if (res.ok) {
                 fileInput.value = '';
                 fetchSounds();
+                hideUploadSection();
                 if (data.pending) alert(data.message || 'Upload sent for moderation.');
             } else {
                 alert(data.error || 'Upload failed');
