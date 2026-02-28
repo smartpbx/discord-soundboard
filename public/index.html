@@ -1176,8 +1176,9 @@
             const guestCooldown = getGuestCooldownRemaining();
             const userCooldown = getUserCooldownRemaining();
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
-            const cannotOverride = (isUser || isGuest) && adminPlaying;
-            const canPlay = (!isUser && !isGuest) || ((!playbackLocked && !playbackSuperadminOnly) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
+            const superadminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy && playback.startedBy.role) === 'superadmin';
+            const cannotOverride = ((isUser || isGuest) && adminPlaying) || ((user && user.role) === 'admin' && superadminPlaying);
+            const canPlay = ((!isUser && !isGuest) && !((user && user.role) === 'admin' && superadminPlaying)) || ((!playbackLocked && !playbackSuperadminOnly) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
             const maxDur = isGuest ? (guestMaxDuration || 7) : (userMaxDuration || 7);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             if (filtered.length === 0) {
@@ -2145,8 +2146,9 @@
             const guestCooldown = getGuestCooldownRemaining();
             const userCooldown = getUserCooldownRemaining();
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
-            const cannotOverride = (isUser || isGuest) && adminPlaying;
-            const canPlay = (!isUser && !isGuest) || ((!playbackLocked && !playbackSuperadminOnly) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
+            const superadminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy && playback.startedBy.role) === 'superadmin';
+            const cannotOverride = ((isUser || isGuest) && adminPlaying) || ((user && user.role) === 'admin' && superadminPlaying);
+            const canPlay = ((!isUser && !isGuest) && !((user && user.role) === 'admin' && superadminPlaying)) || ((!playbackLocked && !playbackSuperadminOnly) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
             const maxDur = isGuest ? (guestMaxDuration || 7) : (userMaxDuration || 7);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             const isAdmin = isAdminOrSuperadmin();
@@ -2158,7 +2160,7 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 let title = '';
-                if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackSuperadminOnly ? 'Only superadmin can play.' : (playbackLocked ? 'Playback is locked' : ((isGuest && guestCooldown > 0) || (isUser && userCooldown > 0) ? 'Wait ' + (isGuest ? guestCooldown : userCooldown) + 's before playing again' : 'Cannot play')));
+                if (!canPlay) title = cannotOverride ? (superadminPlaying && (user && user.role) === 'admin' ? 'A superadmin is playing. You cannot override.' : 'An admin or superadmin is playing. You cannot override.') : (playbackSuperadminOnly ? 'Only superadmin can play.' : (playbackLocked ? 'Playback is locked' : ((isGuest && guestCooldown > 0) || (isUser && userCooldown > 0) ? 'Wait ' + (isGuest ? guestCooldown : userCooldown) + 's before playing again' : 'Cannot play')));
                 else if (tooLong(dur)) title = 'Only sounds ' + maxDur + 's or shorter allowed';
                 const editBtn = isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : '';
                 const favIdx = getFavorites().indexOf(s.filename);
@@ -2190,8 +2192,18 @@
             if (mobileView) renderMobileGrid();
             const msg = document.getElementById('userLockedMsg');
             const showLocked = playbackSuperadminOnly ? (isUser || isGuest || (user && user.role === 'admin')) : (isUser || isGuest) && playbackLocked;
-            if (msg && showLocked) { msg.textContent = playbackSuperadminOnly ? 'Only superadmin can play.' : (playbackLockedBy === 'superadmin' ? 'Playback is locked by a superadmin.' : 'Playback is locked by an admin.'); msg.classList.remove('hidden'); }
-            else if (msg) msg.classList.add('hidden');
+            const showOverrideBlocked = cannotOverride && (playback.status === 'playing' || playback.status === 'paused');
+            if (msg) {
+                if (showOverrideBlocked) {
+                    msg.textContent = superadminPlaying && (user && user.role) === 'admin' ? 'A superadmin is playing. You cannot override.' : 'An admin or superadmin is playing. You cannot override.';
+                    msg.classList.remove('hidden');
+                } else if (showLocked) {
+                    msg.textContent = playbackSuperadminOnly ? 'Only superadmin can play.' : (playbackLockedBy === 'superadmin' ? 'Playback is locked by a superadmin.' : 'Playback is locked by an admin.');
+                    msg.classList.remove('hidden');
+                } else {
+                    msg.classList.add('hidden');
+                }
+            }
         }
 
         function editSoundName(btn) {
@@ -2928,7 +2940,7 @@
                 if (waveformData && totalDur > 0) {
                     drawWaveform(Math.min(current, totalDur), totalDur);
                 }
-                if ((user && user.role) === 'user' || (user && user.role) === 'guest') renderSoundsGrid();
+                renderSoundsGrid();
                 if (state.voiceConnected !== undefined && isAdminOrSuperadmin()) {
                     const connectionCard = document.getElementById('connectionCard');
                     const voiceBar = document.getElementById('voiceConnectedBar');

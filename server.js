@@ -1415,6 +1415,9 @@ app.post('/api/play', requireAuth, (req, res) => {
     if (isSomeonePlaying && (startedByRole === 'admin' || startedByRole === 'superadmin') && (role === 'user' || isGuest)) {
         return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
     }
+    if (isSomeonePlaying && startedByRole === 'superadmin' && role === 'admin') {
+        return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
+    }
 
     const metaVolume = getSoundVolume(meta, safeFilename);
     let startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : (metaStart != null ? metaStart : 0);
