@@ -251,6 +251,33 @@
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg { width: 10px; height: 10px; }
+        .sounds-card.mobile-active .sound-filter-row,
+        .sounds-card.mobile-active .sound-grid { display: none !important; }
+        .sounds-card.mobile-active .mobile-swipe-wrap { display: flex; }
+        .sounds-card.mobile-active .sounds-header-buttons .toggle-btn:not(#mobileBtn) { display: none; }
+        .mobile-swipe-wrap { display: none; flex-direction: column; min-height: 50vh; touch-action: pan-y pinch-zoom; }
+        .mobile-swipe-folder-tabs { display: flex; gap: 0.25rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+        .mobile-swipe-folder-tabs .folder-tab { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+        .mobile-swipe-area {
+            flex: 1; min-height: 280px; display: flex; align-items: center; justify-content: center;
+            position: relative; overflow: hidden; user-select: none; -webkit-user-select: none;
+        }
+        .mobile-swipe-btn {
+            width: 100%; max-width: 320px; min-height: 200px; padding: 1.5rem;
+            background: var(--surface-hover); border: 2px solid var(--border);
+            border-radius: var(--radius); font-size: 1.1rem; font-weight: 600;
+            color: var(--text); cursor: pointer; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 0.5rem;
+            transition: background 0.15s, border-color 0.15s, transform 0.2s;
+        }
+        .mobile-swipe-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
+        .mobile-swipe-btn:active:not(:disabled) { transform: scale(0.98); }
+        .mobile-swipe-btn.disabled { opacity: 0.5; cursor: not-allowed; }
+        .mobile-swipe-btn .duration { font-size: 0.85rem; font-weight: 400; color: var(--text-muted); }
+        .mobile-swipe-nav { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 0.75rem; }
+        .mobile-swipe-nav button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); font-size: 1.2rem; cursor: pointer; }
+        .mobile-swipe-nav button:hover { border-color: var(--accent); color: var(--accent); }
+        .mobile-swipe-page { font-size: 0.8rem; color: var(--text-muted); min-width: 4rem; text-align: center; }
         .settings-row { align-items: center; gap: 0.5rem; }
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
@@ -370,10 +397,11 @@
             <div class="upload-hint" id="uploadHint" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
         </div>
 
-        <div class="card">
+        <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-buttons">
+                    <button type="button" class="btn btn-ghost toggle-btn" id="mobileBtn" onclick="toggleMobileView()" title="Mobile view: full-screen buttons, swipe through sounds">Mobile</button>
                     <button type="button" class="btn btn-ghost toggle-btn" id="compactBtn" onclick="toggleCompact()" title="Compact view: smaller buttons, more on screen">Compact</button>
                     <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
                     <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageFoldersBtn" onclick="toggleManageFolders()" title="Manage folders: rename, reorder, delete">Manage folders</button>
@@ -389,6 +417,14 @@
                 <input type="text" id="soundFilterInput" placeholder="Filter sounds by name..." class="sound-filter-input" autocomplete="off">
             </div>
             <div class="folder-tabs" id="folderTabs"></div>
+            <div class="mobile-swipe-wrap" id="mobileSwipeWrap">
+                <div class="mobile-swipe-area" id="mobileSwipeArea"></div>
+                <div class="mobile-swipe-nav">
+                    <button type="button" id="mobilePrevBtn" onclick="mobileSwipePrev()" title="Previous">‹</button>
+                    <span class="mobile-swipe-page" id="mobileSwipePage">—</span>
+                    <button type="button" id="mobileNextBtn" onclick="mobileSwipeNext()" title="Next">›</button>
+                </div>
+            </div>
             <div id="soundsList" class="sound-grid"></div>
             <div class="sound-panel hidden" id="soundPanel">
                 <div class="card-title">Edit sound</div>
@@ -478,6 +514,9 @@
         let soundFilter = '';
         let lastGuestCooldownShown = -1;
         let compactMode = false;
+        let mobileView = false;
+        let mobileIndex = 0;
+        let mobileTouchStartX = 0;
 
         const PREFS_KEY = 'soundboard-prefs';
         function loadPrefs() {
@@ -498,10 +537,16 @@
             const filterInput = document.getElementById('soundFilterInput');
             if (filterInput) filterInput.value = soundFilter;
             compactMode = prefs.compact === true;
+            mobileView = prefs.mobileView === true;
             const grid = document.getElementById('soundsList');
             const compactBtn = document.getElementById('compactBtn');
+            const soundsCard = document.querySelector('.sounds-card');
+            const mobileBtn = document.getElementById('mobileBtn');
             if (grid) grid.classList.toggle('compact-mode', compactMode);
             if (compactBtn) compactBtn.classList.toggle('active', compactMode);
+            if (soundsCard) soundsCard.classList.toggle('mobile-active', mobileView);
+            if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
+            if (mobileView) { mobileIndex = 0; renderMobileSwipe(); setupMobileSwipeHandlers(); }
         }
         function toggleCompact() {
             compactMode = !compactMode;
@@ -510,6 +555,78 @@
             if (grid) grid.classList.toggle('compact-mode', compactMode);
             if (compactBtn) compactBtn.classList.toggle('active', compactMode);
             savePrefs({ compact: compactMode });
+        }
+
+        function toggleMobileView() {
+            mobileView = !mobileView;
+            const soundsCard = document.querySelector('.sounds-card');
+            const mobileBtn = document.getElementById('mobileBtn');
+            if (soundsCard) soundsCard.classList.toggle('mobile-active', mobileView);
+            if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
+            savePrefs({ mobileView });
+            if (mobileView) { mobileIndex = 0; renderMobileSwipe(); setupMobileSwipeHandlers(); }
+        }
+
+        function getFilteredSounds() {
+            let filtered = selectedFolder != null ? soundsList.filter(s => (s.folder || null) === selectedFolder) : soundsList;
+            const q = (soundFilter || '').trim().toLowerCase();
+            if (q) filtered = filtered.filter(s => ((s.displayName || s.filename) || '').toLowerCase().includes(q));
+            return filtered;
+        }
+
+        function renderMobileSwipe() {
+            const area = document.getElementById('mobileSwipeArea');
+            const pageEl = document.getElementById('mobileSwipePage');
+            const prevBtn = document.getElementById('mobilePrevBtn');
+            const nextBtn = document.getElementById('mobileNextBtn');
+            if (!area || !mobileView) return;
+            const filtered = getFilteredSounds();
+            const total = filtered.length;
+            if (total === 0) {
+                area.innerHTML = '<div class="mobile-swipe-btn disabled" style="cursor:default">No sounds</div>';
+                if (pageEl) pageEl.textContent = '—';
+                if (prevBtn) prevBtn.disabled = true;
+                if (nextBtn) nextBtn.disabled = true;
+                return;
+            }
+            mobileIndex = Math.max(0, Math.min(mobileIndex, total - 1));
+            const s = filtered[mobileIndex];
+            const isUser = user?.role === 'user';
+            const isGuest = user?.role === 'guest';
+            const guestCooldown = getGuestCooldownRemaining();
+            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy?.role === 'admin' || playback.startedBy?.role === 'superadmin');
+            const cannotOverride = (isUser || isGuest) && adminPlaying;
+            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
+            const tooLong = (isUser || isGuest) && s.duration != null && s.duration > MAX_USER_DURATION;
+            const disabled = !canPlay || tooLong;
+            const name = (s.displayName || s.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const dur = s.duration != null ? formatTime(s.duration) : '—';
+            area.innerHTML = `<button type="button" class="mobile-swipe-btn ${disabled ? 'disabled' : ''}" data-filename="${(s.filename || '').replace(/"/g, '&quot;')}" ${disabled ? 'disabled' : ''} onclick="playSound(this.dataset.filename)"><span>${name}</span><span class="duration">${dur}</span></button>`;
+            if (pageEl) pageEl.textContent = (mobileIndex + 1) + ' / ' + total;
+            if (prevBtn) prevBtn.disabled = mobileIndex <= 0;
+            if (nextBtn) nextBtn.disabled = mobileIndex >= total - 1;
+        }
+
+        function mobileSwipePrev() {
+            const filtered = getFilteredSounds();
+            if (mobileIndex > 0) { mobileIndex--; renderMobileSwipe(); }
+        }
+
+        function mobileSwipeNext() {
+            const filtered = getFilteredSounds();
+            if (mobileIndex < filtered.length - 1) { mobileIndex++; renderMobileSwipe(); }
+        }
+
+        function setupMobileSwipeHandlers() {
+            const area = document.getElementById('mobileSwipeArea');
+            if (!area) return;
+            area.ontouchstart = (e) => { mobileTouchStartX = e.touches[0].clientX; };
+            area.ontouchend = (e) => {
+                if (!e.changedTouches[0]) return;
+                const dx = e.changedTouches[0].clientX - mobileTouchStartX;
+                if (dx > 60) mobileSwipePrev();
+                else if (dx < -60) mobileSwipeNext();
+            };
         }
 
         function applyTheme(theme) {
@@ -986,6 +1103,7 @@
         function selectFolder(folder) {
             selectedFolder = folder || null;
             savePrefs({ lastFolder: selectedFolder });
+            if (mobileView) mobileIndex = 0;
             renderFolderTabs();
             renderSoundsGrid();
         }
@@ -1065,6 +1183,7 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             grid.classList.toggle('compact-mode', compactMode);
+            if (mobileView) { mobileIndex = Math.min(mobileIndex, Math.max(0, getFilteredSounds().length - 1)); renderMobileSwipe(); }
             const msg = document.getElementById('userLockedMsg');
             if (msg && (isUser || isGuest) && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');

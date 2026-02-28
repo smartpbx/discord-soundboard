@@ -17,6 +17,7 @@ Features to implement, in rough priority order.
 - [x] **Remember preferences** – Last channel, folder, sound filter (localStorage)
 - [x] **Theme toggle** – Dark/light mode (saved in preferences)
 - [x] **Compact view** – Smaller sound buttons, more on screen (saved in preferences)
+- [x] **Mobile view** – Full-screen buttons, swipe through sounds, folder tabs (saved in preferences)
 
 ---
 
