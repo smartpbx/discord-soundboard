@@ -12,19 +12,19 @@ Features to implement, in rough priority order.
 
 ## Quick Wins
 
-- [ ] **Keyboard shortcuts** – Space: play/pause, S: stop, number keys 1–9 for first 9 sounds, Escape: close panels
+- [x] **Keyboard shortcuts** – 1–9: play favorites, Space: play/pause, S: stop, Escape: close panels
 - [x] **Sound preview** – Play locally in browser before sending to Discord (test volume/content)
 - [x] **Remember preferences** – Last channel, folder, sound filter (localStorage + server-side state.json for volume/channel across restarts)
 - [x] **Theme toggle** – Dark/light mode (saved in preferences)
 - [x] **Compact view** – Smaller sound buttons, more on screen (saved in preferences)
-- [x] **Mobile view** – Fullscreen soundboard, buttons fill screen (min/max size), pagination with swipe when many sounds (saved in preferences)
+- [x] **Mobile view** – Fullscreen soundboard, buttons fill screen (min/max size), pagination with swipe when many sounds (saved in preferences). *TODO: improve later – refine button sizing, swipe UX*
 
 ---
 
 ## Medium Effort
 
 - [ ] **Recently played** – Last 5–10 sounds for quick re-play
-- [ ] **Favorites** – Star sounds for a favorites tab
+- [x] **Favorites** – Up to 9 favorites, mapped to keys 1–9 (saved in preferences)
 - [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
 - [ ] **Hover preview** – Optional short preview on hover (with delay to avoid accidental plays)
 
@@ -40,6 +40,8 @@ Features to implement, in rough priority order.
 
 ## Completed
 
+- [x] Keyboard shortcuts (1–9 favorites, Space play/pause, S stop, Escape close)
+- [x] Favorites (up to 9, mapped to keys 1–9)
 - [x] Multi-user roles (superadmin, admin, user)
 - [x] Guest access with IP tracking
 - [x] Sound reordering (drag-and-drop)

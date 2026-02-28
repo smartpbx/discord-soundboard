@@ -211,18 +211,29 @@
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
-        .sound-preview, .sound-edit {
+        .sound-preview, .sound-edit, .sound-fav {
             width: 24px; height: 24px; padding: 0;
             border: none; background: var(--surface);
             border-radius: 4px; color: var(--text-muted);
             cursor: pointer; display: flex; align-items: center; justify-content: center;
             transition: color 0.15s;
         }
-        .sound-preview:hover, .sound-edit:hover { color: var(--accent); }
+        .sound-preview:hover, .sound-edit:hover, .sound-fav:hover { color: var(--accent); }
         .sound-preview.playing { color: var(--accent); }
+        .sound-fav.active { color: var(--accent); }
         .sound-edit.hidden { display: none; }
         .sound-preview svg, .sound-edit svg { width: 12px; height: 12px; }
-        .sound-grid.reorder-mode .sound-preview { pointer-events: none; }
+        .sound-grid.reorder-mode .sound-preview, .sound-grid.reorder-mode .sound-fav { pointer-events: none; }
+        .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
+        .favorites-bar .fav-slot {
+            padding: 0.35rem 0.6rem; font-size: 0.8rem; min-width: 2rem;
+            background: var(--surface-hover); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text); cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .favorites-bar .fav-slot:hover:not(.empty) { border-color: var(--accent); }
+        .favorites-bar .fav-slot.empty { color: var(--text-muted); cursor: default; }
+        .favorites-bar .fav-slot .fav-num { font-weight: 600; margin-right: 0.25rem; }
         .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
         .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
@@ -249,11 +260,12 @@
         .sound-grid.compact-mode .sound-btn { min-height: 72px; height: 72px; padding: 0.4rem 0.35rem 0.3rem; font-size: 0.78rem; }
         .sound-grid.compact-mode .sound-btn-duration { font-size: 0.65rem; }
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
-        .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit { width: 20px; height: 20px; }
-        .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg { width: 10px; height: 10px; }
+        .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
+        .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
         .sounds-card.mobile-active .sound-filter-row,
         .sounds-card.mobile-active .sound-grid,
-        .sounds-card.mobile-active .folders-admin { display: none !important; }
+        .sounds-card.mobile-active .folders-admin,
+        .sounds-card.mobile-active .favorites-bar { display: none !important; }
         .sounds-card.mobile-active .mobile-grid-wrap { display: flex; }
         .sounds-card.mobile-active .sounds-header-buttons .toggle-btn:not(#mobileBtn) { display: none; }
         /* Mobile view: fullscreen soundboard section */
@@ -438,6 +450,7 @@
                 <input type="text" id="soundFilterInput" placeholder="Filter sounds by name..." class="sound-filter-input" autocomplete="off">
             </div>
             <div class="folder-tabs" id="folderTabs"></div>
+            <div class="favorites-bar" id="favoritesBar"></div>
             <div class="mobile-grid-wrap" id="mobileGridWrap">
                 <div class="mobile-grid-area" id="mobileGridArea"></div>
                 <div class="mobile-grid-nav" id="mobileGridNav">
@@ -586,6 +599,47 @@
             if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
             savePrefs({ mobileView });
             if (mobileView) renderMobileGrid();
+        }
+
+        function getFavorites() {
+            const arr = loadPrefs().favorites;
+            return Array.isArray(arr) ? arr.slice(0, 9) : [];
+        }
+        function setFavorites(arr) {
+            const safe = (Array.isArray(arr) ? arr : []).slice(0, 9);
+            savePrefs({ favorites: safe });
+        }
+        function toggleFavorite(filename) {
+            if (!filename) return;
+            let fav = getFavorites();
+            const idx = fav.indexOf(filename);
+            if (idx >= 0) {
+                fav = fav.filter(f => f !== filename);
+            } else if (fav.length < 9) {
+                fav = [...fav, filename];
+            }
+            setFavorites(fav);
+            renderFavoritesBar();
+            renderSoundsGrid();
+        }
+        function renderFavoritesBar() {
+            const bar = document.getElementById('favoritesBar');
+            if (!bar) return;
+            const fav = getFavorites();
+            const sounds = soundsList || [];
+            bar.innerHTML = [1,2,3,4,5,6,7,8,9].map((n, i) => {
+                const fn = fav[i];
+                const s = fn ? sounds.find(x => x.filename === fn) : null;
+                const name = s ? (s.displayName || s.filename || '') : '';
+                const label = name ? (name.length > 12 ? name.slice(0, 12) + '…' : name) : '—';
+                const cls = fn ? '' : ' empty';
+                const title = fn ? `${n}: ${s?.displayName || s?.filename || fn} (click to play)` : `${n}: empty (star a sound to add)`;
+                return `<button type="button" class="fav-slot${cls}" data-slot="${n}" data-filename="${(fn || '').replace(/"/g, '&quot;')}" ${fn ? '' : 'disabled'} title="${(title || '').replace(/"/g, '&quot;')}">` +
+                    `<span class="fav-num">${n}</span><span class="fav-label">${(label || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span></button>`;
+            }).join('');
+            bar.querySelectorAll('.fav-slot:not(.empty)').forEach(btn => {
+                btn.onclick = () => playSound(btn.dataset.filename);
+            });
         }
 
         function getFilteredSounds() {
@@ -1219,6 +1273,10 @@
                 if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play'));
                 else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
                 const editBtn = isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : '';
+                const favIdx = getFavorites().indexOf(s.filename);
+                const favActive = favIdx >= 0 ? ' active' : '';
+                const favTitle = favIdx >= 0 ? `Favorite slot ${favIdx + 1} (click to remove)` : 'Add to favorites (1–9)';
+                const favBtn = `<button type="button" class="sound-fav${favActive}" data-filename="${filename}" title="${favTitle}" onclick="event.stopPropagation(); toggleFavorite(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="${favIdx >= 0 ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
@@ -1227,6 +1285,7 @@
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
                         <div class="sound-item-actions">
+                            ${favBtn}
                             <button type="button" class="sound-preview" data-filename="${filename}" title="Preview (play locally)" onclick="event.stopPropagation(); previewSound(this.dataset.filename, this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg></button>
                             ${editBtn}
                         </div>
@@ -1235,6 +1294,7 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             grid.classList.toggle('compact-mode', compactMode);
+            renderFavoritesBar();
             if (mobileView) renderMobileGrid();
             const msg = document.getElementById('userLockedMsg');
             if (msg && (isUser || isGuest) && playbackLocked) msg.classList.remove('hidden');
@@ -1717,6 +1777,22 @@
             updateNowPlaying();
             updatePlayPauseButton();
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
+            document.addEventListener('keydown', (e) => {
+                const tag = document.activeElement?.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+                if (e.key >= '1' && e.key <= '9') {
+                    const fav = getFavorites()[parseInt(e.key, 10) - 1];
+                    if (fav) { e.preventDefault(); playSound(fav); }
+                } else if (e.key === ' ') {
+                    if (playback.status === 'playing' || playback.status === 'paused') { e.preventDefault(); togglePlayPause(); }
+                } else if (e.key === 's' || e.key === 'S') {
+                    e.preventDefault();
+                    stopPlayback();
+                } else if (e.key === 'Escape') {
+                    const panel = document.getElementById('soundPanel');
+                    if (panel && !panel.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
+                }
+            });
         })();
     </script>
 </body>
