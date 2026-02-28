@@ -36,7 +36,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; fi
 # --- Update (run on host) ---
 do_update() {
     echo "[*] Updating Discord Soundboard in CT ${CTID}..."
-    pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && chmod +x scripts/*.sh 2>/dev/null; git pull && npm install && systemctl restart discord-soundboard"
+    pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && chmod +x scripts/*.sh 2>/dev/null; git pull && npm install && ./scripts/install-motd.sh 2>/dev/null; systemctl restart discord-soundboard"
     echo "[+] Update done. Service restarted. Your .env and sounds/ were not changed."
 }
 
@@ -48,17 +48,21 @@ fi
 # --- Install ---
 echo "[*] Discord Soundboard - Proxmox LXC installer"
 
-# Resolve template (Debian 12 or Ubuntu 22/24)
+# Resolve template (Debian 12/13 or Ubuntu 22/24) from storage CT templates
 if [[ -z "${TEMPLATE_DEBIAN}" ]]; then
-    for t in local:vztmpl/debian-12-standard*.tar.zst local:vztmpl/ubuntu-22.04-standard*.tar.zst local:vztmpl/ubuntu-24.04-standard*.tar.zst; do
-        if pveam list "${t}" 2>/dev/null | head -1 | grep -q .; then
-            TEMPLATE_DEBIAN="${t}"
+    for storage in local local-lvm; do
+        list=$(pveam list "${storage}" 2>/dev/null) || continue
+        # Match filenames like debian-12-standard_12.12-1_amd64.tar.zst (no path)
+        found=$(echo "$list" | grep -oE '(debian-(12|13)-standard_[^/[:space:]]+\.tar\.(zst|xz)|ubuntu-(22\.04|24\.04)-standard_[^/[:space:]]+\.tar\.(zst|xz))' | head -1)
+        if [[ -n "$found" ]]; then
+            TEMPLATE_DEBIAN="${storage}:vztmpl/${found}"
             break
         fi
     done
     if [[ -z "${TEMPLATE_DEBIAN}" ]]; then
-        echo "No Debian/Ubuntu template found. Download one, e.g.:"
-        echo "  pveam download local debian-12-standard_12.2-1_amd64.tar.zst"
+        echo "No Debian/Ubuntu template found on storage 'local' or 'local-lvm'."
+        echo "Download one from the Proxmox UI (Datacenter → local → CT Templates → Templates),"
+        echo "or run:  pveam update && pveam download local debian-12-standard_12.12-1_amd64.tar.zst"
         exit 1
     fi
 fi
@@ -138,6 +142,9 @@ pct exec "${CTID}" -- systemctl start discord-soundboard
 
 # Optional: allow running "update" from anywhere in the LXC console
 pct exec "${CTID}" -- bash -c "echo '#!/bin/sh' > /usr/local/bin/update && echo 'export APP_DIR=${APP_DIR}' >> /usr/local/bin/update && echo 'exec \${APP_DIR}/scripts/update.sh' >> /usr/local/bin/update && chmod +x /usr/local/bin/update"
+
+# Login / boot banner (like community-scripts containers)
+pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && ./scripts/install-motd.sh"
 
 echo "[+] Done. Discord Soundboard is running in CT ${CTID}."
 echo "    Web UI: http://<container-ip>:3000"
