@@ -1144,7 +1144,22 @@
         }
 
         let lastServerCurrentTimeReceivedAt = 0;
+        function isLocalPlayer() {
+            return playback.startedBy && playback.startedBy.username === user?.username;
+        }
         function getCurrentPlaybackTime() {
+            if (isLocalPlayer()) {
+                if (playback.status === 'playing' && playback.startTime != null) {
+                    const start = Number(playback.startTime);
+                    if (!Number.isFinite(start)) return 0;
+                    const offset = playback.startTimeOffset || 0;
+                    let current = offset + (Date.now() - start) / 1000;
+                    if (playback.duration != null) current = Math.min(current, playback.duration);
+                    return Math.max(0, current);
+                }
+                if (playback.status === 'paused') return pausedAt;
+                return 0;
+            }
             if (playback.serverCurrentTime != null) {
                 if (playback.status === 'playing') {
                     const elapsed = (Date.now() - lastServerCurrentTimeReceivedAt) / 1000;
@@ -1211,10 +1226,8 @@
                 playback.status = 'paused';
             } else if (playback.status === 'paused') {
                 await api('/api/resume', { method: 'POST' });
-                playback.startTime = Date.now() - (pausedAt * 1000);
+                playback.startTime = Date.now();
                 playback.startTimeOffset = pausedAt;
-                playback.serverCurrentTime = pausedAt;
-                lastServerCurrentTimeReceivedAt = Date.now();
                 playback.status = 'playing';
             }
             updatePlayPauseButton();
@@ -1284,10 +1297,14 @@
                 playback.filename = state.filename;
                 playback.displayName = state.displayName ?? state.filename;
                 playback.startedBy = state.startedBy ?? null;
-                if (state.startTime != null) playback.startTime = Number(state.startTime);
+                const amLocal = state.startedBy && state.startedBy.username === user?.username;
+                if (!amLocal) {
+                    if (state.startTime != null) playback.startTime = Number(state.startTime);
+                    if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
+                }
                 if (state.duration != null) playback.duration = state.duration;
-                if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
+                if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
+                if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
@@ -1295,7 +1312,7 @@
                 updateStopButtons();
 
                 const timeEl = document.getElementById('progressTime');
-                let current = playback.serverCurrentTime != null ? playback.serverCurrentTime : getCurrentPlaybackTime();
+                let current = getCurrentPlaybackTime();
                 const dur = playback.duration;
                 timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
 
