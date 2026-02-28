@@ -19,7 +19,7 @@ const SOUNDS_META_PATH = path.join(SOUNDS_DIR, 'sounds.json');
 const GUEST_DATA_PATH = path.join(__dirname, 'guest.json');
 const PENDING_META_PATH = path.join(__dirname, 'pending.json');
 
-const GUEST_COOLDOWN_SEC = 30;
+const GUEST_COOLDOWN_SEC = 10;
 const MAX_GUEST_SOUND_DURATION = 7;
 const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
 

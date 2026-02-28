@@ -371,7 +371,7 @@
             <div class="settings-row" style="margin-bottom: 0.75rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                     <input type="checkbox" id="guestEnabledToggle" onchange="setGuestEnabled(this.checked)">
-                    <span>Allow guest access (no login, 7s max, 30s cooldown)</span>
+                    <span>Allow guest access (no login, 7s max, 10s cooldown)</span>
                 </label>
             </div>
             <div class="card-title" style="margin-top: 1rem;">User & Guest Uploads</div>
@@ -416,7 +416,7 @@
     <script>
         const CREDENTIALS = 'include';
         const MAX_USER_DURATION = 7;
-        const GUEST_COOLDOWN_SEC = 30;
+        const GUEST_COOLDOWN_SEC = 10;
         let user = null;
         let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
         let playbackLockedBy = null;
@@ -1123,6 +1123,7 @@
             if (user?.role === 'guest') {
                 const r = getGuestCooldownRemaining();
                 if (r > 0 && r !== lastGuestCooldownShown) { lastGuestCooldownShown = r; renderSoundsGrid(); }
+                else if (r === 0 && lastGuestCooldownShown > 0) { lastGuestCooldownShown = 0; renderSoundsGrid(); }
                 else if (r === 0) lastGuestCooldownShown = -1;
             }
         }
@@ -1347,7 +1348,8 @@
                     if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
                     const order = [...fullOrder];
                     order.splice(fromIdx, 1);
-                    order.splice(toIdx, 0, fromFilename);
+                    const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
+                    order.splice(insertIdx, 0, fromFilename);
                     const res = await api('/api/sounds/order', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
                     if (res && res.ok) fetchSounds();
                 });
