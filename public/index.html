@@ -222,7 +222,7 @@
         .sound-preview.playing { color: var(--accent); }
         .sound-fav.active { color: var(--accent); }
         .sound-edit.hidden { display: none; }
-        .sound-preview svg, .sound-edit svg { width: 12px; height: 12px; }
+        .sound-preview svg, .sound-edit svg, .sound-fav svg { width: 12px; height: 12px; }
         .sound-grid.reorder-mode .sound-preview, .sound-grid.reorder-mode .sound-fav { pointer-events: none; }
         .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
         .favorites-bar .fav-slot {
@@ -1276,7 +1276,7 @@
                 const favIdx = getFavorites().indexOf(s.filename);
                 const favActive = favIdx >= 0 ? ' active' : '';
                 const favTitle = favIdx >= 0 ? `Favorite slot ${favIdx + 1} (click to remove)` : 'Add to favorites (1–9)';
-                const favBtn = `<button type="button" class="sound-fav${favActive}" data-filename="${filename}" title="${favTitle}" onclick="event.stopPropagation(); toggleFavorite(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="${favIdx >= 0 ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
+                const favBtn = `<button type="button" class="sound-fav${favActive}" data-filename="${filename}" title="${favTitle}" onclick="event.stopPropagation(); toggleFavorite(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
