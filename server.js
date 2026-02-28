@@ -170,7 +170,9 @@ function loadSoundsMeta() {
     try {
         const raw = fs.readFileSync(SOUNDS_META_PATH, 'utf8');
         const data = JSON.parse(raw);
-        return typeof data === 'object' && data !== null ? data : {};
+        const meta = typeof data === 'object' && data !== null ? data : {};
+        if (migrateFoldersToTags(meta)) saveSoundsMeta(meta);
+        return meta;
     } catch {
         return {};
     }
@@ -197,26 +199,92 @@ function setSoundMeta(filename, updates) {
     const next = typeof cur === 'object' && cur !== null ? { ...cur } : (typeof cur === 'string' ? { displayName: cur } : {});
     if (updates.displayName !== undefined) next.displayName = updates.displayName;
     if (updates.duration !== undefined) next.duration = updates.duration;
-    if (updates.folder !== undefined) next.folder = updates.folder === null || updates.folder === '' ? null : String(updates.folder);
+    if (updates.tags !== undefined) {
+        const arr = Array.isArray(updates.tags) ? updates.tags : (updates.tags ? [updates.tags] : []);
+        next.tags = arr.filter(t => typeof t === 'string' && t.trim() !== '').map(t => t.trim());
+    }
+    if (updates.folder !== undefined) {
+        const f = updates.folder === null || updates.folder === '' ? null : String(updates.folder);
+        next.folder = f;
+        next.tags = f ? [f] : [];
+    }
     meta[filename] = next;
     saveSoundsMeta(meta);
 }
 
-function getFolder(meta, filename) {
+function getTags(meta, filename) {
     const m = meta[filename];
-    if (m && typeof m === 'object' && m.folder != null) return m.folder;
-    return null;
+    if (m && typeof m === 'object' && Array.isArray(m.tags)) return m.tags.filter(t => typeof t === 'string' && t.trim() !== '');
+    if (m && typeof m === 'object' && m.folder != null) return [String(m.folder)];
+    return [];
 }
 
-function getFolders(meta) {
-    const list = meta._folders;
+function getAllTagsFromSounds(meta) {
+    const set = new Set();
+    Object.keys(meta).forEach(key => {
+        if (key.startsWith('_')) return;
+        const tags = getTags(meta, key);
+        tags.forEach(t => set.add(t));
+    });
+    return [...set];
+}
+
+function getTagOrder(meta) {
+    const list = meta._tagOrder;
+    if (Array.isArray(list)) return list.filter(f => typeof f === 'string' && f.trim() !== '');
+    const legacy = meta._folders;
+    return Array.isArray(legacy) ? legacy.filter(f => typeof f === 'string' && f.trim() !== '') : [];
+}
+
+function getHiddenTags(meta) {
+    const list = meta._tagHidden;
     return Array.isArray(list) ? list.filter(f => typeof f === 'string' && f.trim() !== '') : [];
 }
 
-function setFolders(folders) {
+function setTagOrder(order) {
     const meta = loadSoundsMeta();
-    meta._folders = Array.isArray(folders) ? folders.filter(f => typeof f === 'string' && f.trim() !== '') : [];
+    meta._tagOrder = order.filter(f => typeof f === 'string' && f.trim() !== '');
     saveSoundsMeta(meta);
+}
+
+function setTagHidden(tag, hidden) {
+    const meta = loadSoundsMeta();
+    meta._tagHidden = meta._tagHidden || [];
+    const set = new Set(meta._tagHidden);
+    if (hidden) set.add(tag);
+    else set.delete(tag);
+    meta._tagHidden = [...set];
+    saveSoundsMeta(meta);
+}
+
+function migrateFoldersToTags(meta) {
+    let changed = false;
+    Object.keys(meta).forEach(key => {
+        if (key.startsWith('_')) return;
+        const m = meta[key];
+        if (m && typeof m === 'object' && m.folder != null && !Array.isArray(m.tags)) {
+            m.tags = [String(m.folder)];
+            delete m.folder;
+            changed = true;
+        }
+    });
+    if (meta._folders && !meta._tagOrder) {
+        meta._tagOrder = meta._folders;
+        changed = true;
+    }
+    return changed;
+}
+
+function getFolder(meta, filename) {
+    const tags = getTags(meta, filename);
+    return tags.length > 0 ? tags[0] : null;
+}
+
+function getFolders(meta) {
+    const order = getTagOrder(meta);
+    const fromSounds = getAllTagsFromSounds(meta);
+    const combined = order.length ? [...order, ...fromSounds.filter(t => !order.includes(t))] : fromSounds;
+    return [...new Set(combined)];
 }
 
 function getSoundOrder(meta) {
@@ -515,7 +583,7 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             filename,
             displayName: getDisplayName(meta, filename),
             duration: getDuration(meta, filename),
-            folder: getFolder(meta, filename),
+            tags: getTags(meta, filename),
         }));
         res.json(list);
     });
@@ -543,66 +611,89 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
 });
 
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
-    const { filename, displayName, folder } = req.body;
+    const { filename, displayName, tags } = req.body;
     const safeFilename = filename && path.basename(filename);
     if (!safeFilename) return res.status(400).send('Filename required');
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
     const updates = {};
     if (displayName !== undefined) updates.displayName = displayName != null ? String(displayName) : undefined;
-    if (folder !== undefined) updates.folder = folder === null || folder === '' ? null : String(folder);
+    if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags : (tags ? [tags] : []);
     setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), folder: getFolder(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename) });
 });
 
-app.get('/api/folders', requireAuth, (req, res) => {
+app.get('/api/tags', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
-    res.json(getFolders(meta));
+    const order = getTagOrder(meta);
+    const hidden = getHiddenTags(meta);
+    const allTags = getAllTagsFromSounds(meta);
+    const ordered = order.length ? [...order, ...allTags.filter(t => !order.includes(t))] : allTags;
+    res.json({ tags: [...new Set(ordered)], hidden });
 });
 
-app.patch('/api/folders', requireAdmin, (req, res) => {
-    const { folders } = req.body;
-    if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
-    const safe = folders.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim());
-    setFolders(safe);
-    res.json(safe);
+app.patch('/api/tags', requireAdmin, (req, res) => {
+    const { tags } = req.body;
+    if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags must be an array' });
+    const safe = tags.filter(f => typeof f === 'string' && f.trim() !== '').map(f => f.trim());
+    setTagOrder(safe);
+    res.json({ tags: safe });
 });
 
-app.patch('/api/folders/rename', requireAdmin, (req, res) => {
+app.patch('/api/tags/rename', requireAdmin, (req, res) => {
     const { oldName, newName } = req.body;
     const oldN = typeof oldName === 'string' ? oldName.trim() : '';
     const newN = typeof newName === 'string' ? newName.trim() : '';
     if (!oldN || !newN) return res.status(400).json({ error: 'oldName and newName required' });
     if (oldN === newN) return res.json({ ok: true });
     const meta = loadSoundsMeta();
-    const folders = getFolders(meta);
-    if (!folders.includes(oldN)) return res.status(404).json({ error: 'Folder not found' });
-    if (folders.includes(newN)) return res.status(400).json({ error: 'Target folder name already exists' });
-    meta._folders = folders.map(f => f === oldN ? newN : f);
+    const order = getTagOrder(meta);
+    if (!order.includes(oldN)) return res.status(404).json({ error: 'Tag not found' });
+    if (order.includes(newN)) return res.status(400).json({ error: 'Target tag name already exists' });
+    meta._tagOrder = order.map(f => f === oldN ? newN : f);
     Object.keys(meta).forEach(key => {
         if (key.startsWith('_')) return;
         const m = meta[key];
-        if (m && typeof m === 'object' && m.folder === oldN) m.folder = newN;
+        if (m && typeof m === 'object' && Array.isArray(m.tags)) {
+            m.tags = m.tags.map(t => t === oldN ? newN : t);
+        }
     });
+    if (meta._tagHidden && meta._tagHidden.includes(oldN)) {
+        meta._tagHidden = meta._tagHidden.map(t => t === oldN ? newN : t);
+    }
     saveSoundsMeta(meta);
-    res.json({ ok: true, folders: meta._folders });
+    res.json({ ok: true, tags: meta._tagOrder });
 });
 
-app.delete('/api/folders/:name', requireAdmin, (req, res) => {
+app.patch('/api/tags/:name/hidden', requireAdmin, (req, res) => {
     const name = decodeURIComponent(req.params.name || '').trim();
-    if (!name) return res.status(400).json({ error: 'Folder name required' });
+    const { hidden } = req.body;
+    if (!name) return res.status(400).json({ error: 'Tag name required' });
     const meta = loadSoundsMeta();
-    const folders = getFolders(meta);
-    if (!folders.includes(name)) return res.status(404).json({ error: 'Folder not found' });
+    const allTags = getAllTagsFromSounds(meta);
+    if (!allTags.includes(name)) return res.status(404).json({ error: 'Tag not found' });
+    setTagHidden(name, hidden === true);
+    res.json({ ok: true, hidden: hidden === true });
+});
+
+app.delete('/api/tags/:name', requireAdmin, (req, res) => {
+    const name = decodeURIComponent(req.params.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Tag name required' });
+    const meta = loadSoundsMeta();
+    const order = getTagOrder(meta);
+    if (!order.includes(name) && !getAllTagsFromSounds(meta).includes(name)) return res.status(404).json({ error: 'Tag not found' });
+    meta._tagOrder = (meta._tagOrder || []).filter(f => f !== name);
+    meta._tagHidden = (meta._tagHidden || []).filter(f => f !== name);
     Object.keys(meta).forEach(key => {
         if (key.startsWith('_')) return;
         const m = meta[key];
-        if (m && typeof m === 'object' && m.folder === name) m.folder = null;
+        if (m && typeof m === 'object' && Array.isArray(m.tags)) {
+            m.tags = m.tags.filter(t => t !== name);
+        }
     });
-    meta._folders = folders.filter(f => f !== name);
     saveSoundsMeta(meta);
-    res.json({ ok: true });
+    res.json({ ok: true, tags: meta._tagOrder });
 });
 
 app.get('/api/settings', requireAuth, (req, res) => {
