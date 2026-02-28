@@ -353,13 +353,13 @@ app.post('/api/upload', requireAdmin, upload.single('soundFile'), (req, res) => 
 
 app.post('/api/play', requireAuth, (req, res) => {
     const { filename } = req.body;
-    if (!filename || typeof filename !== 'string') return res.status(400).send('Filename required');
+    if (!filename || typeof filename !== 'string') return res.status(400).json({ error: 'Filename required' });
 
     const safeFilename = path.basename(filename);
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).send('Invalid path');
-    if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+    if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid path' });
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) {
         return res.status(400).json({ error: 'Join a voice channel first' });
@@ -386,10 +386,12 @@ app.post('/api/play', requireAuth, (req, res) => {
     try {
         let stream;
         if (startTime > 0) {
-            const ff = spawn('ffmpeg', ['-ss', String(startTime), '-i', filePath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'ignore'] });
+            const ff = spawn('ffmpeg', ['-nostdin', '-ss', String(startTime), '-i', filePath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
             stream = ff.stdout;
+            let errBuf = '';
+            ff.stderr.on('data', (chunk) => { errBuf += chunk.toString(); });
             ff.on('error', (err) => { console.error('ffmpeg spawn error', err); });
-            ff.stderr.on('data', () => {});
+            ff.on('close', (code) => { if (code !== 0 && code !== null) console.error('ffmpeg exit', code, errBuf.slice(-500)); });
         } else {
             stream = fs.createReadStream(filePath);
         }
@@ -410,7 +412,7 @@ app.post('/api/play', requireAuth, (req, res) => {
         res.json({ ok: true, duration, displayName, startTimeOffset: startTime });
     } catch (err) {
         console.error('Play error:', err);
-        res.status(500).send('Failed to play audio');
+        res.status(500).json({ error: err.message || 'Failed to play audio' });
     }
 });
 

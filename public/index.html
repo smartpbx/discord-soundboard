@@ -35,6 +35,7 @@
         }
         .app { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
         .app.hidden { display: none; }
+        .hidden { display: none !important; }
         .login-screen {
             min-height: 100vh;
             display: flex;
@@ -210,6 +211,16 @@
         .folder-tab.delete:hover { color: var(--danger); }
         .folders-admin { margin-bottom: 0.75rem; }
         .folders-admin .row { gap: 0.35rem; }
+        .top-bar-lock { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+        .top-bar-lock input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--accent); }
+        .sound-panel { margin-top: 1rem; padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+        .sound-panel .row { margin-bottom: 0.5rem; }
+        .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
+        .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
+        .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; cursor: grab; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
+        .sound-grid.reorder-mode .sound-drag-handle { display: block; }
+        .sound-grid.reorder-mode .sound-drag-handle:active { cursor: grabbing; }
+        .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
     </style>
 </head>
 <body>
@@ -235,6 +246,10 @@
 
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
+            <label class="top-bar-lock admin-only" title="Lock user playback">
+                <span class="top-bar-lock-label">Lock playback</span>
+                <input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)">
+            </label>
         </div>
 
         <div class="card admin-only" id="connectionCard">
@@ -270,19 +285,9 @@
 
         <div class="card admin-only" id="uploadCard">
             <div class="card-title">Upload Sound</div>
-            <div class="upload-zone">
-                <label><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
+            <div class="upload-zone" id="uploadZone">
+                <label for="fileInput"><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
                 <input type="file" id="fileInput" accept="audio/*">
-            </div>
-        </div>
-
-        <div class="card admin-only" id="settingsCard">
-            <div class="card-title">Settings</div>
-            <div class="row settings-row">
-                <label>
-                    <input type="checkbox" id="playbackLockedCheckbox" onchange="setPlaybackLocked(this.checked)">
-                    Lock user playback (users cannot play sounds when checked)
-                </label>
             </div>
         </div>
 
@@ -299,6 +304,16 @@
             </div>
             <div class="folder-tabs" id="folderTabs"></div>
             <div id="soundsList" class="sound-grid"></div>
+            <div class="sound-panel hidden" id="soundPanel">
+                <div class="card-title">Edit sound</div>
+                <div class="row"><label>Name</label><input type="text" id="soundPanelName" placeholder="Display name"></div>
+                <div class="row"><label>Folder</label><select id="soundPanelFolder"><option value="">(None)</option></select></div>
+                <div class="row"><label>Duration</label><span id="soundPanelDuration" class="text-muted">—</span></div>
+                <div class="row" style="margin-top: 0.5rem;">
+                    <button type="button" class="btn btn-primary" onclick="saveSoundPanel()">Save</button>
+                    <button type="button" class="btn btn-ghost" onclick="closeSoundPanel()">Close</button>
+                </div>
+            </div>
             <div class="user-locked-msg hidden" id="userLockedMsg">Playback is locked by an admin.</div>
         </div>
     </div>
@@ -316,6 +331,7 @@
         let soundsList = [];
         let foldersList = [];
         let selectedFolder = null;
+        let selectedSound = null;
 
         async function api(path, opts = {}) {
             const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
@@ -402,7 +418,7 @@
             if (!res || !res.ok) return;
             const d = await res.json();
             playbackLocked = d.playbackLocked === true;
-            const cb = document.getElementById('playbackLockedCheckbox');
+            const cb = document.getElementById('playbackLockedTop');
             if (cb) cb.checked = playbackLocked;
             const msg = document.getElementById('userLockedMsg');
             if (msg) {
@@ -429,10 +445,6 @@
             const grid = document.getElementById('soundsList');
             if (btn) btn.classList.toggle('active', reorderMode);
             if (grid) grid.classList.toggle('reorder-mode', reorderMode);
-            grid.querySelectorAll('.sound-item').forEach((el, i) => {
-                el.draggable = reorderMode;
-                el.dataset.index = i;
-            });
         }
 
         async function fetchFolders() {
@@ -497,23 +509,24 @@
             const isUser = user?.role === 'user';
             const canPlay = !isUser || !playbackLocked;
             const tooLong = (dur) => isUser && dur != null && dur > MAX_USER_DURATION;
+            const isAdmin = user?.role === 'admin';
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
                 const filename = esc(s.filename);
                 const dur = s.duration;
                 const disabled = !canPlay || tooLong(dur);
+                const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 return `
-                    <div class="sound-item" data-filename="${filename}" data-index="${idx}" draggable="${reorderMode}">
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-duration="${dur ?? ''}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">${name}</button>
+                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="false">
+                        <span class="sound-drag-handle" draggable="true" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">${name}</button>
+                        ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
                         ${dur != null ? `<div class="sound-duration">${formatTime(dur)}</div>` : ''}
-                        <button type="button" class="sound-edit ${isUser ? 'hidden' : ''}" data-filename="${filename}" data-displayname="${name}" data-folder="${esc(s.folder || '')}" onclick="editSoundName(this)" title="Edit name & folder" aria-label="Edit">
-                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                        </button>
                     </div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
-            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = reorderMode; });
+            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = false; });
             const msg = document.getElementById('userLockedMsg');
             if (msg && isUser && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');
@@ -543,6 +556,48 @@
                 credentials: CREDENTIALS,
                 body: JSON.stringify({ filename, displayName: newName.trim() || filename, folder: newFolder || null }),
             }).then(() => { fetchSounds(); fetchFolders(); });
+        }
+
+        function openSoundPanel(s) {
+            const panel = document.getElementById('soundPanel');
+            const nameEl = document.getElementById('soundPanelName');
+            const folderEl = document.getElementById('soundPanelFolder');
+            const durEl = document.getElementById('soundPanelDuration');
+            if (!panel || !nameEl || !folderEl) return;
+            nameEl.value = (s && (s.displayName || s.filename)) || '';
+            nameEl.dataset.filename = (s && s.filename) || '';
+            durEl.textContent = (s && s.duration != null) ? formatTime(s.duration) : '—';
+            folderEl.innerHTML = '<option value="">(None)</option>' + (foldersList || []).map(f => '<option value="' + (f.replace(/&/g, '&amp;').replace(/"/g, '&quot;')) + '">' + (f.replace(/&/g, '&amp;').replace(/</g, '&lt;')) + '</option>').join('');
+            folderEl.value = (s && s.folder) || '';
+            panel.classList.remove('hidden');
+        }
+
+        function openSoundPanelFromSound(filename) {
+            const s = soundsList.find(x => x.filename === filename);
+            selectedSound = filename;
+            renderSoundsGrid();
+            openSoundPanel(s || { filename, displayName: filename, duration: null, folder: null });
+        }
+
+        function closeSoundPanel() {
+            selectedSound = null;
+            document.getElementById('soundPanel')?.classList.add('hidden');
+            renderSoundsGrid();
+        }
+
+        async function saveSoundPanel() {
+            const nameEl = document.getElementById('soundPanelName');
+            const folderEl = document.getElementById('soundPanelFolder');
+            const filename = nameEl?.dataset.filename;
+            if (!filename) return;
+            const displayName = (nameEl?.value || '').trim() || filename;
+            const folder = (folderEl?.value || '').trim() || null;
+            const res = await api('/api/sounds/metadata', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, displayName, folder }),
+            });
+            if (res && res.ok) { fetchSounds(); fetchFolders(); nameEl.dataset.filename = filename; }
         }
 
         async function joinChannel() {
@@ -637,6 +692,24 @@
             ctx.fillRect(Math.floor(playheadX), 0, 2, h);
         }
 
+        function getCurrentPlaybackTime() {
+            if (playback.status === 'playing' && playback.startTime != null) {
+                const offset = playback.startTimeOffset || 0;
+                let current = offset + (Date.now() - playback.startTime) / 1000;
+                if (playback.duration != null) current = Math.min(current, playback.duration);
+                return Math.max(0, current);
+            }
+            if (playback.status === 'paused') return pausedAt;
+            return 0;
+        }
+
+        function tickWaveform() {
+            if (waveformData && waveformDuration > 0 && (playback.status === 'playing' || playback.status === 'paused')) {
+                const current = getCurrentPlaybackTime();
+                drawWaveform(Math.min(current, waveformDuration));
+            }
+        }
+
         async function stopPlayback() {
             const res = await api('/api/stop', { method: 'POST' });
             if (!res) return;
@@ -709,21 +782,11 @@
                 updatePlayPauseButton();
 
                 const timeEl = document.getElementById('progressTime');
-                let current = 0;
+                let current = getCurrentPlaybackTime();
                 const dur = state.duration;
-                const offset = playback.startTimeOffset || 0;
-                if (state.status === 'playing' && state.startTime != null) {
-                    current = offset + (Date.now() - state.startTime) / 1000;
-                    if (dur != null) current = Math.min(current, dur);
-                    current = Math.max(0, current);
-                } else if (state.status === 'paused') {
-                    current = pausedAt;
-                }
                 timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
 
                 if (waveformData && waveformDuration > 0) {
-                    if (state.status === 'playing' && state.startTime) current = offset + (Date.now() - state.startTime) / 1000;
-                    else if (state.status === 'paused') current = pausedAt;
                     drawWaveform(Math.min(current, waveformDuration));
                 }
             });
@@ -735,7 +798,7 @@
             const rect = canvas.getBoundingClientRect();
             const x = (e.clientX - rect.left) / rect.width;
             const t = Math.max(0, Math.min(waveformDuration, x * waveformDuration));
-            if (t < waveformDuration - 0.5) playSound(playback.filename, t);
+            if (t < waveformDuration - 0.5) playSound(playback.filename, Number(t));
         });
 
         function setVolume(volume) {
@@ -746,22 +809,36 @@
 
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
 
-        async function uploadSound() {
+        async function uploadSound(file) {
             const fileInput = document.getElementById('fileInput');
-            if (!fileInput.files[0]) return;
+            const f = file || fileInput?.files?.[0];
+            if (!f) return;
             const formData = new FormData();
-            formData.append('soundFile', fileInput.files[0]);
-            await fetch('/api/upload', { method: 'POST', credentials: CREDENTIALS, body: formData });
-            fileInput.value = '';
-            fetchSounds();
+            formData.append('soundFile', f);
+            const res = await api('/api/upload', { method: 'POST', body: formData });
+            if (res && res.ok) { fileInput.value = ''; fetchSounds(); }
         }
 
-        document.getElementById('fileInput').addEventListener('change', uploadSound);
+        document.getElementById('fileInput').addEventListener('change', () => uploadSound());
+
+        (function initUploadZone() {
+            const zone = document.getElementById('uploadZone');
+            if (!zone) return;
+            zone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; });
+            zone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); });
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const f = e.dataTransfer.files?.[0];
+                if (f) uploadSound(f);
+            });
+        })();
 
         (async function init() {
             const ok = await checkAuth();
             if (!ok) return;
             setInterval(refreshPlaybackState, 400);
+            setInterval(tickWaveform, 100);
             fetchChannels();
             fetchSounds();
             fetchFolders();
