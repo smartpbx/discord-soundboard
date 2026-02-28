@@ -660,7 +660,7 @@
                 <div class="row">
                     <label>Volume</label>
                     <div class="sound-panel-volume-row" style="flex:1;">
-                        <input type="range" id="soundPanelVolume" min="0" max="1" step="0.05" value="1" title="Per-sound volume (1 = full)">
+                        <input type="range" id="soundPanelVolume" min="0" max="2" step="0.05" value="1" title="Per-sound volume (100% = normal, up to 200% to boost)">
                         <span id="soundPanelVolumeLabel" style="min-width:3rem;font-size:0.85rem;">100%</span>
                     </div>
                 </div>
@@ -2322,7 +2322,7 @@
             nameEl.dataset.filename = (s && s.filename) || '';
             tagsEl.value = (s && (s.tags || []).join(', ')) || '';
             durEl.textContent = (s && s.duration != null) ? formatTime(s.duration) : '—';
-            const vol = (s && typeof s.volume === 'number') ? Math.max(0, Math.min(1, s.volume)) : 1;
+            const vol = (s && typeof s.volume === 'number') ? Math.max(0, Math.min(2, s.volume)) : 1;
             if (volEl) { volEl.value = String(vol); volEl.dispatchEvent(new Event('input')); }
             if (volLabel) volLabel.textContent = Math.round(vol * 100) + '%';
             soundPanelStartTime = (s && typeof s.startTime === 'number' && s.startTime >= 0) ? s.startTime : 0;

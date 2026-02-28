@@ -329,7 +329,7 @@ function setSoundMeta(filename, updates) {
         next.tags = f ? [f] : [];
     }
     if (updates.volume !== undefined) {
-        const v = typeof updates.volume === 'number' ? Math.max(0, Math.min(1, updates.volume)) : undefined;
+        const v = typeof updates.volume === 'number' ? Math.max(0, Math.min(2, updates.volume)) : undefined;
         next.volume = v;
     }
     if (updates.startTime !== undefined) {
@@ -359,7 +359,7 @@ function getColor(meta, filename) {
 
 function getSoundVolume(meta, filename) {
     const m = meta[filename];
-    if (m && typeof m === 'object' && typeof m.volume === 'number') return Math.max(0, Math.min(1, m.volume));
+    if (m && typeof m === 'object' && typeof m.volume === 'number') return Math.max(0, Math.min(2, m.volume));
     return null;
 }
 
@@ -940,7 +940,7 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     if (displayName !== undefined) updates.displayName = displayName != null ? String(displayName) : undefined;
     if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags : (tags ? [tags] : []);
     if (color !== undefined) updates.color = color === null || color === '' ? null : String(color).trim();
-    if (volume !== undefined) updates.volume = typeof volume === 'number' ? Math.max(0, Math.min(1, volume)) : undefined;
+    if (volume !== undefined) updates.volume = typeof volume === 'number' ? Math.max(0, Math.min(2, volume)) : undefined;
     if (startTime !== undefined) updates.startTime = (startTime === null || startTime === '') ? null : (typeof startTime === 'number' && startTime >= 0 ? startTime : undefined);
     if (endTime !== undefined) updates.endTime = (endTime === null || endTime === '') ? null : (typeof endTime === 'number' && endTime >= 0 ? endTime : undefined);
     setSoundMeta(safeFilename, updates);
@@ -1426,7 +1426,7 @@ app.post('/api/play', requireAuth, (req, res) => {
     let endTime = metaEnd != null && metaEnd > startTime ? metaEnd : null;
     const playDuration = endTime != null ? endTime - startTime : null;
     const volMult = metaVolume != null ? metaVolume : 1;
-    const effectiveVolume = Math.max(0, Math.min(1, currentVolume * volMult));
+    const effectiveVolume = Math.max(0, Math.min(2, currentVolume * volMult));
 
     try {
         let stream;
