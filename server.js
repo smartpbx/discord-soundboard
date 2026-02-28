@@ -585,7 +585,11 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             duration: getDuration(meta, filename),
             tags: getTags(meta, filename),
         }));
-        res.json(list);
+        const tagOrder = getTagOrder(meta);
+        const hidden = getHiddenTags(meta);
+        const allTags = getAllTagsFromSounds(meta);
+        const tags = tagOrder.length ? [...tagOrder, ...allTags.filter(t => !tagOrder.includes(t))] : allTags;
+        res.json({ list, tags: [...new Set(tags)], hidden });
     });
 });
 

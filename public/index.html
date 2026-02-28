@@ -364,7 +364,7 @@
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
             <h1>🔊 Soundboard</h1>
-            <form id="loginForm" onsubmit="doLogin(); return false;">
+            <form id="loginForm" onsubmit="return doLogin(event)">
                 <label for="loginUser">Username</label>
                 <input type="text" id="loginUser" name="username" placeholder="Username" autocomplete="username" required>
                 <label for="loginPass">Password</label>
@@ -839,12 +839,11 @@
             applyPrefs();
             startPlaybackPolling();
             fetchSounds();
-            fetchTags();
             return false;
         }
 
         async function doLogin(e) {
-            if (e && e.preventDefault) e.preventDefault();
+            e.preventDefault();
             const username = document.getElementById('loginUser').value.trim();
             const password = document.getElementById('loginPass').value;
             document.getElementById('loginError').textContent = '';
@@ -859,37 +858,11 @@
                 document.getElementById('loginError').textContent = data.error || 'Login failed';
                 return false;
             }
-            user = data;
-            document.getElementById('loginScreen').classList.add('hidden');
-            document.getElementById('app').classList.remove('hidden');
-            document.getElementById('currentUsername').textContent = user.username;
-            document.getElementById('currentRole').textContent = '(' + (user.role || 'user') + ')';
-            if (user.role === 'user' || user.role === 'guest') {
-                document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
-                document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
-                document.getElementById('topActions').classList.add('hidden');
-                document.getElementById('playPauseBtn').classList.add('hidden');
-                document.getElementById('stopBtn').classList.add('hidden');
-            } else {
-                document.getElementById('topActions').classList.remove('hidden');
-                document.getElementById('playPauseBtn').classList.remove('hidden');
-                document.getElementById('stopBtn').classList.remove('hidden');
-                document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
-                if (user.role === 'superadmin') {
-                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
-                    startPendingCountPolling();
-                } else {
-                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
-                }
-            }
+            await checkAuth();
             applyPrefs();
             startPlaybackPolling();
-            fetchSettings();
-            if (user?.role === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
-            updateUploadCardVisibility();
             fetchChannels();
             fetchSounds();
-            fetchTags();
             fetch('/api/volume', { credentials: CREDENTIALS }).then(r => r.json()).then(d => {
                 const v = d.volume ?? 0.5;
                 document.getElementById('volumeSlider').value = v;
@@ -1309,8 +1282,15 @@
         async function fetchSounds() {
             const res = await api('/api/sounds');
             if (!res || !res.ok) return;
-            const sounds = await res.json();
-            soundsList = sounds;
+            const data = await res.json();
+            soundsList = Array.isArray(data) ? data : (data.list || []);
+            if (data && !Array.isArray(data)) {
+                if (Array.isArray(data.tags)) tagsList = data.tags;
+                if (Array.isArray(data.hidden)) hiddenTags = data.hidden;
+                const prefs = loadPrefs();
+                if (prefs.lastTag != null && tagsList.includes(prefs.lastTag)) selectedTag = prefs.lastTag;
+                renderTagTabs();
+            }
             renderSoundsGrid();
         }
 
@@ -1526,7 +1506,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, displayName, tags }),
             });
-            if (res && res.ok) { fetchSounds(); fetchTags(); nameEl.dataset.filename = filename; }
+            if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; }
         }
 
         async function joinChannel() {
@@ -1906,7 +1886,6 @@
             setInterval(tickWaveform, 100);
             fetchChannels();
             fetchSounds();
-            fetchTags();
             updateNowPlaying();
             updatePlayPauseButton();
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
