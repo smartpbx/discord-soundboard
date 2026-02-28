@@ -16,8 +16,10 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBe
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
 const SOUNDS_META_PATH = path.join(SOUNDS_DIR, 'sounds.json');
-const GUEST_DATA_PATH = path.join(__dirname, 'guest.json');
-const PENDING_META_PATH = path.join(__dirname, 'pending.json');
+const DATA_DIR = path.join(__dirname, 'data');
+const GUEST_DATA_PATH = path.join(DATA_DIR, 'guest.json');
+const PENDING_META_PATH = path.join(DATA_DIR, 'pending.json');
+const SERVER_STATE_PATH = path.join(DATA_DIR, 'state.json');
 
 const GUEST_COOLDOWN_SEC = 10;
 const MAX_GUEST_SOUND_DURATION = 7;
@@ -92,6 +94,25 @@ function setUserUploadEnabled(enabled) {
     const d = loadGuestData();
     d.userUploadEnabled = enabled === true;
     saveGuestData(d);
+}
+
+function loadServerState() {
+    try {
+        const raw = fs.readFileSync(SERVER_STATE_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        return typeof data === 'object' && data !== null ? data : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveServerState(updates) {
+    try {
+        const state = { ...loadServerState(), ...updates };
+        fs.writeFileSync(SERVER_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+    } catch (err) {
+        console.error('Failed to save server state:', err.message);
+    }
 }
 
 function getMaxUploadDuration() {
@@ -241,6 +262,20 @@ if (!fs.existsSync(SOUNDS_DIR)) {
 if (!fs.existsSync(PENDING_DIR)) {
     fs.mkdirSync(PENDING_DIR, { recursive: true });
 }
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+// Migrate from legacy paths (guest.json, pending.json in project root)
+const LEGACY_GUEST = path.join(__dirname, 'guest.json');
+const LEGACY_PENDING = path.join(__dirname, 'pending.json');
+if (fs.existsSync(LEGACY_GUEST) && !fs.existsSync(GUEST_DATA_PATH)) {
+    fs.copyFileSync(LEGACY_GUEST, GUEST_DATA_PATH);
+    console.log('Migrated guest.json to data/');
+}
+if (fs.existsSync(LEGACY_PENDING) && !fs.existsSync(PENDING_META_PATH)) {
+    fs.copyFileSync(LEGACY_PENDING, PENDING_META_PATH);
+    console.log('Migrated pending.json to data/');
+}
 
 const app = express();
 const upload = multer({ dest: 'sounds/', limits: { fileSize: 10 * 1024 * 1024 } });
@@ -331,6 +366,24 @@ let playbackState = { status: 'idle', filename: null, displayName: null, startTi
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
+    if (lastChannelId) {
+        const channel = client.channels.cache.get(lastChannelId);
+        if (channel?.isVoiceBased()) {
+            activeGuildId = channel.guild.id;
+            currentConnection = joinVoiceChannel({
+                channelId: channel.id,
+                guildId: channel.guild.id,
+                adapterCreator: channel.guild.voiceAdapterCreator,
+                daveEncryption: false,
+            });
+            currentConnection.on('error', err => {
+                console.error('Voice connection error:', err.message);
+                leaveVoiceChannel();
+            });
+            currentConnection.subscribe(player);
+            console.log(`🔊 Auto-joined ${channel.name}`);
+        }
+    }
 });
 
 app.post('/api/login', (req, res) => {
@@ -377,10 +430,17 @@ app.get('/api/channels', requireAdmin, (req, res) => {
             channels.push({ id: channel.id, name: `${guild.name} - ${channel.name}` });
         });
     });
-    res.json(channels);
+    res.json({ channels, lastChannelId: lastChannelId || null });
 });
 
 let activeGuildId = null; // Track the server ID
+let lastChannelId = null; // Persisted for auto-join on restart
+
+(function initServerState() {
+    const state = loadServerState();
+    if (Number.isFinite(state.volume)) currentVolume = Math.max(0, Math.min(1, state.volume));
+    if (typeof state.lastChannelId === 'string' && state.lastChannelId) lastChannelId = state.lastChannelId;
+})();
 
 // Catch and log audio errors so the bot doesn't crash silently
 player.on('error', error => {
@@ -428,6 +488,8 @@ app.post('/api/join', requireAdmin, (req, res) => {
         leaveVoiceChannel();
     });
     currentConnection.subscribe(player);
+    lastChannelId = channelId;
+    saveServerState({ lastChannelId });
     res.send(`Joined ${channel.name}`);
 });
 
@@ -907,7 +969,10 @@ app.post('/api/resume', requireAdmin, (req, res) => {
 app.post('/api/volume', requireAdmin, (req, res) => {
     const { volume } = req.body;
     const v = parseFloat(volume);
-    if (Number.isFinite(v)) currentVolume = Math.max(0, Math.min(1, v));
+    if (Number.isFinite(v)) {
+        currentVolume = Math.max(0, Math.min(1, v));
+        saveServerState({ volume: currentVolume });
+    }
     if (player.state.resource?.volume) player.state.resource.volume.setVolume(currentVolume);
     res.send(`Volume set to ${currentVolume}`);
 });
