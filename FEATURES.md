@@ -26,8 +26,6 @@ Features to implement, in rough priority order.
 - [ ] **Recently played** – Last 5–10 sounds for quick re-play
 - [x] **Favorites** – Up to 9 favorites, mapped to keys 1–9 (saved in preferences)
 - [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
-- [ ] **Hover preview** – Optional short preview on hover (with delay to avoid accidental plays)
-
 ---
 
 ## Nice to Have

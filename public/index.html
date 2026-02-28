@@ -902,6 +902,13 @@
                 if (d.maxUploadDuration !== undefined) { const g = document.getElementById('maxUploadDurationInput'); if (g) g.value = d.maxUploadDuration; }
                 if (d.maxUploadBytes !== undefined) { const g = document.getElementById('maxUploadBytesInput'); if (g) g.value = Math.round(d.maxUploadBytes / 1024); }
             }
+            if (d.volume !== undefined && Number.isFinite(d.volume)) {
+                const v = Math.max(0, Math.min(1, d.volume));
+                const slider = document.getElementById('volumeSlider');
+                const label = document.getElementById('volumeLabel');
+                if (slider) slider.value = v;
+                if (label) label.textContent = Math.round(v * 100) + '%';
+            }
             updateUploadCardVisibility();
         }
 

@@ -608,6 +608,9 @@ app.delete('/api/folders/:name', requireAdmin, (req, res) => {
 app.get('/api/settings', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
     const out = { playbackLocked: getPlaybackLocked(meta), playbackLockedBy: getPlaybackLocked(meta) ? getPlaybackLockedBy(meta) : null };
+    if (req.session.user.role === 'admin' || req.session.user.role === 'superadmin') {
+        out.volume = currentVolume;
+    }
     if (req.session.user.role === 'superadmin') {
         out.guestEnabled = getGuestEnabled();
         out.userUploadEnabled = getUserUploadEnabled();
