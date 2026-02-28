@@ -225,19 +225,20 @@
         .sound-edit.hidden { display: none; }
         .sound-preview svg, .sound-edit svg, .sound-fav svg { width: 12px; height: 12px; }
         .sound-grid.reorder-mode .sound-preview, .sound-grid.reorder-mode .sound-fav { pointer-events: none; }
-        .favorites-section { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
-        .favorites-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; min-width: 4.5rem; }
-        .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+        .favorites-section { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; margin-bottom: 0.6rem; }
+        .favorites-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+        .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; justify-content: center; max-width: 100%; }
         .favorites-bar .fav-slot {
-            padding: 0.25rem 0.4rem; font-size: 0.75rem; min-width: 1.75rem;
+            padding: 0.35rem 0.5rem; font-size: 0.78rem; min-width: 2rem;
             background: var(--surface-hover); border: 1px solid var(--border);
             border-radius: var(--radius-sm); color: var(--text); cursor: pointer;
-            transition: border-color 0.15s, background 0.15s;
+            transition: border-color 0.15s, background 0.15s; display: inline-flex; align-items: center;
         }
-        .favorites-bar .fav-slot:hover:not(.empty) { border-color: var(--accent); }
-        .favorites-bar .fav-slot.empty { color: var(--text-muted); cursor: default; }
-        .favorites-bar .fav-slot .fav-num { font-weight: 600; margin-right: 0.2rem; }
-        .favorites-bar .fav-slot .fav-label { max-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .favorites-bar .fav-slot:hover:not(.empty) { border-color: var(--accent); background: var(--surface); }
+        .favorites-bar .fav-slot.empty { color: var(--text-muted); cursor: default; opacity: 0.7; }
+        .favorites-bar .fav-slot .fav-num { font-weight: 600; margin-right: 0.25rem; color: var(--text-muted); }
+        .favorites-bar .fav-slot:not(.empty) .fav-num { color: var(--accent); }
+        .favorites-bar .fav-slot .fav-label { max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
         .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
@@ -266,7 +267,7 @@
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
-        .sounds-card.mobile-active .sounds-toolbar,
+        .sounds-card.mobile-active .sound-filter-input { display: none !important; }
         .sounds-card.mobile-active .sound-grid,
         .sounds-card.mobile-active .tags-admin,
         .sounds-card.mobile-active .favorites-section { display: none !important; }
@@ -279,7 +280,8 @@
             background: var(--bg); overflow: hidden;
         }
         .sounds-card.mobile-active .sounds-card-header { flex-shrink: 0; padding: 0.75rem 1rem; }
-        .sounds-card.mobile-active .tag-tabs { flex-shrink: 0; margin: 0 1rem 0.5rem; }
+        .sounds-card.mobile-active .sounds-toolbar { margin: 0 1rem 0.5rem; flex-shrink: 0; justify-content: center; }
+        .sounds-card.mobile-active .sounds-toolbar .tag-tabs { flex: 1; justify-content: center; min-width: 100%; }
         .mobile-grid-wrap { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
         .mobile-grid-area {
             flex: 1; min-height: 0; padding: 0 1rem 1rem;
