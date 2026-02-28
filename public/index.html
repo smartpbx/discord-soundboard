@@ -639,7 +639,7 @@
                 const name = s ? (s.displayName || s.filename || '') : '';
                 const label = name ? (name.length > 12 ? name.slice(0, 12) + '…' : name) : '—';
                 const cls = fn ? '' : ' empty';
-                const title = fn ? `${n}: ${s?.displayName || s?.filename || fn} (click to play)` : `${n}: empty (star a sound to add)`;
+                const title = fn ? `${n}: ${(s && s.displayName) || (s && s.filename) || fn} (click to play)` : `${n}: empty (star a sound to add)`;
                 return `<button type="button" class="fav-slot${cls}" data-slot="${n}" data-filename="${(fn || '').replace(/"/g, '&quot;')}" ${fn ? '' : 'disabled'} title="${(title || '').replace(/"/g, '&quot;')}">` +
                     `<span class="fav-num">${n}</span><span class="fav-label">${(label || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span></button>`;
             }).join('');
@@ -688,12 +688,12 @@
             } else {
                 mobilePageIndex = 0;
             }
-            wrap?.classList.toggle('paged', isPaged);
+            if (wrap) wrap.classList.toggle('paged', isPaged);
             area.classList.toggle('paged', isPaged);
-            const isUser = user?.role === 'user';
-            const isGuest = user?.role === 'guest';
+            const isUser = (user && user.role) === 'user';
+            const isGuest = (user && user.role) === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
-            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy?.role === 'admin' || playback.startedBy?.role === 'superadmin');
+            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
             const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
@@ -737,7 +737,7 @@
             if (!area) return;
             area.ontouchstart = (e) => { mobileTouchStartX = e.touches[0].clientX; };
             area.ontouchend = (e) => {
-                if (!e.changedTouches?.[0]) return;
+                if (!(e.changedTouches && e.changedTouches[0])) return;
                 const dx = e.changedTouches[0].clientX - mobileTouchStartX;
                 if (dx > 60) mobilePagePrev();
                 else if (dx < -60) mobilePageNext();
@@ -762,7 +762,7 @@
             return res;
         }
 
-        function isAdminOrSuperadmin() { return user?.role === 'admin' || user?.role === 'superadmin'; }
+        function isAdminOrSuperadmin() { return (user && user.role) === 'admin' || (user && user.role) === 'superadmin'; }
 
         function switchMainTab(tab) {
             document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
@@ -799,7 +799,7 @@
                 }
                 }
                 fetchSettings();
-                if (user?.role === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+                if ((user && user.role) === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
                 updateUploadCardVisibility();
                 return true;
             }
@@ -864,7 +864,7 @@
             fetchChannels();
             fetchSounds();
             fetch('/api/volume', { credentials: CREDENTIALS }).then(r => r.json()).then(d => {
-                const v = d.volume ?? 0.5;
+                const v = (d.volume != null ? d.volume : 0.5);
                 document.getElementById('volumeSlider').value = v;
                 document.getElementById('volumeLabel').textContent = Math.round(v * 100) + '%';
             }).catch(() => {});
@@ -905,14 +905,14 @@
             if (cb) cb.checked = playbackLocked;
             const msg = document.getElementById('userLockedMsg');
             if (msg) {
-                if ((user?.role === 'user' || user?.role === 'guest') && playbackLocked) {
+                if (((user && user.role) === 'user' || (user && user.role) === 'guest') && playbackLocked) {
                     msg.textContent = playbackLockedBy === 'superadmin' ? 'Playback is locked by a superadmin.' : 'Playback is locked by an admin.';
                     msg.classList.remove('hidden');
                 } else {
                     msg.classList.add('hidden');
                 }
             }
-            if (user?.role === 'superadmin') {
+            if ((user && user.role) === 'superadmin') {
                 if (d.guestEnabled !== undefined) { guestEnabled = d.guestEnabled; const g = document.getElementById('guestEnabledToggle'); if (g) g.checked = guestEnabled; }
                 if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
                 if (d.maxUploadDuration !== undefined) { const g = document.getElementById('maxUploadDurationInput'); if (g) g.value = d.maxUploadDuration; }
@@ -925,7 +925,7 @@
                 if (slider) slider.value = v;
                 if (label) label.textContent = Math.round(v * 100) + '%';
             }
-            if (user?.role === 'superadmin' && d.pendingCount !== undefined) {
+            if ((user && user.role) === 'superadmin' && d.pendingCount !== undefined) {
                 updatePendingBadge(d.pendingCount);
             }
             updateUploadCardVisibility();
@@ -936,7 +936,7 @@
             const hint = document.getElementById('uploadHint');
             if (!card || !hint) return;
             const canDirect = isAdminOrSuperadmin();
-            const canPending = (user?.role === 'user' || user?.role === 'guest') && (typeof userUploadEnabled !== 'undefined' ? userUploadEnabled : false);
+            const canPending = ((user && user.role) === 'user' || (user && user.role) === 'guest') && (typeof userUploadEnabled !== 'undefined' ? userUploadEnabled : false);
             if (canDirect) {
                 card.classList.remove('hidden');
                 hint.textContent = '';
@@ -986,7 +986,7 @@
             const history = await res.json();
             const tbody = document.getElementById('guestHistoryBody');
             if (!tbody) return;
-            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             tbody.innerHTML = history.slice(0, 100).map(h => {
                 const dt = new Date(h.timestamp);
                 const timeStr = dt.toLocaleString();
@@ -1001,7 +1001,7 @@
             const ips = await res.json();
             const el = document.getElementById('blockedIPsList');
             if (!el) return;
-            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             if (ips.length === 0) { el.innerHTML = '<span style="color:var(--text-muted)">None</span>'; return; }
             el.innerHTML = ips.map(ip => '<div class="ip-row"><span>' + esc(ip) + '</span><button type="button" class="btn btn-ghost block-btn" data-ip="' + esc(ip) + '" onclick="unblockGuestIP(this.dataset.ip)">Unblock</button></div>').join('');
         }
@@ -1028,11 +1028,11 @@
         }
 
         async function fetchPendingCount() {
-            if (user?.role !== 'superadmin') return;
+            if ((user && user.role) !== 'superadmin') return;
             const res = await api('/api/superadmin/pending-count');
             if (!res || !res.ok) return;
             const d = await res.json().catch(() => ({}));
-            updatePendingBadge(d.count ?? 0);
+            updatePendingBadge(d.count != null ? d.count : 0);
         }
 
         async function fetchPendingUploads() {
@@ -1043,7 +1043,7 @@
             const tbody = document.getElementById('pendingUploadsBody');
             const empty = document.getElementById('pendingUploadsEmpty');
             if (!tbody || !empty) return;
-            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             if (uploads.length === 0) {
                 tbody.innerHTML = '';
                 empty.classList.remove('hidden');
@@ -1075,11 +1075,11 @@
             if (!res || !res.ok) return;
             playbackLocked = locked;
             await fetchSettings();
-            if (user?.role === 'user' || user?.role === 'guest') fetchSounds();
+            if ((user && user.role) === 'user' || (user && user.role) === 'guest') fetchSounds();
         }
 
         function getGuestCooldownRemaining() {
-            if (user?.role !== 'guest') return 0;
+            if ((user && user.role) !== 'guest') return 0;
             const elapsed = (Date.now() - guestLastPlayTime) / 1000;
             return Math.max(0, Math.ceil(GUEST_COOLDOWN_SEC - elapsed));
         }
@@ -1107,7 +1107,7 @@
                 wrap.classList.add('dragging');
             });
             grid.addEventListener('dragend', (e) => {
-                e.target.closest('.sound-item-wrap')?.classList.remove('dragging');
+                const siw = e.target.closest('.sound-item-wrap'); if (siw) siw.classList.remove('dragging');
                 grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
             });
             grid.addEventListener('dragover', (e) => {
@@ -1154,7 +1154,7 @@
             const container = document.getElementById('tagTabs');
             const isAdmin = isAdminOrSuperadmin();
             const showManage = isAdmin && manageTagsMode;
-            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const visibleTags = showManage ? (tagsList || []) : (tagsList || []).filter(t => !hiddenTags.includes(t));
             let html = '<button type="button" class="tag-tab' + (selectedTag === null ? ' active' : '') + '" data-tag="" onclick="selectTag(null)">All</button>';
             visibleTags.forEach(t => {
@@ -1172,8 +1172,8 @@
             });
             container.innerHTML = html;
             container.classList.toggle('manage-mode', showManage);
-            document.getElementById('manageTagsBtn')?.classList.toggle('active', manageTagsMode);
-            document.getElementById('tagsAdmin')?.classList.toggle('hidden', !showManage);
+            const mtb = document.getElementById('manageTagsBtn'); if (mtb) mtb.classList.toggle('active', manageTagsMode);
+            const ta = document.getElementById('tagsAdmin'); if (ta) ta.classList.toggle('hidden', !showManage);
             if (showManage) setupTagTabDragDrop(container);
         }
 
@@ -1187,7 +1187,7 @@
                 wrap.classList.add('dragging');
             });
             container.addEventListener('dragend', (e) => {
-                e.target.closest('.tag-tab-wrap')?.classList.remove('dragging');
+                const ttw = e.target.closest('.tag-tab-wrap'); if (ttw) ttw.classList.remove('dragging');
                 container.querySelectorAll('.tag-tab-wrap').forEach(el => el.classList.remove('drag-over'));
             });
             container.addEventListener('dragover', (e) => {
@@ -1297,16 +1297,16 @@
         function renderSoundsGrid() {
             const grid = document.getElementById('soundsList');
             const filtered = getFilteredSounds();
-            const isUser = user?.role === 'user';
-            const isGuest = user?.role === 'guest';
+            const isUser = (user && user.role) === 'user';
+            const isGuest = (user && user.role) === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
-            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy?.role === 'admin' || playback.startedBy?.role === 'superadmin');
+            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
             const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
-                const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
                 const filename = esc(s.filename);
                 const dur = s.duration;
@@ -1323,7 +1323,7 @@
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -1489,17 +1489,17 @@
 
         function closeSoundPanel() {
             selectedSound = null;
-            document.getElementById('soundPanel')?.classList.add('hidden');
+            const sp = document.getElementById('soundPanel'); if (sp) sp.classList.add('hidden');
             renderSoundsGrid();
         }
 
         async function saveSoundPanel() {
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
-            const filename = nameEl?.dataset.filename;
+            const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
-            const displayName = (nameEl?.value || '').trim() || filename;
-            const tagsRaw = (tagsEl?.value || '').trim();
+            const displayName = ((nameEl && nameEl.value) || '').trim() || filename;
+            const tagsRaw = ((tagsEl && tagsEl.value) || '').trim();
             const tags = tagsRaw ? tagsRaw.split(/[,\s]+/).map(t => t.trim()).filter(Boolean);
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
@@ -1533,15 +1533,15 @@
                 alert(msg);
                 return;
             }
-            if (user?.role === 'guest') guestLastPlayTime = Date.now();
-            playback.duration = data.duration ?? null;
+            if ((user && user.role) === 'guest') guestLastPlayTime = Date.now();
+            playback.duration = (data.duration != null ? data.duration : null);
             playback.startTime = Date.now();
-            playback.startTimeOffset = data.startTimeOffset ?? 0;
+            playback.startTimeOffset = (data.startTimeOffset != null ? data.startTimeOffset : 0);
             playback.serverCurrentTime = undefined;
             playback.status = 'playing';
-            playback.displayName = data.displayName ?? filename;
+            playback.displayName = (data.displayName != null ? data.displayName : filename);
             playback.filename = filename;
-            playback.startedBy = data.startedBy ?? { username: user?.username, role: user?.role };
+            playback.startedBy = (data.startedBy != null ? data.startedBy : { username: (user && user.username), role: (user && user.role) });
             pausedAt = 0;
             updateNowPlaying();
             updatePlayPauseButton();
@@ -1617,7 +1617,7 @@
 
         let lastServerCurrentTimeReceivedAt = 0;
         function isLocalPlayer() {
-            return playback.startedBy && playback.startedBy.username === user?.username;
+            return playback.startedBy && playback.startedBy.username === (user && user.username);
         }
         function getCurrentPlaybackTime() {
             if (isLocalPlayer()) {
@@ -1666,7 +1666,7 @@
                 const total = playback.duration != null ? playback.duration : waveformDuration;
                 drawWaveform(Math.min(current, total), total);
             }
-            if (user?.role === 'guest') {
+            if ((user && user.role) === 'guest') {
                 const r = getGuestCooldownRemaining();
                 if (r > 0 && r !== lastGuestCooldownShown) { lastGuestCooldownShown = r; renderSoundsGrid(); }
                 else if (r === 0 && lastGuestCooldownShown > 0) { lastGuestCooldownShown = 0; renderSoundsGrid(); }
@@ -1719,7 +1719,7 @@
             const stopAll = document.getElementById('stopAllBtn');
             const stopBtn = document.getElementById('stopBtn');
             const isActive = playback.status === 'playing' || playback.status === 'paused';
-            const adminCantStop = user?.role === 'admin' && playback.startedBy && (playback.startedBy.role === 'admin' || playback.startedBy.role === 'superadmin');
+            const adminCantStop = (user && user.role) === 'admin' && playback.startedBy && (playback.startedBy.role === 'admin' || playback.startedBy.role === 'superadmin');
             const disabled = !isActive || adminCantStop;
             if (stopAll) { stopAll.disabled = disabled; stopAll.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop playback'; }
             if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop'; }
@@ -1757,7 +1757,7 @@
             setTimeout(() => setInterval(refreshPlaybackState, 400), 600);
         }
         function startPendingCountPolling() {
-            if (pendingCountPollingStarted || user?.role !== 'superadmin') return;
+            if (pendingCountPollingStarted || (user && user.role) !== 'superadmin') return;
             pendingCountPollingStarted = true;
             fetchPendingCount();
             setInterval(fetchPendingCount, 30000);
@@ -1774,9 +1774,9 @@
                 }
                 playback.status = state.status;
                 playback.filename = state.filename;
-                playback.displayName = state.displayName ?? state.filename;
-                playback.startedBy = state.startedBy ?? null;
-                const amLocal = state.startedBy && state.startedBy.username === user?.username;
+                playback.displayName = (state.displayName != null ? state.displayName : state.filename);
+                playback.startedBy = (state.startedBy != null ? state.startedBy : null);
+                const amLocal = state.startedBy && state.startedBy.username === (user && user.username);
                 if (!amLocal) {
                     if (state.startTime != null) playback.startTime = Number(state.startTime);
                     if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
@@ -1799,11 +1799,11 @@
                 if (waveformData && totalDur > 0) {
                     drawWaveform(Math.min(current, totalDur), totalDur);
                 }
-                if (user?.role === 'user' || user?.role === 'guest') renderSoundsGrid();
+                if ((user && user.role) === 'user' || (user && user.role) === 'guest') renderSoundsGrid();
             });
         }
 
-        document.getElementById('waveformWrap')?.addEventListener('click', (e) => {
+        const ww = document.getElementById('waveformWrap'); if (ww) ww.addEventListener('click', (e) => {
             if (!waveformData || waveformDuration <= 0 || !playback.filename) return;
             const canvas = document.getElementById('waveformCanvas');
             const rect = canvas.getBoundingClientRect();
@@ -1820,14 +1820,14 @@
 
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
 
-        document.getElementById('channelSelect')?.addEventListener('change', (e) => savePrefs({ lastChannelId: e.target.value }));
+        const cs = document.getElementById('channelSelect'); if (cs) cs.addEventListener('change', (e) => savePrefs({ lastChannelId: e.target.value }));
 
         (function initTheme() {
             applyTheme(loadPrefs().theme);
-            document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
+            const tt = document.getElementById('themeToggle'); if (tt) tt.addEventListener('click', toggleTheme);
         })();
 
-        document.getElementById('soundFilterInput')?.addEventListener('input', (e) => {
+        const sfi = document.getElementById('soundFilterInput'); if (sfi) sfi.addEventListener('input', (e) => {
             soundFilter = (e.target.value || '').trim();
             savePrefs({ soundFilter });
             renderSoundsGrid();
@@ -1835,7 +1835,7 @@
 
         async function uploadSound(file) {
             const fileInput = document.getElementById('fileInput');
-            const f = file || fileInput?.files?.[0];
+            const f = file || (fileInput && fileInput.files && fileInput.files[0]);
             if (!f) return;
             const formData = new FormData();
             formData.append('soundFile', f);
@@ -1871,7 +1871,7 @@
                 e.preventDefault();
                 e.stopPropagation();
                 zone.classList.remove('drag-over');
-                const f = e.dataTransfer.files?.[0];
+                const f = e.dataTransfer.files && e.dataTransfer.files[0];
                 if (f) uploadSound(f);
             });
         })();
@@ -1890,8 +1890,8 @@
             updatePlayPauseButton();
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
             document.addEventListener('keydown', (e) => {
-                const tag = document.activeElement?.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+                const tag = document.activeElement && document.activeElement.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable)) return;
                 if (e.key >= '1' && e.key <= '9') {
                     const fav = getFavorites()[parseInt(e.key, 10) - 1];
                     if (fav) { e.preventDefault(); playSound(fav); }
