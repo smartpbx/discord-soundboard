@@ -188,8 +188,11 @@
         .player-recent.hidden { display: none !important; }
         .player-recent-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.5rem; }
         .player-recent-list { display: flex; flex-direction: column; gap: 0.35rem; }
-        .player-recent-item { padding: 0.4rem 0.5rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s; }
+        .player-recent-item { position: relative; padding: 0.4rem 0.5rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s; overflow: hidden; min-height: 48px; }
         .player-recent-item:hover { border-color: var(--accent); background: var(--surface); }
+        .player-recent-item .recent-waveform { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.25; pointer-events: none; display: block; }
+        .player-recent-item .recent-content { position: relative; z-index: 1; }
+        .player-recent-item .recent-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
         .volume-btn-wrap { display: flex; align-items: center; }
         .volume-btn { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.6rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
         .volume-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -750,18 +753,70 @@
             if (mobileView) renderMobileGrid();
         }
 
+        const waveformCache = {};
         function getRecentlyPlayed() {
             const arr = loadPrefs().recentPlayed;
             return Array.isArray(arr) ? arr.slice(0, 5) : [];
         }
-        function addToRecentlyPlayed(filename, displayName) {
+        function addToRecentlyPlayed(filename, displayName, playedBy, playedAt) {
             if (!filename) return;
             let list = getRecentlyPlayed();
             list = list.filter(function(x) { return x.filename !== filename; });
-            list.unshift({ filename: filename, displayName: displayName || filename });
+            list.unshift({ filename: filename, displayName: displayName || filename, playedBy: playedBy || null, playedAt: playedAt || Date.now() });
             list = list.slice(0, 5);
             savePrefs({ recentPlayed: list });
             renderRecentlyPlayed();
+        }
+        function formatRecentTime(ts) {
+            if (!ts || !Number.isFinite(ts)) return '—';
+            var sec = Math.floor((Date.now() - ts) / 1000);
+            if (sec < 60) return 'just now';
+            if (sec < 3600) return Math.floor(sec / 60) + ' min ago';
+            if (sec < 86400) return Math.floor(sec / 3600) + ' hr ago';
+            return Math.floor(sec / 86400) + ' day' + (sec >= 172800 ? 's' : '') + ' ago';
+        }
+        async function loadWaveformForRecent(filename) {
+            if (waveformCache[filename]) return;
+            try {
+                var res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
+                if (!res.ok) return;
+                var buf = await res.arrayBuffer();
+                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                var decoded = await ctx.decodeAudioData(buf);
+                var ch = decoded.getChannelData(0);
+                var duration = decoded.duration;
+                var bars = 60;
+                var step = Math.floor(ch.length / bars);
+                var peaks = [];
+                for (var i = 0; i < bars; i++) {
+                    var min = 0, max = 0;
+                    for (var j = 0; j < step; j++) {
+                        var v = ch[i * step + j];
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                    }
+                    peaks.push({ min: min, max: max });
+                }
+                waveformCache[filename] = { peaks: peaks, duration: duration };
+                renderRecentlyPlayed();
+            } catch (e) {}
+        }
+        function drawRecentWaveform(canvas, peaks, duration) {
+            if (!canvas || !peaks || !peaks.length) return;
+            var rect = canvas.getBoundingClientRect();
+            var w = canvas.width = rect.width || 200;
+            var h = canvas.height = rect.height || 48;
+            var ctx = canvas.getContext('2d');
+            var barCount = peaks.length;
+            var barW = Math.max(1, (w / barCount) - 0.5);
+            ctx.clearRect(0, 0, w, h);
+            peaks.forEach(function(peak, i) {
+                var x = (i / barCount) * w;
+                var center = h / 2;
+                var halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.45));
+                ctx.fillStyle = 'rgba(124, 58, 237, 0.5)';
+                ctx.fillRect(x, center - halfH, barW, halfH * 2);
+            });
         }
         function toggleRecentPlayed() {
             const expanded = loadPrefs().recentPlayerExpanded !== true;
@@ -774,6 +829,7 @@
             const btn = document.getElementById('recentToggleBtn');
             if (section) section.classList.toggle('hidden', !expanded);
             if (btn) btn.classList.toggle('expanded', expanded);
+            if (expanded) setTimeout(renderRecentlyPlayed, 50);
         }
         function renderRecentlyPlayed() {
             const list = getRecentlyPlayed();
@@ -785,8 +841,19 @@
                 el.innerHTML = list.map(function(item) {
                     var name = (item.displayName || item.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                     var fn = (item.filename || '').replace(/"/g, '&quot;');
-                    return '<button type="button" class="player-recent-item" data-filename="' + fn + '" onclick="playSound(this.dataset.filename)">' + name + '</button>';
+                    var by = (item.playedBy || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    var when = formatRecentTime(item.playedAt);
+                    return '<button type="button" class="player-recent-item" data-filename="' + fn + '" onclick="playSound(this.dataset.filename)"><canvas class="recent-waveform"></canvas><div class="recent-content"><div>' + name + '</div><div class="recent-meta">' + by + ' · ' + when + '</div></div></button>';
                 }).join('');
+                el.querySelectorAll('.recent-waveform').forEach(function(canvas, i) {
+                    var item = list[i];
+                    if (item && waveformCache[item.filename]) {
+                        drawRecentWaveform(canvas, waveformCache[item.filename].peaks, waveformCache[item.filename].duration);
+                    }
+                });
+                list.forEach(function(item) {
+                    if (!waveformCache[item.filename]) loadWaveformForRecent(item.filename);
+                });
             }
         }
 
@@ -1847,7 +1914,7 @@
             const timeEl = document.getElementById('progressTime');
             if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
             loadWaveform(filename);
-            addToRecentlyPlayed(filename, playback.displayName);
+            addToRecentlyPlayed(filename, playback.displayName, (user && user.username) || null, Date.now());
         }
 
         async function loadWaveform(filename) {
@@ -1880,6 +1947,7 @@
                 waveformData = peaks;
                 waveformDuration = duration;
                 waveformFilename = filename;
+                waveformCache[filename] = { peaks: peaks, duration: duration };
                 document.getElementById('waveformPlaceholder').style.display = 'none';
                 document.getElementById('waveformWrap').style.display = 'block';
                 drawWaveform(Math.min(getCurrentPlaybackTime(), duration), duration);
@@ -2086,7 +2154,7 @@
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
-                if ((state.status === 'playing' || state.status === 'paused') && state.filename && state.filename !== prevFilename) addToRecentlyPlayed(state.filename, state.displayName);
+                if ((state.status === 'playing' || state.status === 'paused') && state.filename && state.filename !== prevFilename) addToRecentlyPlayed(state.filename, state.displayName, (state.startedBy && state.startedBy.username) || null, Date.now());
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();

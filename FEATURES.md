@@ -23,7 +23,7 @@ Features to implement, in rough priority order.
 
 ## Medium Effort
 
-- [ ] **Recently played** – Last 5–10 sounds for quick re-play
+- [x] **Recently played** – Last 5 sounds for quick re-play (with waveform background, who played, when)
 - [x] **Favorites** – Up to 9 favorites, mapped to keys 1–9 (saved in preferences)
 - [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
 - [ ] **Sound button icons** – Icons, emojis, or custom images on each sound button
@@ -47,6 +47,7 @@ Features to implement, in rough priority order.
 - [x] Playback hierarchy (users/guests can't override admin/superadmin)
 - [x] Waveform display for remote viewers (guests)
 - [x] Pause/resume with correct position
+- [x] Recently played (last 5, waveform background, who played & when)
 - [x] Remember preferences
 - [x] Pending uploads badge on Superadmin tab
 
