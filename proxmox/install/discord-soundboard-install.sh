@@ -9,6 +9,9 @@ set -e
 APP_DIR="${APP_DIR:-/opt/discord-soundboard}"
 GIT_URL="${GIT_URL:-https://github.com/smartpbx/discord-soundboard.git}"
 
+# Disable wait-online so container boots faster (community-scripts pattern)
+systemctl disable -q --now systemd-networkd-wait-online.service 2>/dev/null || true
+
 echo "[*] Installing dependencies..."
 apt-get update -qq
 apt-get install -y curl git ffmpeg build-essential python3

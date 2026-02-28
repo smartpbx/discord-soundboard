@@ -113,11 +113,25 @@ echo "[*] Using template: ${TEMPLATE_DEBIAN}"
 # Create CT if not exists, set root password, start, wait for boot
 if ! pct status "${CTID}" &>/dev/null; then
     echo "[*] Creating LXC ${CTID}..."
+    # Build net0: must include ip=dhcp or ip=CIDR so eth0 comes up (community-scripts pattern)
     NET="name=eth0,bridge=${BRIDGE}"
-    [[ -n "${GW}" ]] && NET="${NET},gw=${GW}"
-    [[ -n "${IP}" ]] && NET="${NET},ip=${IP}"
+    if [[ -n "${IP}" ]]; then
+        NET="${NET},ip=${IP}"
+        [[ -n "${GW}" ]] && NET="${NET},gw=${GW}"
+    else
+        NET="${NET},ip=dhcp"
+        [[ -n "${GW}" ]] && NET="${NET},gw=${GW}"
+    fi
+    # Nameserver at create time (Proxmox injects into container); fallback if host has none
+    NS_FOR_CT=""
+    HOST_NS_CREATE=$(grep "^nameserver" /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+    if [[ -n "$HOST_NS_CREATE" ]]; then
+        NS_FOR_CT="--nameserver ${HOST_NS_CREATE}"
+    else
+        NS_FOR_CT="--nameserver 8.8.8.8"
+    fi
     pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
-        --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0
+        --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0 ${NS_FOR_CT} --onboot 1
 
     ROOT_PASSWORD="${ROOT_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
     echo "[*] Starting container..."
@@ -148,6 +162,22 @@ if ! pct status "${CTID}" | grep -q running; then
         sleep 2
     done
 fi
+
+# Wait for network (eth0 up + IP) before apt/curl - community-scripts pattern
+echo "[*] Waiting for container network..."
+ip_in_ct=""
+for i in $(seq 1 25); do
+    ip_in_ct=$(pct exec "${CTID}" -- ip -4 addr show dev eth0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1)
+    [[ -n "$ip_in_ct" ]] && break
+    sleep 1
+done
+if [[ -z "$ip_in_ct" ]]; then
+    echo "[!] No IP on eth0 after 25s. Check bridge ${BRIDGE} and DHCP."
+    echo "    If resuming a failed install, destroy and re-run: pct stop ${CTID}; pct destroy ${CTID}"
+    echo "    Debug: pct exec ${CTID} -- ip a"
+    exit 1
+fi
+echo "[*] Container network ready (${ip_in_ct})"
 
 # New containers often have no DNS at first; set nameservers before any apt/curl
 echo "[*] Ensuring container DNS..."

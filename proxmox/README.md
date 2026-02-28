@@ -142,3 +142,15 @@ pct exec 200 -- bash -c 'cd /opt/discord-soundboard && ./scripts/restore.sh /opt
 
 - **Sounds:**  
   Upload via the Web UI; files and metadata live under `/opt/discord-soundboard/sounds/`. Back them up with `./scripts/backup.sh` (see Backup and restore above).
+
+## Troubleshooting
+
+**"No IP on eth0" / eth0 DOWN / DNS fails:** The container needs `ip=dhcp` (or static IP) in its network config. If you're resuming a failed install on an existing container that was created before this fix, destroy it and run the installer again:
+
+```bash
+pct stop 109
+pct destroy 109
+# Then re-run the install script
+```
+
+**DHCP not working:** Ensure your bridge (default `vmbr0`) has access to a DHCP server. For static IP: `IP="192.168.1.200/24" GW="192.168.1.1" ./install-discord-soundboard.sh`
