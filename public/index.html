@@ -510,6 +510,7 @@
                 return;
             }
             await checkAuth();
+            startPlaybackPolling();
             fetchSounds();
             fetchFolders();
             return false;
@@ -532,6 +533,7 @@
                 return false;
             }
             await checkAuth();
+            startPlaybackPolling();
             fetchChannels();
             fetchSounds();
             fetchFolders();
@@ -1239,6 +1241,14 @@
             return m + ':' + (sec < 10 ? '0' : '') + sec;
         }
 
+        let playbackPollingStarted = false;
+        function startPlaybackPolling() {
+            if (playbackPollingStarted) return;
+            playbackPollingStarted = true;
+            refreshPlaybackState();
+            setTimeout(() => setInterval(refreshPlaybackState, 400), 600);
+        }
+
         function refreshPlaybackState() {
             if (!user) return;
             api('/api/playback-state').then(async (res) => {
@@ -1341,7 +1351,7 @@
             fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;
-            setTimeout(() => setInterval(refreshPlaybackState, 400), 600);
+            startPlaybackPolling();
             setInterval(tickWaveform, 100);
             fetchChannels();
             fetchSounds();
