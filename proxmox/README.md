@@ -1,8 +1,10 @@
 # Proxmox LXC Install Script
 
-Install the Discord Soundboard as an LXC container on your Proxmox host in **one run** (like [Proxmox VE Helper-Scripts](https://community-scripts.github.io/ProxmoxVE/)).
+Install the Discord Soundboard as an LXC container on your Proxmox host in **one run**.
 
 **Repo:** https://github.com/smartpbx/discord-soundboard
+
+**Standalone:** This installer does **not** use or depend on [community-scripts/ProxmoxVE](https://github.com/community-scripts/ProxmoxVE). All logic lives in this repo: a **host script** (`install-discord-soundboard.sh`) and a **container-side script** (`install/discord-soundboard-install.sh`) that runs inside the LXC.
 
 ## Prerequisites
 

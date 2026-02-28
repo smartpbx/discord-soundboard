@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Discord Soundboard - Proxmox LXC install script (single run)
-# Run once on your Proxmox host. Creates container, sets password, starts, installs.
+# Run once on your Proxmox host. Creates container, sets password, starts, runs install script inside.
+#
+# Standalone: no integration with community-scripts/ProxmoxVE. We use only our own logic;
+# layout (host script + install/AppName-install.sh inside container) is inspired by their guide.
 # Usage: ./install-discord-soundboard.sh [install|update]
-# See: https://community-scripts.github.io/ProxmoxVE/
 
 set -e
 
@@ -70,15 +72,22 @@ fi
 # --- Install (single run) ---
 echo "[*] Discord Soundboard - Proxmox LXC installer (single run)"
 
-# Use next free CTID unless CTID is set
-if [[ -z "${CTID:-}" ]]; then
-    CTID=$(get_next_ctid)
-    echo "[*] Using next free container ID: ${CTID}"
+# Resolve CTID: prefer existing container with our hostname (so reruns continue on same CT), else next free or user's CTID
+if [[ -n "${CTID:-}" ]]; then
+    echo "[*] Using container ID: ${CTID} (from CTID)"
 else
-    if pct status "${CTID}" &>/dev/null || [[ -f "/etc/pve/lxc/${CTID}.conf" ]]; then
-        echo "[*] Using existing container ID: ${CTID}"
-    else
-        echo "[*] Using container ID: ${CTID}"
+    # Look for existing container with hostname discord-soundboard (e.g. from a previous failed run)
+    for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
+        conf_hostname=$(pct config "$id" 2>/dev/null | grep '^hostname:' | sed 's/.*: *//;s/^ *//;s/ *$//')
+        if [[ "$conf_hostname" == "${HOSTNAME}" ]]; then
+            CTID="$id"
+            echo "[*] Found existing container with hostname ${HOSTNAME}: ${CTID} (resuming install)"
+            break
+        fi
+    done
+    if [[ -z "${CTID:-}" ]]; then
+        CTID=$(get_next_ctid)
+        echo "[*] Using next free container ID: ${CTID}"
     fi
 fi
 
@@ -126,7 +135,7 @@ if ! pct status "${CTID}" &>/dev/null; then
         exit 1
     fi
     echo "[*] Setting root password..."
-    echo "root:${ROOT_PASSWORD}" | pct exec "${CTID}" -- chpasswd
+    pct exec "${CTID}" -- bash -c "echo 'root:${ROOT_PASSWORD}' | chpasswd"
     echo "[+] Container ${CTID} is running. Root password: ${ROOT_PASSWORD} (change with: pct exec ${CTID} -- passwd)"
 fi
 
@@ -140,59 +149,12 @@ if ! pct status "${CTID}" | grep -q running; then
     done
 fi
 
-# Install dependencies and app inside CT
-echo "[*] Installing dependencies in container..."
-pct exec "${CTID}" -- bash -c "apt-get update -qq && apt-get install -y curl git ffmpeg build-essential python3"
-pct exec "${CTID}" -- bash -c "curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs"
-
-echo "[*] Cloning app to ${APP_DIR}..."
-pct exec "${CTID}" -- bash -c "rm -rf ${APP_DIR} && git clone '${GIT_URL}' ${APP_DIR}"
-pct exec "${CTID}" -- bash -c "chmod +x ${APP_DIR}/scripts/*.sh 2>/dev/null || true"
-
-echo "[*] Installing npm dependencies..."
-pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && npm install"
-
-# .env
-if ! pct exec "${CTID}" -- test -f "${APP_DIR}/.env" 2>/dev/null; then
-    echo "[*] Creating .env (edit: pct exec ${CTID} -- nano ${APP_DIR}/.env)"
-    SESSION_RANDOM=$(openssl rand -hex 32)
-    pct exec "${CTID}" -- bash -c "cat > ${APP_DIR}/.env << 'ENVFILE'
-DISCORD_TOKEN=your_bot_token_here
-PORT=3000
-SESSION_SECRET=${SESSION_RANDOM}
-ADMIN_PASSWORD=change_admin_password
-USER_PASSWORD=change_user_password
-ENVFILE"
-    echo "[!] Set DISCORD_TOKEN and passwords in ${APP_DIR}/.env"
-fi
-
-# systemd service
-echo "[*] Installing systemd service..."
-pct exec "${CTID}" -- bash -c "cat > /etc/systemd/system/discord-soundboard.service << 'SVCEOF'
-[Unit]
-Description=Discord Soundboard
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=APP_DIR_PLACEHOLDER
-EnvironmentFile=APP_DIR_PLACEHOLDER/.env
-ExecStart=/usr/bin/node server.js
-Restart=unless-stopped
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF"
-pct exec "${CTID}" -- sed -i \"s|APP_DIR_PLACEHOLDER|${APP_DIR}|g\" /etc/systemd/system/discord-soundboard.service
-pct exec "${CTID}" -- systemctl daemon-reload
-pct exec "${CTID}" -- systemctl enable discord-soundboard
-pct exec "${CTID}" -- systemctl start discord-soundboard
-
-# Update command and login banner
-pct exec "${CTID}" -- bash -c "echo '#!/bin/sh' > /usr/local/bin/update && echo 'export APP_DIR=${APP_DIR}' >> /usr/local/bin/update && echo 'exec \${APP_DIR}/scripts/update.sh' >> /usr/local/bin/update && chmod +x /usr/local/bin/update"
-pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && ./scripts/install-motd.sh"
+# Run container-side install script (same pattern as community-scripts install/AppName-install.sh)
+# Install curl in container first (minimal template may not have it), then fetch and run install script inside CT.
+INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install/discord-soundboard-install.sh}"
+SESSION_RANDOM=$(openssl rand -hex 32 2>/dev/null || true)
+echo "[*] Running install inside container..."
+pct exec "${CTID}" -- bash -c "apt-get update -qq && apt-get install -y curl ca-certificates && curl -fsSL '${INSTALL_SCRIPT_URL}' | env APP_DIR='${APP_DIR}' GIT_URL='${GIT_URL}' SESSION_SECRET='${SESSION_RANDOM}' bash -s"
 
 # Show access info
 CONTAINER_IP=$(pct exec "${CTID}" -- hostname -I 2>/dev/null | awk '{print $1}' || true)
