@@ -1109,13 +1109,13 @@
                 waveformFilename = filename;
                 document.getElementById('waveformPlaceholder').style.display = 'none';
                 document.getElementById('waveformWrap').style.display = 'block';
-                drawWaveform(Math.min(getCurrentPlaybackTime(), duration));
+                drawWaveform(Math.min(getCurrentPlaybackTime(), duration), duration);
             } catch (e) {
                 console.warn('Waveform load failed', e);
             }
         }
 
-        function drawWaveform(currentTime) {
+        function drawWaveform(currentTime, totalDuration) {
             const canvas = document.getElementById('waveformCanvas');
             const wrap = document.getElementById('waveformWrap');
             if (!wrap || wrap.style.display === 'none' || !waveformData || !waveformData.length) return;
@@ -1126,7 +1126,8 @@
             const ctx = canvas.getContext('2d');
             const barCount = waveformData.length;
             const barW = Math.max(1, (w / barCount) - 1);
-            const progress = waveformDuration > 0 ? Math.min(1, currentTime / waveformDuration) : 0;
+            const total = totalDuration != null && totalDuration > 0 ? totalDuration : waveformDuration;
+            const progress = total > 0 ? Math.min(1, currentTime / total) : 0;
             const playheadX = progress * w;
             ctx.clearRect(0, 0, w, h);
             waveformData.forEach((peak, i) => {
@@ -1142,6 +1143,8 @@
         }
 
         function getCurrentPlaybackTime() {
+            const isRemoteViewer = playback.startedBy && playback.startedBy.username !== user?.username;
+            if (isRemoteViewer && playback.serverCurrentTime != null) return playback.serverCurrentTime;
             if (playback.status === 'playing' && playback.startTime != null) {
                 const start = Number(playback.startTime);
                 if (!Number.isFinite(start)) return 0;
@@ -1164,7 +1167,8 @@
             }
             if (waveformData && waveformDuration > 0 && isActive) {
                 const current = getCurrentPlaybackTime();
-                drawWaveform(Math.min(current, waveformDuration));
+                const total = playback.duration != null ? playback.duration : waveformDuration;
+                drawWaveform(Math.min(current, total), total);
             }
             if (user?.role === 'guest') {
                 const r = getGuestCooldownRemaining();
@@ -1271,19 +1275,21 @@
                 if (state.startTime != null) playback.startTime = Number(state.startTime);
                 if (state.duration != null) playback.duration = state.duration;
                 if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; waveformData = null; waveformFilename = null; }
+                if (state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; waveformData = null; waveformFilename = null; }
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();
                 updateStopButtons();
 
                 const timeEl = document.getElementById('progressTime');
-                let current = getCurrentPlaybackTime();
+                let current = playback.serverCurrentTime != null ? playback.serverCurrentTime : getCurrentPlaybackTime();
                 const dur = playback.duration;
                 timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
 
-                if (waveformData && waveformDuration > 0) {
-                    drawWaveform(Math.min(current, waveformDuration));
+                const totalDur = dur != null ? dur : waveformDuration;
+                if (waveformData && totalDur > 0) {
+                    drawWaveform(Math.min(current, totalDur), totalDur);
                 }
                 if (user?.role === 'user' || user?.role === 'guest') renderSoundsGrid();
             });

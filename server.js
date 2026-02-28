@@ -828,6 +828,7 @@ app.post('/api/play', requireAuth, (req, res) => {
             filename: safeFilename,
             displayName,
             startTime: Date.now(),
+            startTimeOffset: startTime,
             duration,
             startedBy,
         };
@@ -854,6 +855,11 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         state.displayName = meta.displayName ?? meta.filename;
         state.startTime = typeof playbackState.startTime === 'number' ? playbackState.startTime : Date.now();
         if (state.duration == null && playbackState.filename === meta.filename) state.duration = playbackState.duration;
+        const offset = playbackState.startTimeOffset || 0;
+        const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
+        state.currentTime = Math.max(0, Math.min((state.duration || 999999), offset + elapsed));
+    } else if (status === 'paused' && playbackState.pausedAt != null) {
+        state.currentTime = playbackState.pausedAt;
     }
     res.json(state);
 });
@@ -867,7 +873,7 @@ app.post('/api/stop', requireAdmin, (req, res) => {
         return res.status(403).json({ error: 'Only superadmin can stop admin playback.' });
     }
     player.stop();
-    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
     res.json({ ok: true });
 });
 
@@ -877,6 +883,9 @@ app.post('/api/pause', requireAdmin, (req, res) => {
     if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
         return res.status(403).json({ error: 'Only superadmin can pause admin playback.' });
     }
+    const offset = playbackState.startTimeOffset || 0;
+    const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
+    playbackState.pausedAt = Math.max(0, Math.min((playbackState.duration || 999999), offset + elapsed));
     player.pause(true);
     res.json({ ok: true });
 });
@@ -887,6 +896,10 @@ app.post('/api/resume', requireAdmin, (req, res) => {
     if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
         return res.status(403).json({ error: 'Only superadmin can resume admin playback.' });
     }
+    const fromPaused = playbackState.pausedAt ?? 0;
+    playbackState.startTime = Date.now();
+    playbackState.startTimeOffset = fromPaused;
+    playbackState.pausedAt = undefined;
     player.unpause();
     res.json({ ok: true });
 });
