@@ -24,6 +24,34 @@
             --radius-sm: 8px;
             --shadow: 0 4px 24px rgba(0,0,0,0.4);
         }
+        [data-theme="light"] {
+            --bg: #f4f4f5;
+            --surface: #ffffff;
+            --surface-hover: #e4e4e7;
+            --border: #d4d4d8;
+            --text: #18181b;
+            --text-muted: #71717a;
+            --accent: #7c3aed;
+            --accent-hover: #6d28d9;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --success: #22c55e;
+            --shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+        [data-theme="light"] .waveform-placeholder { color: var(--text-muted); }
+        [data-theme="light"] .sound-btn:hover:not(:disabled) { background: var(--border); }
+        [data-theme="light"] canvas { background: transparent; }
+        [data-theme="light"] .player { background: linear-gradient(135deg, var(--surface) 0%, #f0f0f2 100%); }
+        [data-theme="light"] .waveform-wrap { background: rgba(0,0,0,0.06); }
+        .theme-toggle {
+            position: fixed; top: 1rem; right: 1rem; z-index: 100;
+            width: 36px; height: 36px; padding: 0;
+            border: 1px solid var(--border); border-radius: var(--radius-sm);
+            background: var(--surface); color: var(--text-muted);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 1.1rem; transition: color 0.15s, border-color 0.15s;
+        }
+        .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
         * { box-sizing: border-box; }
         body {
             font-family: 'DM Sans', system-ui, sans-serif;
@@ -254,6 +282,10 @@
     </style>
 </head>
 <body>
+    <script>
+        (function(){try{var p=localStorage.getItem('soundboard-prefs');var t=p?JSON.parse(p).theme:null;document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){}})();
+    </script>
+    <button type="button" class="theme-toggle" id="themeToggle" title="Toggle light/dark theme" aria-label="Toggle theme">🌙</button>
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
             <h1>🔊 Soundboard</h1>
@@ -456,6 +488,18 @@
             soundFilter = prefs.soundFilter || '';
             const filterInput = document.getElementById('soundFilterInput');
             if (filterInput) filterInput.value = soundFilter;
+        }
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme || 'dark');
+            const btn = document.getElementById('themeToggle');
+            if (btn) btn.textContent = (theme === 'light') ? '🌙' : '☀️';
+        }
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            applyTheme(next);
+            savePrefs({ theme: next });
         }
 
         async function api(path, opts = {}) {
@@ -1410,6 +1454,11 @@
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
 
         document.getElementById('channelSelect')?.addEventListener('change', (e) => savePrefs({ lastChannelId: e.target.value }));
+
+        (function initTheme() {
+            applyTheme(loadPrefs().theme);
+            document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
+        })();
 
         document.getElementById('soundFilterInput')?.addEventListener('input', (e) => {
             soundFilter = (e.target.value || '').trim();

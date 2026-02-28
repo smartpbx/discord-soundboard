@@ -15,7 +15,7 @@ Features to implement, in rough priority order.
 - [ ] **Keyboard shortcuts** – Space: play/pause, S: stop, number keys 1–9 for first 9 sounds, Escape: close panels
 - [x] **Sound preview** – Play locally in browser before sending to Discord (test volume/content)
 - [x] **Remember preferences** – Last channel, folder, sound filter (localStorage)
-- [ ] **Theme toggle** – Dark/light/system mode
+- [x] **Theme toggle** – Dark/light mode (saved in preferences)
 - [ ] **Compact view** – Smaller sound buttons, more on screen
 
 ---
