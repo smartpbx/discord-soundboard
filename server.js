@@ -790,6 +790,13 @@ app.post('/api/play', requireAuth, (req, res) => {
         }
     }
 
+    const currentStatus = player.state.status;
+    const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
+    const startedByRole = playbackState.startedBy?.role;
+    if (isSomeonePlaying && (startedByRole === 'admin' || startedByRole === 'superadmin') && (role === 'user' || isGuest)) {
+        return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
+    }
+
     const startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : 0;
 
     try {

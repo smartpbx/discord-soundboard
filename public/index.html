@@ -424,6 +424,7 @@
         let pausedAt = 0;
         let waveformData = null;
         let waveformDuration = 0;
+        let waveformFilename = null;
         let reorderMode = false;
         let playbackLocked = false;
         let soundsList = [];
@@ -936,7 +937,9 @@
             const isUser = user?.role === 'user';
             const isGuest = user?.role === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
-            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true));
+            const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && (playback.startedBy?.role === 'admin' || playback.startedBy?.role === 'superadmin');
+            const cannotOverride = (isUser || isGuest) && adminPlaying;
+            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
@@ -947,7 +950,7 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 let title = '';
-                if (!canPlay) title = playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play');
+                if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play'));
                 else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
@@ -1077,6 +1080,7 @@
         async function loadWaveform(filename) {
             waveformData = null;
             waveformDuration = 0;
+            waveformFilename = null;
             document.getElementById('waveformPlaceholder').style.display = 'block';
             document.getElementById('waveformWrap').style.display = 'none';
             if (!filename) return;
@@ -1102,9 +1106,10 @@
                 }
                 waveformData = peaks;
                 waveformDuration = duration;
+                waveformFilename = filename;
                 document.getElementById('waveformPlaceholder').style.display = 'none';
                 document.getElementById('waveformWrap').style.display = 'block';
-                drawWaveform(playback.startTimeOffset || 0);
+                drawWaveform(Math.min(getCurrentPlaybackTime(), duration));
             } catch (e) {
                 console.warn('Waveform load failed', e);
             }
@@ -1176,6 +1181,7 @@
             pausedAt = 0;
             waveformData = null;
             waveformDuration = 0;
+            waveformFilename = null;
             document.getElementById('waveformPlaceholder').style.display = 'block';
             document.getElementById('waveformPlaceholder').textContent = 'Waveform will appear when a sound is playing';
             document.getElementById('waveformWrap').style.display = 'none';
@@ -1265,7 +1271,8 @@
                 if (state.startTime != null) playback.startTime = Number(state.startTime);
                 if (state.duration != null) playback.duration = state.duration;
                 if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; }
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; waveformData = null; waveformFilename = null; }
+                if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();
                 updateStopButtons();
@@ -1278,6 +1285,7 @@
                 if (waveformData && waveformDuration > 0) {
                     drawWaveform(Math.min(current, waveformDuration));
                 }
+                if (user?.role === 'user' || user?.role === 'guest') renderSoundsGrid();
             });
         }
 
