@@ -190,9 +190,10 @@
         .player-recent-list { display: flex; flex-direction: column; gap: 0.35rem; }
         .player-recent-item { position: relative; padding: 0.4rem 0.5rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s; overflow: hidden; min-height: 48px; }
         .player-recent-item:hover { border-color: var(--accent); background: var(--surface); }
-        .player-recent-item .recent-waveform { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.25; pointer-events: none; display: block; }
-        .player-recent-item .recent-content { position: relative; z-index: 1; }
-        .player-recent-item .recent-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+        .player-recent-item .recent-waveform { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.2; pointer-events: none; display: block; }
+        .player-recent-item .recent-content { position: relative; z-index: 1; padding: 0.15rem 0; }
+        .player-recent-item .recent-content > div:first-child { font-weight: 500; }
+        .player-recent-item .recent-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.15rem; line-height: 1.3; }
         .volume-btn-wrap { display: flex; align-items: center; }
         .volume-btn { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.6rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
         .volume-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -768,7 +769,7 @@
             renderRecentlyPlayed();
         }
         function formatRecentTime(ts) {
-            if (!ts || !Number.isFinite(ts)) return '—';
+            if (!ts || !Number.isFinite(ts)) return 'unknown';
             var sec = Math.floor((Date.now() - ts) / 1000);
             if (sec < 60) return 'just now';
             if (sec < 3600) return Math.floor(sec / 60) + ' min ago';
@@ -841,7 +842,7 @@
                 el.innerHTML = list.map(function(item) {
                     var name = (item.displayName || item.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                     var fn = (item.filename || '').replace(/"/g, '&quot;');
-                    var by = (item.playedBy || '—').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    var by = (item.playedBy || 'Unknown').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     var when = formatRecentTime(item.playedAt);
                     return '<button type="button" class="player-recent-item" data-filename="' + fn + '" onclick="playSound(this.dataset.filename)"><canvas class="recent-waveform"></canvas><div class="recent-content"><div>' + name + '</div><div class="recent-meta">' + by + ' · ' + when + '</div></div></button>';
                 }).join('');
