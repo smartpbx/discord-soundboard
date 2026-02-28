@@ -44,15 +44,8 @@
         [data-theme="light"] canvas { background: transparent; }
         [data-theme="light"] .player { background: linear-gradient(135deg, var(--surface) 0%, #f0f0f2 100%); }
         [data-theme="light"] .waveform-wrap { background: rgba(0,0,0,0.06); }
-        .theme-toggle {
-            position: fixed; top: 1rem; right: 1rem; z-index: 100;
-            width: 36px; height: 36px; padding: 0;
-            border: 1px solid var(--border); border-radius: var(--radius-sm);
-            background: var(--surface); color: var(--text-muted);
-            cursor: pointer; display: flex; align-items: center; justify-content: center;
-            font-size: 1.1rem; transition: color 0.15s, border-color 0.15s;
-        }
-        .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
+        .theme-toggle-login { width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-hover); color: var(--text-muted); cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; }
+        .theme-toggle-login:hover { color: var(--accent); border-color: var(--accent); }
         * { box-sizing: border-box; }
         body {
             font-family: 'DM Sans', system-ui, sans-serif;
@@ -97,17 +90,28 @@
         .login-card input:focus { outline: none; border-color: var(--accent); }
         .login-card .btn { width: 100%; padding: 0.75rem; margin-top: 0.5rem; }
         .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
+        .login-card .signup-link { font-size: 0.9rem; margin-top: 0.75rem; text-align: center; }
+        .login-card .signup-link a { color: var(--accent); cursor: pointer; }
+        .login-card .signup-link a:hover { text-decoration: underline; }
+        .login-card .register-form { display: none; margin-top: 0.5rem; }
+        .login-card .register-form.visible { display: block; }
         .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
         .header-row { flex-wrap: wrap; }
         .header-row h1 { font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
         .header-right { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-        .main-tabs { display: flex; gap: 0.25rem; }
-        .main-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; position: relative; }
-        .main-tab:hover { border-color: var(--accent); }
-        .main-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
-        .main-tab .pending-badge { position: absolute; top: -4px; right: -4px; min-width: 1.1rem; height: 1.1rem; padding: 0 0.25rem; font-size: 0.7rem; font-weight: 600; line-height: 1.1rem; text-align: center; background: var(--danger); color: white; border-radius: 10px; }
-        .user-badge { font-size: 0.75rem; color: var(--text-muted); }
-        .user-badge span { color: var(--accent); font-weight: 500; }
+        .header-hamburger-wrap { position: relative; }
+        .header-hamburger-btn { position: relative; width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+        .header-hamburger-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .header-hamburger-btn .pending-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; background: var(--danger); border-radius: 50%; }
+        .header-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 200px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; padding: 0.5rem; }
+        .header-menu.hidden { display: none !important; }
+        .header-menu-user { font-size: 0.85rem; color: var(--text-muted); padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 0.35rem; }
+        .header-menu-user span { color: var(--accent); font-weight: 500; }
+        .header-menu-item { display: block; width: 100%; padding: 0.5rem 0.6rem; text-align: left; font-size: 0.85rem; background: none; border: none; border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+        .header-menu-item:hover { background: var(--surface-hover); }
+        .header-menu-item .pending-badge { margin-left: 0.35rem; padding: 0.1rem 0.35rem; font-size: 0.7rem; background: var(--danger); color: white; border-radius: 10px; }
+        .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+        .superadmin-close-btn:hover { border-color: var(--accent); color: var(--accent); }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -434,10 +438,12 @@
     <script>
         (function(){try{var p=localStorage.getItem('soundboard-prefs');var t=p?JSON.parse(p).theme:null;document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){}})();
     </script>
-    <button type="button" class="theme-toggle" id="themeToggle" title="Toggle light/dark theme" aria-label="Toggle theme">🌙</button>
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
-            <h1>🔊 Soundboard</h1>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
+                <h1 style="margin:0">🔊 Soundboard</h1>
+                <button type="button" class="theme-toggle-login" id="themeToggleLogin" title="Toggle light/dark theme" aria-label="Toggle theme" onclick="toggleTheme()">🌙</button>
+            </div>
             <form id="loginForm" onsubmit="return doLogin(event)">
                 <label for="loginUser">Username</label>
                 <input type="text" id="loginUser" name="username" placeholder="Username" autocomplete="username" required>
@@ -447,19 +453,39 @@
                 <div class="login-error" id="loginError"></div>
                 <div class="guest-divider" id="guestDivider" style="display:none; margin: 1rem 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">— or —</div>
                 <button type="button" class="btn btn-ghost" id="guestBtn" style="display:none; width:100%;" onclick="doGuestLogin()">Continue as guest</button>
+                <div class="signup-link"><a id="showSignupLink" onclick="showRegisterForm()">Sign up</a></div>
             </form>
+            <div class="register-form" id="registerForm">
+                <h2 style="font-size: 1.1rem; margin: 0 0 1rem;">Create account</h2>
+                <form id="registerFormEl" onsubmit="return doRegister(event)">
+                    <label for="regUser">Username</label>
+                    <input type="text" id="regUser" placeholder="2–32 chars, letters, numbers, _ -" autocomplete="username" required>
+                    <label for="regPass">Password</label>
+                    <input type="password" id="regPass" placeholder="At least 6 characters" autocomplete="new-password" required>
+                    <label for="regPassConfirm">Confirm password</label>
+                    <input type="password" id="regPassConfirm" placeholder="Repeat password" autocomplete="new-password" required>
+                    <button type="submit" class="btn btn-primary">Sign up</button>
+                    <div class="login-error" id="registerError"></div>
+                </form>
+                <div class="signup-link" style="margin-top: 0.5rem;"><a onclick="showLoginForm()">Back to login</a></div>
+            </div>
         </div>
     </div>
 
     <div class="app hidden" id="app">
         <div class="header-row">
             <h1>🔊 Soundboard</h1>
-            <div class="header-right">
-                <div class="main-tabs superadmin-only hidden" id="mainTabs">
-                    <button type="button" class="main-tab active" data-tab="sounds" onclick="switchMainTab('sounds')">Sounds</button>
-                    <button type="button" class="main-tab" data-tab="superadmin" onclick="switchMainTab('superadmin')">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
+            <div class="header-right header-hamburger-wrap">
+                <button type="button" class="header-hamburger-btn" id="headerHamburgerBtn" onclick="toggleHeaderMenu()" title="Menu" aria-label="Menu">
+                    <span style="line-height:1">☰</span>
+                    <span class="pending-dot hidden" id="headerPendingDot"></span>
+                </button>
+                <div class="header-menu hidden" id="headerMenu">
+                    <div class="header-menu-user">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span></div>
+                    <button type="button" class="header-menu-item" id="headerMenuTheme" onclick="toggleTheme(); updateHeaderMenuThemeLabel();">Theme: <span id="headerMenuThemeLabel">Dark</span></button>
+                    <button type="button" class="header-menu-item" onclick="logout(); closeHeaderMenu();">Log out</button>
+                    <button type="button" class="header-menu-item superadmin-only hidden" id="headerMenuSuperadmin" onclick="switchMainTab('superadmin'); closeHeaderMenu();">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
                 </div>
-                <div class="user-badge">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span> <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem;" onclick="logout()">Log out</button></div>
             </div>
         </div>
 
@@ -613,7 +639,11 @@
         </div>
 
         <div id="superadminView" class="main-view hidden">
-        <div class="card" id="superadminCard">
+        <div class="card" id="superadminCard" style="position:relative">
+            <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+                <span>Superadmin</span>
+                <button type="button" class="superadmin-close-btn" onclick="switchMainTab('sounds')" title="Back to soundboard">✕</button>
+            </div>
             <div class="card-title">Guest Access</div>
             <div class="settings-row" style="margin-bottom: 0.5rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
@@ -621,6 +651,7 @@
                     <span>Allow guest access (no login)</span>
                 </label>
             </div>
+            <div class="card-title" style="margin-top: 1rem;">Guest Playback Limits</div>
             <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
                     <span>Max duration (s):</span>
@@ -631,21 +662,49 @@
                     <input type="number" id="guestCooldownInput" min="0" max="300" value="10" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestCooldown(this.value)">
                 </label>
             </div>
-            <div class="card-title" style="margin-top: 1rem;">User & Guest Uploads</div>
+            <div class="card-title" style="margin-top: 1rem;">Guest Uploads</div>
             <div class="settings-row" style="margin-bottom: 0.5rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                    <input type="checkbox" id="userUploadEnabledToggle" onchange="setUserUploadEnabled(this.checked)">
-                    <span>Allow users and guests to upload (goes to moderation queue)</span>
+                    <input type="checkbox" id="guestUploadEnabledToggle" onchange="setGuestUploadEnabled(this.checked)">
+                    <span>Allow guests to upload (goes to moderation queue)</span>
                 </label>
             </div>
             <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
                     <span>Max duration (s):</span>
-                    <input type="number" id="maxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setMaxUploadDuration(this.value)">
+                    <input type="number" id="guestMaxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxUploadDuration(this.value)">
                 </label>
                 <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
                     <span>Max size (KB):</span>
-                    <input type="number" id="maxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setMaxUploadBytes(this.value)">
+                    <input type="number" id="guestMaxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxUploadBytes(this.value)">
+                </label>
+            </div>
+            <div class="card-title" style="margin-top: 1rem;">User Playback Limits</div>
+            <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max duration (s):</span>
+                    <input type="number" id="userMaxDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxDuration(this.value)">
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Cooldown (s):</span>
+                    <input type="number" id="userCooldownInput" min="0" max="300" value="0" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserCooldown(this.value)">
+                </label>
+            </div>
+            <div class="card-title" style="margin-top: 1rem;">User Uploads</div>
+            <div class="settings-row" style="margin-bottom: 0.5rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="userUploadEnabledToggle" onchange="setUserUploadEnabled(this.checked)">
+                    <span>Allow users to upload (goes to moderation queue)</span>
+                </label>
+            </div>
+            <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max duration (s):</span>
+                    <input type="number" id="userMaxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxUploadDuration(this.value)">
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max size (KB):</span>
+                    <input type="number" id="userMaxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxUploadBytes(this.value)">
                 </label>
             </div>
             <div class="card-title" style="margin-top: 1rem;">Guest History</div>
@@ -657,6 +716,24 @@
             </div>
             <div class="card-title">Blocked IPs</div>
             <div id="blockedIPsList" class="blocked-ips-list" style="font-size: 0.85rem; margin-bottom: 1rem;"></div>
+            <div class="card-title">User Management</div>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">All users. Managed users (from signups) can have their role changed or be removed.</p>
+            <div class="pending-uploads-wrap" style="max-height: 180px; overflow-y: auto; margin-bottom: 1rem;">
+                <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                    <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">Username</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th><th></th></tr></thead>
+                    <tbody id="usersListBody"></tbody>
+                </table>
+            </div>
+            <div id="usersListEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem; margin-bottom: 1rem;">No users</div>
+            <div class="card-title" style="margin-top: 1rem;">Pending Signups</div>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Users who signed up await approval here. Choose role when approving.</p>
+            <div class="pending-uploads-wrap" style="max-height: 120px; overflow-y: auto; margin-bottom: 1rem;">
+                <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                    <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">Username</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Requested</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th><th></th></tr></thead>
+                    <tbody id="pendingSignupsBody"></tbody>
+                </table>
+            </div>
+            <div id="pendingSignupsEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem; margin-bottom: 1rem;">No pending signups</div>
             <div class="card-title">Moderation Queue</div>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">User and guest uploads await approval here.</p>
             <div class="pending-uploads-wrap" style="max-height: 220px; overflow-y: auto;">
@@ -672,18 +749,23 @@
 
     <script>
         const CREDENTIALS = 'include';
-        const MAX_USER_DURATION = 7;
         const SOUND_COLOR_PRESETS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
         let user = null;
         let guestMaxDuration = 7;
         let guestCooldownSec = 10;
+        let guestUploadEnabled = false;
+        let guestMaxUploadDuration = 7;
+        let guestMaxUploadBytes = 2097152;
+        let userMaxDuration = 7;
+        let userCooldownSec = 0;
+        let userLastPlayTime = 0;
         let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
         let playbackLockedBy = null;
         let guestLastPlayTime = 0;
         let guestEnabled = false;
         let userUploadEnabled = false;
-        let maxUploadDuration = 7;
-        let maxUploadBytes = 2097152;
+        let userMaxUploadDuration = 7;
+        let userMaxUploadBytes = 2097152;
         let pausedAt = 0;
         let waveformData = null;
         let waveformDuration = 0;
@@ -698,6 +780,7 @@
         let manageTagsMode = false;
         let soundFilter = '';
         let lastGuestCooldownShown = -1;
+        let lastUserCooldownShown = -1;
         let compactMode = false;
         let mobileView = false;
         let mobilePageIndex = 0;
@@ -755,17 +838,14 @@
         }
 
         const waveformCache = {};
+        let serverRecentlyPlayed = [];
         function getRecentlyPlayed() {
+            if (serverRecentlyPlayed.length > 0) return serverRecentlyPlayed.slice(0, 5);
             const arr = loadPrefs().recentPlayed;
             return Array.isArray(arr) ? arr.slice(0, 5) : [];
         }
-        function addToRecentlyPlayed(filename, displayName, playedBy, playedAt) {
-            if (!filename) return;
-            let list = getRecentlyPlayed();
-            list = list.filter(function(x) { return x.filename !== filename; });
-            list.unshift({ filename: filename, displayName: displayName || filename, playedBy: playedBy || null, playedAt: playedAt || Date.now() });
-            list = list.slice(0, 5);
-            savePrefs({ recentPlayed: list });
+        function setRecentlyPlayedFromServer(list) {
+            serverRecentlyPlayed = Array.isArray(list) ? list : [];
             renderRecentlyPlayed();
         }
         function formatRecentTime(ts) {
@@ -972,10 +1052,11 @@
             const isUser = (user && user.role) === 'user';
             const isGuest = (user && user.role) === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
+            const userCooldown = getUserCooldownRemaining();
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
-            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
-            const maxDur = isGuest ? (guestMaxDuration || 7) : MAX_USER_DURATION;
+            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
+            const maxDur = isGuest ? (guestMaxDuration || 7) : (userMaxDuration || 7);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             if (filtered.length === 0) {
                 area.innerHTML = '<div style="grid-column:1/-1; padding:2rem; text-align:center; color:var(--text-muted)">No sounds</div>';
@@ -1027,9 +1108,18 @@
         }
 
         function applyTheme(theme) {
-            document.documentElement.setAttribute('data-theme', theme || 'dark');
-            const btn = document.getElementById('themeToggle');
-            if (btn) btn.textContent = (theme === 'light') ? '🌙' : '☀️';
+            const t = theme || 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+            const loginBtn = document.getElementById('themeToggleLogin');
+            if (loginBtn) loginBtn.textContent = (t === 'light') ? '🌙' : '☀️';
+            updateHeaderMenuThemeLabel();
+        }
+        function updateHeaderMenuThemeLabel() {
+            const label = document.getElementById('headerMenuThemeLabel');
+            if (label) {
+                const t = document.documentElement.getAttribute('data-theme') || 'dark';
+                label.textContent = t === 'light' ? 'Light' : 'Dark';
+            }
         }
         function toggleTheme() {
             const current = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1047,10 +1137,9 @@
         function isAdminOrSuperadmin() { return (user && user.role) === 'admin' || (user && user.role) === 'superadmin'; }
 
         function switchMainTab(tab) {
-            document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
             document.getElementById('soundsView').classList.toggle('hidden', tab !== 'sounds');
             document.getElementById('superadminView').classList.toggle('hidden', tab !== 'superadmin');
-            if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+            if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); }
         }
 
         async function checkAuth() {
@@ -1074,14 +1163,14 @@
                     document.getElementById('stopBtn').classList.remove('hidden');
                     document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
                     if (user.role === 'superadmin') {
-                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
-                    startPendingCountPolling();
-                } else {
-                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
-                }
+                        document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
+                        startPendingCountPolling();
+                    } else {
+                        document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
+                    }
                 }
                 fetchSettings();
-                if ((user && user.role) === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+                if ((user && user.role) === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); }
                 updateUploadCardVisibility();
                 return true;
             }
@@ -1093,7 +1182,19 @@
             user = null;
             document.getElementById('loginScreen').classList.remove('hidden');
             document.getElementById('app').classList.add('hidden');
+            showLoginForm();
             fetchGuestStatus();
+        }
+
+        function showRegisterForm() {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('registerForm').classList.add('visible');
+            document.getElementById('registerError').textContent = '';
+        }
+        function showLoginForm() {
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('registerForm').classList.remove('visible');
+            document.getElementById('loginError').textContent = '';
         }
 
         async function fetchGuestStatus() {
@@ -1124,6 +1225,35 @@
             return false;
         }
 
+        async function doRegister(e) {
+            e.preventDefault();
+            const username = document.getElementById('regUser').value.trim();
+            const password = document.getElementById('regPass').value;
+            const confirm = document.getElementById('regPassConfirm').value;
+            document.getElementById('registerError').textContent = '';
+            if (password !== confirm) {
+                document.getElementById('registerError').textContent = 'Passwords do not match';
+                return false;
+            }
+            const res = await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: CREDENTIALS,
+                body: JSON.stringify({ username, password }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                document.getElementById('registerError').textContent = data.error || 'Registration failed';
+                return false;
+            }
+            document.getElementById('registerForm').querySelector('form').reset();
+            showLoginForm();
+            document.getElementById('loginError').textContent = '';
+            document.getElementById('loginError').style.color = 'var(--success, #22c55e)';
+            document.getElementById('loginError').textContent = data.message || 'Registration submitted. Awaiting admin approval.';
+            return false;
+        }
+
         async function doLogin(e) {
             e.preventDefault();
             const username = document.getElementById('loginUser').value.trim();
@@ -1137,6 +1267,7 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                document.getElementById('loginError').style.color = '';
                 document.getElementById('loginError').textContent = data.error || 'Login failed';
                 return false;
             }
@@ -1193,8 +1324,13 @@
             playbackLocked = d.playbackLocked === true;
             playbackLockedBy = d.playbackLockedBy || null;
             if (d.userUploadEnabled !== undefined) userUploadEnabled = d.userUploadEnabled;
-            if (d.maxUploadDuration !== undefined) maxUploadDuration = d.maxUploadDuration;
-            if (d.maxUploadBytes !== undefined) maxUploadBytes = d.maxUploadBytes;
+            if (d.guestUploadEnabled !== undefined) guestUploadEnabled = d.guestUploadEnabled;
+            if (d.userMaxUploadDuration !== undefined) userMaxUploadDuration = d.userMaxUploadDuration;
+            if (d.userMaxUploadBytes !== undefined) userMaxUploadBytes = d.userMaxUploadBytes;
+            if (d.guestMaxUploadDuration !== undefined) guestMaxUploadDuration = d.guestMaxUploadDuration;
+            if (d.guestMaxUploadBytes !== undefined) guestMaxUploadBytes = d.guestMaxUploadBytes;
+            if (d.userMaxDuration !== undefined) userMaxDuration = d.userMaxDuration;
+            if (d.userCooldownSec !== undefined) userCooldownSec = d.userCooldownSec;
             const cb = document.getElementById('playbackLockedTop');
             if (cb) cb.checked = playbackLocked;
             const msg = document.getElementById('userLockedMsg');
@@ -1212,9 +1348,14 @@
                 if (d.guestEnabled !== undefined) { guestEnabled = d.guestEnabled; const g = document.getElementById('guestEnabledToggle'); if (g) g.checked = guestEnabled; }
                 if (d.guestMaxDuration !== undefined) { const g = document.getElementById('guestMaxDurationInput'); if (g) g.value = d.guestMaxDuration; }
                 if (d.guestCooldownSec !== undefined) { const g = document.getElementById('guestCooldownInput'); if (g) g.value = d.guestCooldownSec; }
+                if (d.guestUploadEnabled !== undefined) { const g = document.getElementById('guestUploadEnabledToggle'); if (g) g.checked = d.guestUploadEnabled; }
+                if (d.guestMaxUploadDuration !== undefined) { const g = document.getElementById('guestMaxUploadDurationInput'); if (g) g.value = d.guestMaxUploadDuration; }
+                if (d.guestMaxUploadBytes !== undefined) { const g = document.getElementById('guestMaxUploadBytesInput'); if (g) g.value = Math.round(d.guestMaxUploadBytes / 1024); }
+                if (d.userMaxDuration !== undefined) { const g = document.getElementById('userMaxDurationInput'); if (g) g.value = d.userMaxDuration; }
+                if (d.userCooldownSec !== undefined) { const g = document.getElementById('userCooldownInput'); if (g) g.value = d.userCooldownSec; }
                 if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
-                if (d.maxUploadDuration !== undefined) { const g = document.getElementById('maxUploadDurationInput'); if (g) g.value = d.maxUploadDuration; }
-                if (d.maxUploadBytes !== undefined) { const g = document.getElementById('maxUploadBytesInput'); if (g) g.value = Math.round(d.maxUploadBytes / 1024); }
+                if (d.userMaxUploadDuration !== undefined) { const g = document.getElementById('userMaxUploadDurationInput'); if (g) g.value = d.userMaxUploadDuration; }
+                if (d.userMaxUploadBytes !== undefined) { const g = document.getElementById('userMaxUploadBytesInput'); if (g) g.value = Math.round(d.userMaxUploadBytes / 1024); }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -1232,14 +1373,18 @@
             const btn = document.getElementById('uploadToggleBtn');
             if (!card || !hint) return;
             const canDirect = isAdminOrSuperadmin();
-            const canPending = ((user && user.role) === 'user' || (user && user.role) === 'guest') && (typeof userUploadEnabled !== 'undefined' ? userUploadEnabled : false);
+            const isGuest = (user && user.role) === 'guest';
+            const isUser = (user && user.role) === 'user';
+            const canGuestUpload = isGuest && guestUploadEnabled;
+            const canUserUpload = isUser && userUploadEnabled;
+            const canPending = canGuestUpload || canUserUpload;
             const canUpload = canDirect || canPending;
             if (btn) btn.classList.toggle('hidden', !canUpload);
             if (canDirect) {
                 hint.textContent = '';
             } else if (canPending) {
-                const maxSec = maxUploadDuration || 7;
-                const maxKB = Math.round((maxUploadBytes || 2097152) / 1024);
+                const maxSec = isGuest ? (guestMaxUploadDuration || 7) : (userMaxUploadDuration || 7);
+                const maxKB = Math.round((isGuest ? (guestMaxUploadBytes || 2097152) : (userMaxUploadBytes || 2097152)) / 1024);
                 hint.textContent = 'Uploads go to a moderation queue. Max ' + maxSec + 's, ' + maxKB + 'KB. A superadmin must approve before they appear.';
             } else {
                 hint.textContent = '';
@@ -1292,17 +1437,56 @@
             updateUploadCardVisibility();
         }
 
-        async function setMaxUploadDuration(sec) {
+        async function setGuestUploadEnabled(enabled) {
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestUploadEnabled: enabled }) });
+            if (res && res.ok) { guestUploadEnabled = enabled; await fetchSettings(); updateUploadCardVisibility(); }
+        }
+
+        async function setGuestMaxUploadDuration(sec) {
             const n = parseInt(sec, 10);
             if (!Number.isFinite(n) || n < 1) return;
-            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxUploadDuration: n }) });
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestMaxUploadDuration: n }) });
+            guestMaxUploadDuration = n;
             await fetchSettings();
         }
 
-        async function setMaxUploadBytes(kb) {
+        async function setGuestMaxUploadBytes(kb) {
             const n = parseInt(kb, 10);
             if (!Number.isFinite(n) || n < 100) return;
-            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxUploadBytes: n * 1024 }) });
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestMaxUploadBytes: n * 1024 }) });
+            guestMaxUploadBytes = n * 1024;
+            await fetchSettings();
+        }
+
+        async function setUserMaxDuration(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 1) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userMaxDuration: n }) });
+            userMaxDuration = n;
+            await fetchSettings();
+        }
+
+        async function setUserCooldown(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 0) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userCooldownSec: n }) });
+            userCooldownSec = n;
+            await fetchSettings();
+        }
+
+        async function setUserMaxUploadDuration(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 1) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userMaxUploadDuration: n }) });
+            userMaxUploadDuration = n;
+            await fetchSettings();
+        }
+
+        async function setUserMaxUploadBytes(kb) {
+            const n = parseInt(kb, 10);
+            if (!Number.isFinite(n) || n < 100) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userMaxUploadBytes: n * 1024 }) });
+            userMaxUploadBytes = n * 1024;
             await fetchSettings();
         }
 
@@ -1344,13 +1528,36 @@
 
         function updatePendingBadge(count) {
             const badge = document.getElementById('pendingBadge');
-            if (!badge) return;
-            if (count > 0) {
-                badge.textContent = count > 99 ? '99+' : String(count);
-                badge.classList.remove('hidden');
-            } else {
-                badge.classList.add('hidden');
+            const dot = document.getElementById('headerPendingDot');
+            if (badge) {
+                if (count > 0) {
+                    badge.textContent = count > 99 ? '99+' : String(count);
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.classList.add('hidden');
+                }
             }
+            if (dot) dot.classList.toggle('hidden', count === 0);
+        }
+        function toggleHeaderMenu() {
+            const menu = document.getElementById('headerMenu');
+            if (!menu) return;
+            menu.classList.toggle('hidden');
+            if (!menu.classList.contains('hidden')) {
+                setTimeout(function() { document.addEventListener('click', closeHeaderMenuOnClick); }, 0);
+            } else {
+                document.removeEventListener('click', closeHeaderMenuOnClick);
+            }
+        }
+        function closeHeaderMenuOnClick(e) {
+            const menu = document.getElementById('headerMenu');
+            const btn = document.getElementById('headerHamburgerBtn');
+            if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) closeHeaderMenu();
+        }
+        function closeHeaderMenu() {
+            const menu = document.getElementById('headerMenu');
+            if (menu) menu.classList.add('hidden');
+            document.removeEventListener('click', closeHeaderMenuOnClick);
         }
 
         async function fetchPendingCount() {
@@ -1358,14 +1565,16 @@
             const res = await api('/api/superadmin/pending-count');
             if (!res || !res.ok) return;
             const d = await res.json().catch(() => ({}));
-            updatePendingBadge(d.count != null ? d.count : 0);
+            const uploads = d.count != null ? d.count : 0;
+            const signups = d.pendingSignupsCount != null ? d.pendingSignupsCount : 0;
+            updatePendingBadge(uploads + signups);
         }
 
         async function fetchPendingUploads() {
             const res = await api('/api/superadmin/pending-uploads');
             if (!res || !res.ok) return;
             const uploads = await res.json();
-            updatePendingBadge(uploads.length);
+            fetchPendingCount();
             const tbody = document.getElementById('pendingUploadsBody');
             const empty = document.getElementById('pendingUploadsEmpty');
             if (!tbody || !empty) return;
@@ -1396,6 +1605,80 @@
             if (res && res.ok) fetchPendingUploads();
         }
 
+        async function fetchPendingSignups() {
+            const res = await api('/api/superadmin/pending-signups');
+            if (!res || !res.ok) return;
+            const signups = await res.json();
+            fetchPendingCount();
+            const tbody = document.getElementById('pendingSignupsBody');
+            const empty = document.getElementById('pendingSignupsEmpty');
+            if (!tbody || !empty) return;
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (signups.length === 0) {
+                tbody.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            tbody.innerHTML = signups.map(u => {
+                const dt = u.createdAt ? new Date(u.createdAt) : null;
+                const timeStr = dt ? dt.toLocaleString() : '—';
+                return '<tr data-username="' + esc(u.username) + '"><td>' + esc(u.username) + '</td><td>' + esc(timeStr) + '</td><td><select class="approve-role-select" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text)"><option value="user">User</option><option value="admin">Admin</option></select></td><td><button type="button" class="btn btn-primary block-btn" onclick="approvePendingSignup(this.closest(\'tr\').dataset.username, this.closest(\'tr\').querySelector(\'.approve-role-select\').value)">Approve</button> <button type="button" class="btn btn-danger block-btn" onclick="rejectPendingSignup(this.closest(\'tr\').dataset.username)">Reject</button></td></tr>';
+            }).join('');
+        }
+
+        async function approvePendingSignup(username, role) {
+            const res = await api('/api/superadmin/pending-signups/approve/' + encodeURIComponent(username), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: role || 'user' }) });
+            if (res && res.ok) { fetchPendingSignups(); fetchUsers(); }
+            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+        }
+
+        async function rejectPendingSignup(username) {
+            const res = await api('/api/superadmin/pending-signups/reject/' + encodeURIComponent(username), { method: 'POST' });
+            if (res && res.ok) fetchPendingSignups();
+        }
+
+        async function fetchUsers() {
+            const res = await api('/api/superadmin/users');
+            if (!res || !res.ok) return;
+            const users = await res.json();
+            const tbody = document.getElementById('usersListBody');
+            const empty = document.getElementById('usersListEmpty');
+            if (!tbody || !empty) return;
+            const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (users.length === 0) {
+                tbody.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            tbody.innerHTML = users.map(u => {
+                const roleLabel = u.role === 'superadmin' ? 'Superadmin' : (u.role === 'admin' ? 'Admin' : 'User');
+                const managed = u.managed === true;
+                let actions = '';
+                if (managed) {
+                    const roleOpts = '<option value="user"' + (u.role === 'user' ? ' selected' : '') + '>User</option><option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
+                    actions = '<select class="user-role-select" data-username="' + esc(u.username) + '" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);margin-right:0.35rem" onchange="updateUserRole(this.dataset.username, this.value)">' + roleOpts + '</select><button type="button" class="btn btn-danger block-btn" data-username="' + esc(u.username) + '" onclick="deleteUser(this.dataset.username)">Delete</button>';
+                } else {
+                    actions = '<span style="color:var(--text-muted);font-size:0.8em">(env)</span>';
+                }
+                return '<tr><td>' + esc(u.username) + '</td><td>' + esc(roleLabel) + '</td><td>' + actions + '</td></tr>';
+            }).join('');
+        }
+
+        async function updateUserRole(username, role) {
+            const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }) });
+            if (res && res.ok) fetchUsers();
+            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+        }
+
+        async function deleteUser(username) {
+            if (!confirm('Remove user "' + username + '"? They will no longer be able to log in.')) return;
+            const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'DELETE' });
+            if (res && res.ok) fetchUsers();
+            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+        }
+
         async function setPlaybackLocked(locked) {
             const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playbackLocked: locked }) });
             if (!res || !res.ok) return;
@@ -1408,6 +1691,11 @@
             if ((user && user.role) !== 'guest') return 0;
             const elapsed = (Date.now() - guestLastPlayTime) / 1000;
             return Math.max(0, Math.ceil((guestCooldownSec || 10) - elapsed));
+        }
+        function getUserCooldownRemaining() {
+            if ((user && user.role) !== 'user') return 0;
+            const elapsed = (Date.now() - userLastPlayTime) / 1000;
+            return Math.max(0, Math.ceil((userCooldownSec || 0) - elapsed));
         }
 
         function toggleReorder() {
@@ -1626,10 +1914,11 @@
             const isUser = (user && user.role) === 'user';
             const isGuest = (user && user.role) === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
+            const userCooldown = getUserCooldownRemaining();
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
-            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
-            const maxDur = isGuest ? (guestMaxDuration || 7) : MAX_USER_DURATION;
+            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : userCooldown === 0) && !cannotOverride);
+            const maxDur = isGuest ? (guestMaxDuration || 7) : (userMaxDuration || 7);
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
@@ -1640,7 +1929,7 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 let title = '';
-                if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play'));
+                if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : ((isGuest && guestCooldown > 0) || (isUser && userCooldown > 0) ? 'Wait ' + (isGuest ? guestCooldown : userCooldown) + 's before playing again' : 'Cannot play'));
                 else if (tooLong(dur)) title = 'Only sounds ' + maxDur + 's or shorter allowed';
                 const editBtn = isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : '';
                 const favIdx = getFavorites().indexOf(s.filename);
@@ -1803,8 +2092,10 @@
         function clearSoundPanelColor() {
             var panel = document.getElementById('soundPanel');
             var presets = document.getElementById('soundPanelColorPresets');
+            var customEl = document.getElementById('soundPanelColorCustom');
             if (panel) panel.dataset.soundColor = '';
             if (presets) presets.querySelectorAll('.sound-color-preset').forEach(function(btn) { btn.classList.remove('selected'); });
+            if (customEl) customEl.value = '#7c3aed';
         }
 
         function openSoundPanelFromSound(filename) {
@@ -1858,14 +2149,16 @@
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
             const panel = document.getElementById('soundPanel');
-            const customColorEl = document.getElementById('soundPanelColorCustom');
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
             const displayName = ((nameEl && nameEl.value) || '').trim() || filename;
             const tagsRaw = ((tagsEl && tagsEl.value) || '').trim();
             const tags = tagsRaw ? tagsRaw.split(/[,\s]+/).map(t => t.trim()).filter(Boolean) : [];
-            var color = (panel && panel.dataset.soundColor) || (customColorEl && customColorEl.value) || null;
-            if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) color = null;
+            var color = null;
+            if (panel) {
+                const c = (panel.dataset.soundColor || '').trim();
+                if (c && /^#[0-9a-fA-F]{6}$/.test(c)) color = c;
+            }
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -1894,13 +2187,18 @@
             if (!res.ok) {
                 const msg = data.error || data.message || 'Failed to play';
                 if (res.status === 429 && data.cooldownRemaining) {
-                    guestLastPlayTime = Date.now() - ((guestCooldownSec || 10) - data.cooldownRemaining) * 1000;
+                    if ((user && user.role) === 'guest') {
+                        guestLastPlayTime = Date.now() - ((guestCooldownSec || 10) - data.cooldownRemaining) * 1000;
+                    } else if ((user && user.role) === 'user') {
+                        userLastPlayTime = Date.now() - ((userCooldownSec || 0) - data.cooldownRemaining) * 1000;
+                    }
                     renderSoundsGrid();
                 }
                 alert(msg);
                 return;
             }
             if ((user && user.role) === 'guest') guestLastPlayTime = Date.now();
+            if ((user && user.role) === 'user') userLastPlayTime = Date.now();
             playback.duration = (data.duration != null ? data.duration : null);
             playback.startTime = Date.now();
             playback.startTimeOffset = (data.startTimeOffset != null ? data.startTimeOffset : 0);
@@ -1915,7 +2213,9 @@
             const timeEl = document.getElementById('progressTime');
             if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
             loadWaveform(filename);
-            addToRecentlyPlayed(filename, playback.displayName, (user && user.username) || null, Date.now());
+            const newItem = { filename, displayName: playback.displayName || filename, playedBy: (user && user.username) || null, playedAt: Date.now() };
+            serverRecentlyPlayed = [newItem, ...serverRecentlyPlayed.filter(x => x.filename !== filename)].slice(0, 5);
+            renderRecentlyPlayed();
         }
 
         async function loadWaveform(filename) {
@@ -2041,6 +2341,12 @@
                 else if (r === 0 && lastGuestCooldownShown > 0) { lastGuestCooldownShown = 0; renderSoundsGrid(); }
                 else if (r === 0) lastGuestCooldownShown = -1;
             }
+            if ((user && user.role) === 'user') {
+                const r = getUserCooldownRemaining();
+                if (r > 0 && r !== lastUserCooldownShown) { lastUserCooldownShown = r; renderSoundsGrid(); }
+                else if (r === 0 && lastUserCooldownShown > 0) { lastUserCooldownShown = 0; renderSoundsGrid(); }
+                else if (r === 0) lastUserCooldownShown = -1;
+            }
         }
 
         async function stopPlayback() {
@@ -2155,7 +2461,7 @@
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
-                if ((state.status === 'playing' || state.status === 'paused') && state.filename && state.filename !== prevFilename) addToRecentlyPlayed(state.filename, state.displayName, (state.startedBy && state.startedBy.username) || null, Date.now());
+                if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();
@@ -2262,7 +2568,6 @@
 
         (function initTheme() {
             applyTheme(loadPrefs().theme);
-            const tt = document.getElementById('themeToggle'); if (tt) tt.addEventListener('click', toggleTheme);
         })();
 
         const sfi = document.getElementById('soundFilterInput'); if (sfi) sfi.addEventListener('input', (e) => {

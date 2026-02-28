@@ -20,6 +20,8 @@ const DATA_DIR = path.join(__dirname, 'data');
 const GUEST_DATA_PATH = path.join(DATA_DIR, 'guest.json');
 const PENDING_META_PATH = path.join(DATA_DIR, 'pending.json');
 const SERVER_STATE_PATH = path.join(DATA_DIR, 'state.json');
+const USERS_JSON_PATH = path.join(DATA_DIR, 'users.json');
+const PENDING_USERS_PATH = path.join(DATA_DIR, 'pending-users.json');
 
 const DEFAULT_GUEST_COOLDOWN_SEC = 10;
 const DEFAULT_GUEST_MAX_DURATION = 7;
@@ -120,6 +122,89 @@ function setUserUploadEnabled(enabled) {
     saveGuestData(d);
 }
 
+function getGuestUploadEnabled() {
+    const d = loadGuestData();
+    return d.guestUploadEnabled === true;
+}
+
+function setGuestUploadEnabled(enabled) {
+    const d = loadGuestData();
+    d.guestUploadEnabled = enabled === true;
+    saveGuestData(d);
+}
+
+function getUserMaxUploadDuration() {
+    const d = loadGuestData();
+    const n = Number(d.userMaxUploadDuration);
+    return Number.isFinite(n) && n > 0 ? n : (Number(d.maxUploadDuration) || 7);
+}
+
+function setUserMaxUploadDuration(sec) {
+    const d = loadGuestData();
+    d.userMaxUploadDuration = Number(sec) > 0 ? Number(sec) : 7;
+    saveGuestData(d);
+}
+
+function getUserMaxUploadBytes() {
+    const d = loadGuestData();
+    const n = Number(d.userMaxUploadBytes);
+    return Number.isFinite(n) && n > 0 ? n : (Number(d.maxUploadBytes) || DEFAULT_MAX_UPLOAD_BYTES);
+}
+
+function setUserMaxUploadBytes(bytes) {
+    const d = loadGuestData();
+    d.userMaxUploadBytes = Number(bytes) > 0 ? Number(bytes) : DEFAULT_MAX_UPLOAD_BYTES;
+    saveGuestData(d);
+}
+
+function getGuestMaxUploadDuration() {
+    const d = loadGuestData();
+    const n = Number(d.guestMaxUploadDuration);
+    return Number.isFinite(n) && n > 0 ? n : 7;
+}
+
+function setGuestMaxUploadDuration(sec) {
+    const d = loadGuestData();
+    d.guestMaxUploadDuration = Number(sec) > 0 ? Number(sec) : 7;
+    saveGuestData(d);
+}
+
+function getGuestMaxUploadBytes() {
+    const d = loadGuestData();
+    const n = Number(d.guestMaxUploadBytes);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+function setGuestMaxUploadBytes(bytes) {
+    const d = loadGuestData();
+    d.guestMaxUploadBytes = Number(bytes) > 0 ? Number(bytes) : DEFAULT_MAX_UPLOAD_BYTES;
+    saveGuestData(d);
+}
+
+function getUserMaxDuration() {
+    const d = loadGuestData();
+    const n = Number(d.userMaxDuration);
+    return Number.isFinite(n) && n > 0 ? n : 7;
+}
+
+function setUserMaxDuration(sec) {
+    const d = loadGuestData();
+    d.userMaxDuration = Number(sec) > 0 ? Number(sec) : 7;
+    saveGuestData(d);
+}
+
+function getUserCooldownSec() {
+    const d = loadGuestData();
+    const n = Number(d.userCooldownSec);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function setUserCooldownSec(sec) {
+    const d = loadGuestData();
+    d.userCooldownSec = Number(sec) >= 0 ? Number(sec) : 0;
+    saveGuestData(d);
+}
+
 function loadServerState() {
     try {
         const raw = fs.readFileSync(SERVER_STATE_PATH, 'utf8');
@@ -139,28 +224,35 @@ function saveServerState(updates) {
     }
 }
 
+const RECENTLY_PLAYED_MAX = 5;
+function getRecentlyPlayedFromState() {
+    const state = loadServerState();
+    const arr = Array.isArray(state.recentlyPlayed) ? state.recentlyPlayed : [];
+    return arr.slice(0, RECENTLY_PLAYED_MAX);
+}
+function addToRecentlyPlayedServer(filename, displayName, playedBy, playedAt) {
+    if (!filename) return;
+    let list = getRecentlyPlayedFromState();
+    list = list.filter((x) => x.filename !== filename);
+    list.unshift({ filename, displayName: displayName || filename, playedBy: playedBy || null, playedAt: playedAt || Date.now() });
+    list = list.slice(0, RECENTLY_PLAYED_MAX);
+    saveServerState({ recentlyPlayed: list });
+}
+
 function getMaxUploadDuration() {
-    const d = loadGuestData();
-    const n = Number(d.maxUploadDuration);
-    return Number.isFinite(n) && n > 0 ? n : 7;
+    return getUserMaxUploadDuration();
 }
 
 function setMaxUploadDuration(sec) {
-    const d = loadGuestData();
-    d.maxUploadDuration = Number(sec) > 0 ? Number(sec) : 7;
-    saveGuestData(d);
+    setUserMaxUploadDuration(sec);
 }
 
 function getMaxUploadBytes() {
-    const d = loadGuestData();
-    const n = Number(d.maxUploadBytes);
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_UPLOAD_BYTES;
+    return getUserMaxUploadBytes();
 }
 
 function setMaxUploadBytes(bytes) {
-    const d = loadGuestData();
-    d.maxUploadBytes = Number(bytes) > 0 ? Number(bytes) : DEFAULT_MAX_UPLOAD_BYTES;
-    saveGuestData(d);
+    setUserMaxUploadBytes(bytes);
 }
 
 function loadPendingMeta() {
@@ -391,13 +483,11 @@ app.use(require('express-session')({
     cookie: { httpOnly: true, secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 },
 }));
 
-const MAX_USER_SOUND_DURATION = 7;
 
-// Parse users from env: USERS=username:password:role,username:password:role,...
-// Roles: superadmin (stop everyone), admin (stop users only), user
-// Fallback: ADMIN_PASSWORD, USER_PASSWORD, SUPERADMIN_PASSWORD for single-user per role
-function loadUsers() {
-    const users = new Map(); // username -> { username, password, role }
+// Parse users from env + data/users.json (approved signups)
+// Roles: superadmin, admin, user
+function loadUsersFromEnv() {
+    const users = new Map();
     const raw = (process.env.USERS || '').trim();
     if (raw) {
         for (const entry of raw.split(',')) {
@@ -412,7 +502,6 @@ function loadUsers() {
             }
         }
     }
-    // Fallback: legacy single-user vars
     const adminPw = (process.env.ADMIN_PASSWORD || '').trim();
     const userPw = (process.env.USER_PASSWORD || '').trim();
     const superPw = (process.env.SUPERADMIN_PASSWORD || '').trim();
@@ -421,8 +510,81 @@ function loadUsers() {
     if (superPw && !users.has('superadmin')) users.set('superadmin', { username: 'superadmin', password: superPw, role: 'superadmin' });
     return users;
 }
+function loadApprovedSignups() {
+    try {
+        const raw = fs.readFileSync(USERS_JSON_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        const list = Array.isArray(data.users) ? data.users : [];
+        return list.filter(u => u && u.username && u.password).map(u => ({
+            username: String(u.username).trim().toLowerCase(),
+            password: u.password,
+            role: (u.role === 'admin' ? 'admin' : 'user')
+        }));
+    } catch {
+        return [];
+    }
+}
+function saveApprovedSignups(arr) {
+    fs.writeFileSync(USERS_JSON_PATH, JSON.stringify({ users: arr }, null, 2), 'utf8');
+}
+function loadUsers() {
+    const env = loadUsersFromEnv();
+    const signups = loadApprovedSignups();
+    signups.forEach(u => {
+        const un = u.username;
+        if (un && !env.has(un)) env.set(un, { username: un, password: u.password, role: u.role });
+    });
+    return env;
+}
 const USERS = loadUsers();
+let approvedSignups = loadApprovedSignups();
+const envUsernames = new Set(loadUsersFromEnv().keys());
+
+function loadPendingUsers() {
+    try {
+        const raw = fs.readFileSync(PENDING_USERS_PATH, 'utf8');
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch {
+        return [];
+    }
+}
+function savePendingUsers(arr) {
+    fs.writeFileSync(PENDING_USERS_PATH, JSON.stringify(arr, null, 2), 'utf8');
+}
+function addApprovedUser(username, password, role) {
+    const un = String(username).trim().toLowerCase();
+    if (!un || !password) return false;
+    const r = (role === 'admin' ? 'admin' : 'user');
+    USERS.set(un, { username: un, password: password, role: r });
+    approvedSignups.push({ username: un, password, role: r });
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
+function updateManagedUserRole(username, role) {
+    const un = String(username).trim().toLowerCase();
+    if (!un || envUsernames.has(un)) return false;
+    const r = (role === 'admin' ? 'admin' : 'user');
+    const idx = approvedSignups.findIndex(u => u.username === un);
+    if (idx < 0) return false;
+    approvedSignups[idx].role = r;
+    const entry = USERS.get(un);
+    if (entry) entry.role = r;
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
+function removeManagedUser(username) {
+    const un = String(username).trim().toLowerCase();
+    if (!un || envUsernames.has(un)) return false;
+    const idx = approvedSignups.findIndex(u => u.username === un);
+    if (idx < 0) return false;
+    approvedSignups.splice(idx, 1);
+    USERS.delete(un);
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
 const guestLastPlayByIP = new Map();
+const userLastPlayByUsername = new Map();
 
 function requireAuth(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
@@ -501,6 +663,23 @@ app.post('/api/login', (req, res) => {
 
 app.post('/api/logout', (req, res) => {
     req.session.destroy(() => res.json({ ok: true }));
+});
+
+const USERNAME_RE = /^[a-zA-Z0-9_-]{2,32}$/;
+app.post('/api/register', (req, res) => {
+    const { username, password } = req.body || {};
+    const un = String(username || '').trim();
+    const pw = String(password || '');
+    if (!un || !pw) return res.status(400).json({ error: 'Username and password required' });
+    if (!USERNAME_RE.test(un)) return res.status(400).json({ error: 'Username must be 2–32 chars, letters, numbers, underscore, hyphen only' });
+    if (pw.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const unLower = un.toLowerCase();
+    if (USERS.has(unLower)) return res.status(400).json({ error: 'Username already taken' });
+    const pending = loadPendingUsers();
+    if (pending.some(p => String(p.username || '').toLowerCase() === unLower)) return res.status(400).json({ error: 'Registration already pending' });
+    pending.push({ username: unLower, password: pw, createdAt: Date.now() });
+    savePendingUsers(pending);
+    res.status(201).json({ message: 'Registration submitted. Awaiting admin approval.' });
 });
 
 app.get('/api/guest-status', (req, res) => {
@@ -752,28 +931,41 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.guestEnabled = getGuestEnabled();
         out.guestMaxDuration = getGuestMaxDuration();
         out.guestCooldownSec = getGuestCooldownSec();
+        out.guestUploadEnabled = getGuestUploadEnabled();
+        out.guestMaxUploadDuration = getGuestMaxUploadDuration();
+        out.guestMaxUploadBytes = getGuestMaxUploadBytes();
         out.userUploadEnabled = getUserUploadEnabled();
-        out.maxUploadDuration = getMaxUploadDuration();
-        out.maxUploadBytes = getMaxUploadBytes();
+        out.userMaxUploadDuration = getUserMaxUploadDuration();
+        out.userMaxUploadBytes = getUserMaxUploadBytes();
+        out.userMaxDuration = getUserMaxDuration();
+        out.userCooldownSec = getUserCooldownSec();
         const pending = (loadPendingMeta().uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
         out.pendingCount = pending.length;
     }
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
-        out.userUploadEnabled = getUserUploadEnabled();
-        if (getUserUploadEnabled()) {
-            out.maxUploadDuration = getMaxUploadDuration();
-            out.maxUploadBytes = getMaxUploadBytes();
-        }
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
             out.guestCooldownSec = getGuestCooldownSec();
+            out.guestUploadEnabled = getGuestUploadEnabled();
+            if (getGuestUploadEnabled()) {
+                out.guestMaxUploadDuration = getGuestMaxUploadDuration();
+                out.guestMaxUploadBytes = getGuestMaxUploadBytes();
+            }
+        } else {
+            out.userMaxDuration = getUserMaxDuration();
+            out.userCooldownSec = getUserCooldownSec();
+            out.userUploadEnabled = getUserUploadEnabled();
+            if (getUserUploadEnabled()) {
+                out.userMaxUploadDuration = getUserMaxUploadDuration();
+                out.userMaxUploadBytes = getUserMaxUploadBytes();
+            }
         }
     }
     res.json(out);
 });
 
 app.patch('/api/settings', requireAdmin, (req, res) => {
-    const { playbackLocked, guestEnabled, guestMaxDuration, guestCooldownSec, userUploadEnabled, maxUploadDuration, maxUploadBytes } = req.body;
+    const { playbackLocked, guestEnabled, guestMaxDuration, guestCooldownSec, guestUploadEnabled, guestMaxUploadDuration, guestMaxUploadBytes, userUploadEnabled, userMaxUploadDuration, userMaxUploadBytes, userMaxDuration, userCooldownSec } = req.body;
     const out = {};
     if (typeof playbackLocked === 'boolean') {
         const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
@@ -784,9 +976,14 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (typeof guestEnabled === 'boolean') { setGuestEnabled(guestEnabled); out.guestEnabled = guestEnabled; }
         if (typeof guestMaxDuration === 'number' && guestMaxDuration > 0) { setGuestMaxDuration(guestMaxDuration); out.guestMaxDuration = guestMaxDuration; }
         if (typeof guestCooldownSec === 'number' && guestCooldownSec >= 0) { setGuestCooldownSec(guestCooldownSec); out.guestCooldownSec = guestCooldownSec; }
+        if (typeof guestUploadEnabled === 'boolean') { setGuestUploadEnabled(guestUploadEnabled); out.guestUploadEnabled = guestUploadEnabled; }
+        if (typeof guestMaxUploadDuration === 'number' && guestMaxUploadDuration > 0) { setGuestMaxUploadDuration(guestMaxUploadDuration); out.guestMaxUploadDuration = guestMaxUploadDuration; }
+        if (typeof guestMaxUploadBytes === 'number' && guestMaxUploadBytes > 0) { setGuestMaxUploadBytes(guestMaxUploadBytes); out.guestMaxUploadBytes = guestMaxUploadBytes; }
         if (typeof userUploadEnabled === 'boolean') { setUserUploadEnabled(userUploadEnabled); out.userUploadEnabled = userUploadEnabled; }
-        if (typeof maxUploadDuration === 'number' && maxUploadDuration > 0) { setMaxUploadDuration(maxUploadDuration); out.maxUploadDuration = maxUploadDuration; }
-        if (typeof maxUploadBytes === 'number' && maxUploadBytes > 0) { setMaxUploadBytes(maxUploadBytes); out.maxUploadBytes = maxUploadBytes; }
+        if (typeof userMaxUploadDuration === 'number' && userMaxUploadDuration > 0) { setUserMaxUploadDuration(userMaxUploadDuration); out.userMaxUploadDuration = userMaxUploadDuration; }
+        if (typeof userMaxUploadBytes === 'number' && userMaxUploadBytes > 0) { setUserMaxUploadBytes(userMaxUploadBytes); out.userMaxUploadBytes = userMaxUploadBytes; }
+        if (typeof userMaxDuration === 'number' && userMaxDuration > 0) { setUserMaxDuration(userMaxDuration); out.userMaxDuration = userMaxDuration; }
+        if (typeof userCooldownSec === 'number' && userCooldownSec >= 0) { setUserCooldownSec(userCooldownSec); out.userCooldownSec = userCooldownSec; }
     }
     res.json(Object.keys(out).length ? out : { ok: true });
 });
@@ -794,7 +991,8 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
 app.get('/api/superadmin/pending-count', requireSuperadmin, (req, res) => {
     const d = loadPendingMeta();
     const uploads = (d.uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
-    res.json({ count: uploads.length });
+    const pendingSignups = loadPendingUsers();
+    res.json({ count: uploads.length, pendingSignupsCount: pendingSignups.length });
 });
 
 app.get('/api/superadmin/pending-uploads', requireSuperadmin, (req, res) => {
@@ -841,6 +1039,60 @@ app.delete('/api/superadmin/pending-uploads/reject/:filename', requireSuperadmin
     }
 });
 
+app.get('/api/superadmin/pending-signups', requireSuperadmin, (req, res) => {
+    const pending = loadPendingUsers();
+    res.json(pending.map(p => ({ username: p.username, createdAt: p.createdAt })));
+});
+
+app.post('/api/superadmin/pending-signups/approve/:username', requireSuperadmin, (req, res) => {
+    const un = String(req.params.username || '').trim().toLowerCase();
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    const role = (req.body && req.body.role === 'admin') ? 'admin' : 'user';
+    const pending = loadPendingUsers();
+    const idx = pending.findIndex(p => String(p.username || '').toLowerCase() === un);
+    if (idx < 0) return res.status(404).json({ error: 'Pending signup not found' });
+    const { password } = pending[idx];
+    if (!addApprovedUser(un, password, role)) return res.status(500).json({ error: 'Failed to add user' });
+    pending.splice(idx, 1);
+    savePendingUsers(pending);
+    res.json({ ok: true, username: un, role });
+});
+
+app.post('/api/superadmin/pending-signups/reject/:username', requireSuperadmin, (req, res) => {
+    const un = String(req.params.username || '').trim().toLowerCase();
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    const pending = loadPendingUsers();
+    const idx = pending.findIndex(p => String(p.username || '').toLowerCase() === un);
+    if (idx < 0) return res.status(404).json({ error: 'Pending signup not found' });
+    pending.splice(idx, 1);
+    savePendingUsers(pending);
+    res.json({ ok: true });
+});
+
+app.get('/api/superadmin/users', requireSuperadmin, (req, res) => {
+    const list = [];
+    USERS.forEach((u, un) => {
+        list.push({ username: un, role: u.role, managed: !envUsernames.has(un) });
+    });
+    list.sort((a, b) => a.username.localeCompare(b.username));
+    res.json(list);
+});
+
+app.patch('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
+    const un = String(req.params.username || '').trim().toLowerCase();
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    const role = (req.body && req.body.role === 'admin') ? 'admin' : 'user';
+    if (!updateManagedUserRole(un, role)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
+    res.json({ ok: true, username: un, role });
+});
+
+app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
+    const un = String(req.params.username || '').trim().toLowerCase();
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    if (!removeManagedUser(un)) return res.status(400).json({ error: 'User not found or cannot be removed (env-configured)' });
+    res.json({ ok: true });
+});
+
 app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {
     const safeFilename = path.basename(req.params.filename || '');
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).send('Invalid file');
@@ -882,7 +1134,9 @@ function uploadHandler(req, res, next) {
     const role = req.session?.user?.role;
     const isAdminOrSuper = role === 'admin' || role === 'superadmin';
     const canDirectUpload = isAdminOrSuper;
-    const canPendingUpload = (role === 'user' || role === 'guest') && getUserUploadEnabled();
+    const canGuestPendingUpload = role === 'guest' && getGuestUploadEnabled();
+    const canUserPendingUpload = role === 'user' && getUserUploadEnabled();
+    const canPendingUpload = canGuestPendingUpload || canUserPendingUpload;
     if (!canDirectUpload && !canPendingUpload) return res.status(403).json({ error: 'Upload not allowed for your role.' });
     upload.single('soundFile')(req, res, (err) => {
         if (err) return res.status(500).json({ error: err.message || 'Upload failed' });
@@ -929,7 +1183,7 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
 
     const stat = fs.statSync(tempPath);
     const size = stat.size;
-    const maxBytes = getMaxUploadBytes();
+    const maxBytes = role === 'guest' ? getGuestMaxUploadBytes() : getUserMaxUploadBytes();
     if (size > maxBytes) {
         fs.unlink(tempPath, () => {});
         return res.status(400).json({ error: `File too large. Max ${Math.round(maxBytes / 1024)}KB.` });
@@ -938,7 +1192,7 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
     fs.rename(tempPath, targetPath, (err) => {
         if (err) return res.status(500).json({ error: 'Error saving file' });
         const duration = probeDuration(targetPath);
-        const maxDur = getMaxUploadDuration();
+        const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : getUserMaxUploadDuration();
         if (duration != null && duration > maxDur) {
             fs.unlinkSync(targetPath);
             return res.status(400).json({ error: `File too long. Max ${maxDur} seconds. This file is ${Math.ceil(duration)}s.` });
@@ -993,9 +1247,19 @@ app.post('/api/play', requireAuth, (req, res) => {
                 return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before playing again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
             }
         }
+    } else if (role === 'user') {
+        const un = req.session.user.username;
+        const lastPlay = userLastPlayByUsername.get(un);
+        const cooldownSec = getUserCooldownSec();
+        if (lastPlay != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - lastPlay) / 1000;
+            if (elapsed < cooldownSec) {
+                return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before playing again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
+            }
+        }
     }
 
-    const maxDur = isGuest ? getGuestMaxDuration() : MAX_USER_SOUND_DURATION;
+    const maxDur = isGuest ? getGuestMaxDuration() : getUserMaxDuration();
     if ((role === 'user' || isGuest) && duration != null && duration > maxDur) {
         return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
     }
@@ -1042,6 +1306,8 @@ app.post('/api/play', requireAuth, (req, res) => {
         if (isGuest) {
             guestLastPlayByIP.set(getClientIP(req), Date.now());
             appendGuestHistory(getClientIP(req), safeFilename, displayName);
+        } else if (role === 'user') {
+            userLastPlayByUsername.set(req.session.user.username, Date.now());
         }
         playbackState = {
             status: 'playing',
@@ -1052,6 +1318,7 @@ app.post('/api/play', requireAuth, (req, res) => {
             duration,
             startedBy,
         };
+        addToRecentlyPlayedServer(safeFilename, displayName, startedBy?.username ?? null, Date.now());
         res.json({ ok: true, duration, displayName, startTimeOffset: startTime, startedBy });
     } catch (err) {
         console.error('Play error:', err);
@@ -1090,6 +1357,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
             state.voiceChannelName = null;
         }
     }
+    state.recentlyPlayed = getRecentlyPlayedFromState();
     res.json(state);
 });
 
