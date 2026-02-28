@@ -183,7 +183,7 @@
         .volume-row { align-items: center; gap: 1rem; }
         .volume-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
         .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
-        .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+        .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.25rem; }
         .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; min-height: 100px; }
         .sound-btn {
             background: var(--surface-hover);
@@ -225,16 +225,19 @@
         .sound-edit.hidden { display: none; }
         .sound-preview svg, .sound-edit svg, .sound-fav svg { width: 12px; height: 12px; }
         .sound-grid.reorder-mode .sound-preview, .sound-grid.reorder-mode .sound-fav { pointer-events: none; }
-        .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
+        .favorites-section { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+        .favorites-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; min-width: 4.5rem; }
+        .favorites-bar { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
         .favorites-bar .fav-slot {
-            padding: 0.35rem 0.6rem; font-size: 0.8rem; min-width: 2rem;
+            padding: 0.25rem 0.4rem; font-size: 0.75rem; min-width: 1.75rem;
             background: var(--surface-hover); border: 1px solid var(--border);
             border-radius: var(--radius-sm); color: var(--text); cursor: pointer;
             transition: border-color 0.15s, background 0.15s;
         }
         .favorites-bar .fav-slot:hover:not(.empty) { border-color: var(--accent); }
         .favorites-bar .fav-slot.empty { color: var(--text-muted); cursor: default; }
-        .favorites-bar .fav-slot .fav-num { font-weight: 600; margin-right: 0.25rem; }
+        .favorites-bar .fav-slot .fav-num { font-weight: 600; margin-right: 0.2rem; }
+        .favorites-bar .fav-slot .fav-label { max-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
         .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
@@ -242,7 +245,7 @@
         .upload-zone .browse { color: var(--accent); font-weight: 500; }
         .top-actions { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
         .top-actions.hidden { display: none; }
-        .sounds-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .sounds-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
         .sounds-card-header .card-title { margin-bottom: 0; }
         .sounds-header-buttons { display: flex; gap: 0.35rem; align-items: center; }
         .toggle-btn { font-size: 0.8rem; }
@@ -263,10 +266,10 @@
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
-        .sounds-card.mobile-active .sound-filter-row,
+        .sounds-card.mobile-active .sounds-toolbar,
         .sounds-card.mobile-active .sound-grid,
         .sounds-card.mobile-active .tags-admin,
-        .sounds-card.mobile-active .favorites-bar { display: none !important; }
+        .sounds-card.mobile-active .favorites-section { display: none !important; }
         .sounds-card.mobile-active .mobile-grid-wrap { display: flex; }
         .sounds-card.mobile-active .sounds-header-buttons .toggle-btn:not(#mobileBtn) { display: none; }
         /* Mobile view: fullscreen soundboard section */
@@ -316,8 +319,8 @@
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
         .user-locked-msg { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
-        .tag-tabs, .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; align-items: center; }
-        .tag-tab, .folder-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+        .tag-tabs, .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+        .tag-tab, .folder-tab { padding: 0.3rem 0.55rem; border-radius: var(--radius-sm); font-size: 0.8rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
         .tag-tab:hover, .folder-tab:hover { border-color: var(--accent); }
         .tag-tab.active, .folder-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
         .tag-tab.delete, .folder-tab.delete { padding: 0.2rem 0.4rem; font-size: 0.75rem; color: var(--text-muted); }
@@ -337,10 +340,11 @@
         .tags-suggestions { position: absolute; top: 100%; left: 0; right: 0; margin-top: 2px; max-height: 160px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; }
         .tags-suggestions .tag-suggestion { padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.9rem; }
         .tags-suggestions .tag-suggestion:hover, .tags-suggestions .tag-suggestion.selected { background: var(--surface-hover); }
-        .sound-filter-row { margin-bottom: 0.75rem; }
-        .sound-filter-input { width: 100%; max-width: 320px; padding: 0.5rem 0.65rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
-        .sound-filter-input::placeholder { color: var(--text-muted); }
-        .sound-filter-input:focus { outline: none; border-color: var(--accent); }
+        .sounds-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
+        .sounds-toolbar .sound-filter-input { flex: 0 1 200px; min-width: 120px; max-width: 240px; padding: 0.4rem 0.55rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.85rem; }
+        .sounds-toolbar .sound-filter-input::placeholder { color: var(--text-muted); }
+        .sounds-toolbar .sound-filter-input:focus { outline: none; border-color: var(--accent); }
+        .sounds-toolbar .tag-tabs { flex: 1; min-width: 0; margin: 0; }
         .top-bar-lock { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
         .top-bar-lock input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--accent); }
         .sound-panel { margin-top: 1rem; padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); }
@@ -451,11 +455,14 @@
             <div class="tags-admin admin-only hidden" id="tagsAdmin">
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Drag to reorder. Click ✕ to delete, 👁 to hide (hidden tags don't show as buttons but remain searchable).</p>
             </div>
-            <div class="sound-filter-row">
+            <div class="sounds-toolbar">
                 <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
+                <div class="tag-tabs" id="tagTabs"></div>
             </div>
-            <div class="tag-tabs" id="tagTabs"></div>
-            <div class="favorites-bar" id="favoritesBar"></div>
+            <div class="favorites-section">
+                <span class="favorites-label">Quick play</span>
+                <div class="favorites-bar" id="favoritesBar"></div>
+            </div>
             <div class="mobile-grid-wrap" id="mobileGridWrap">
                 <div class="mobile-grid-area" id="mobileGridArea"></div>
                 <div class="mobile-grid-nav" id="mobileGridNav">
@@ -637,7 +644,7 @@
                 const fn = fav[i];
                 const s = fn ? sounds.find(x => x.filename === fn) : null;
                 const name = s ? (s.displayName || s.filename || '') : '';
-                const label = name ? (name.length > 12 ? name.slice(0, 12) + '…' : name) : '—';
+                const label = name ? (name.length > 8 ? name.slice(0, 8) + '…' : name) : '—';
                 const cls = fn ? '' : ' empty';
                 const title = fn ? `${n}: ${(s && s.displayName) || (s && s.filename) || fn} (click to play)` : `${n}: empty (star a sound to add)`;
                 return `<button type="button" class="fav-slot${cls}" data-slot="${n}" data-filename="${(fn || '').replace(/"/g, '&quot;')}" ${fn ? '' : 'disabled'} title="${(title || '').replace(/"/g, '&quot;')}">` +
