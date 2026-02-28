@@ -421,6 +421,8 @@
         .sounds-toolbar .sound-filter-clear:hover { color: var(--text); background: var(--surface-hover); }
         .sounds-toolbar .sound-filter-clear.visible { display: flex; }
         .sounds-toolbar .tag-tabs { flex: 1; min-width: 0; margin: 0; }
+        .top-bar-toggles-stack { display: flex; flex-direction: column; gap: 0.2rem; align-items: flex-start; margin-left: 0.5rem; }
+        .top-bar-toggles-stack .top-bar-toggle { margin-left: 0; }
         .top-bar-toggle { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
         .toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
         .toggle-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
@@ -512,14 +514,16 @@
         <div id="soundsView" class="main-view">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-            <label class="top-bar-toggle admin-only" title="When on, only admins can play sounds; users and guests are blocked">
-                <span class="top-bar-toggle-label">Only admins can play</span>
-                <span class="toggle-switch"><input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)"><span class="toggle-slider"></span></span>
-            </label>
-            <label class="top-bar-toggle superadmin-only hidden" title="When on, only superadmin can play; admins, users and guests are blocked">
-                <span class="top-bar-toggle-label">Only superadmin can play</span>
-                <span class="toggle-switch"><input type="checkbox" id="playbackSuperadminOnlyTop" onchange="setPlaybackSuperadminOnly(this.checked)"><span class="toggle-slider"></span></span>
-            </label>
+            <div class="top-bar-toggles-stack">
+                <label class="top-bar-toggle admin-only" title="When on, only admins can play sounds; users and guests are blocked">
+                    <span class="top-bar-toggle-label">Only admins can play</span>
+                    <span class="toggle-switch"><input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)"><span class="toggle-slider"></span></span>
+                </label>
+                <label class="top-bar-toggle superadmin-only hidden" title="When on, only superadmin can play; admins, users and guests are blocked">
+                    <span class="top-bar-toggle-label">Only superadmin can play</span>
+                    <span class="toggle-switch"><input type="checkbox" id="playbackSuperadminOnlyTop" onchange="setPlaybackSuperadminOnly(this.checked)"><span class="toggle-slider"></span></span>
+                </label>
+            </div>
             <div class="top-bar-voice admin-only hidden" id="voiceConnectedBar">
                 <span class="voice-channel-info" id="voiceChannelInfo" title="">📢 <span id="voiceChannelName">—</span></span>
                 <button type="button" class="btn btn-danger btn-sm" onclick="leaveChannel()">Leave</button>
