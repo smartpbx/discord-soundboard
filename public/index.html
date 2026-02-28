@@ -205,15 +205,12 @@
         .sounds-header-buttons { display: flex; gap: 0.35rem; align-items: center; }
         .toggle-btn { font-size: 0.8rem; }
         .toggle-btn.active { background: var(--accent); color: white; }
-        .sound-grid.reorder-mode .sound-item { cursor: grab; user-select: none; -webkit-user-drag: element; }
-        .sound-grid.reorder-mode .sound-item:active { cursor: grabbing; }
-        .sound-grid.reorder-mode .sound-item.dragging { opacity: 0.5; }
-        .sound-grid.reorder-mode .sound-item.drag-over { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .sound-grid.reorder-mode .sound-item { user-select: none; }
         .sound-item-wrap { display: contents; }
         .sound-grid.reorder-mode .sound-item-wrap { display: flex; flex-direction: column; cursor: grab; }
         .sound-grid.reorder-mode .sound-item-wrap:active { cursor: grabbing; }
-        .sound-grid.reorder-mode .sound-item-wrap.dragging .sound-item { opacity: 0.5; }
-        .sound-grid.reorder-mode .sound-item-wrap.drag-over .sound-item { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .sound-grid.reorder-mode .sound-item-wrap.dragging { opacity: 0.5; }
+        .sound-grid.reorder-mode .sound-item-wrap.drag-over { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
         .sound-grid.reorder-mode .sound-btn { pointer-events: none; }
         .sound-grid.reorder-mode .sound-edit { pointer-events: none; }
         .settings-row { align-items: center; gap: 0.5rem; }
@@ -244,9 +241,8 @@
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
         .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
-        .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; cursor: grab; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
+        .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
         .sound-grid.reorder-mode .sound-drag-handle { display: block; }
-        .sound-grid.reorder-mode .sound-drag-handle:active { cursor: grabbing; }
         .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
         .superadmin-only { }
         .guest-history-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
@@ -730,6 +726,52 @@
             const grid = document.getElementById('soundsList');
             if (btn) btn.classList.toggle('active', reorderMode);
             if (grid) grid.classList.toggle('reorder-mode', reorderMode);
+            renderSoundsGrid();
+        }
+
+        function setupSoundGridDragDrop(grid) {
+            if (!grid || grid.dataset.dragSetup) return;
+            grid.dataset.dragSetup = '1';
+            grid.addEventListener('dragstart', (e) => {
+                if (!reorderMode) return;
+                const wrap = e.target.closest('.sound-item-wrap');
+                if (!wrap) return;
+                e.dataTransfer.setData('text/plain', wrap.dataset.filename || '');
+                e.dataTransfer.effectAllowed = 'move';
+                e.stopPropagation();
+                wrap.classList.add('dragging');
+            });
+            grid.addEventListener('dragend', (e) => {
+                e.target.closest('.sound-item-wrap')?.classList.remove('dragging');
+                grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
+            });
+            grid.addEventListener('dragover', (e) => {
+                if (!reorderMode) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                const wrap = e.target.closest('.sound-item-wrap');
+                grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
+                if (wrap) wrap.classList.add('drag-over');
+            });
+            grid.addEventListener('drop', async (e) => {
+                if (!reorderMode) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const fromFilename = e.dataTransfer.getData('text/plain');
+                const toWrap = e.target.closest('.sound-item-wrap');
+                grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
+                if (!fromFilename || !toWrap) return;
+                const wraps = [...grid.querySelectorAll('.sound-item-wrap')];
+                const fromIdx = wraps.findIndex(w => w.dataset.filename === fromFilename);
+                const toIdx = wraps.findIndex(w => w === toWrap);
+                if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+                const order = wraps.map(w => w.dataset.filename);
+                const [removed] = order.splice(fromIdx, 1);
+                order.splice(toIdx, 0, removed);
+                const res = await api('/api/sounds/order', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+                if (res && res.ok) fetchSounds();
+            });
         }
 
         async function fetchFolders() {
@@ -906,15 +948,15 @@
                 if (!canPlay) title = playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play');
                 else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
                 const inner = `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" ${reorderMode ? 'draggable="true"' : ''}>
+                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
-                        ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
+                        ${isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
                     </div>`;
-                return `<div class="sound-item-wrap" data-filename="${filename}">${inner}</div>`;
+                return `<div class="sound-item-wrap" data-filename="${filename}" ${reorderMode && isAdmin ? 'draggable="true"' : ''}>${inner}</div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             const msg = document.getElementById('userLockedMsg');
@@ -1295,6 +1337,7 @@
         })();
 
         (async function init() {
+            setupSoundGridDragDrop(document.getElementById('soundsList'));
             fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;
@@ -1306,52 +1349,6 @@
             updateNowPlaying();
             updatePlayPauseButton();
 
-            const grid = document.getElementById('soundsList');
-            if (grid) {
-                grid.addEventListener('dragstart', (e) => {
-                    if (!reorderMode) return;
-                    const item = e.target.closest('.sound-item[draggable="true"]');
-                    const wrap = e.target.closest('.sound-item-wrap');
-                    if (!item || !wrap) return;
-                    e.dataTransfer.setData('text/plain', item.dataset.filename || wrap.dataset.filename || '');
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.stopPropagation();
-                    wrap.classList.add('dragging');
-                });
-                grid.addEventListener('dragend', (e) => {
-                    e.target.closest('.sound-item-wrap')?.classList.remove('dragging');
-                    grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
-                });
-                grid.addEventListener('dragover', (e) => {
-                    if (!reorderMode) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.dataTransfer.dropEffect = 'move';
-                    const wrap = e.target.closest('.sound-item-wrap');
-                    grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
-                    if (wrap) wrap.classList.add('drag-over');
-                });
-                grid.addEventListener('drop', async (e) => {
-                    if (!reorderMode) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
-                    const fromFilename = e.dataTransfer.getData('text/plain');
-                    const toWrap = e.target.closest('.sound-item-wrap');
-                    if (!fromFilename || !toWrap) return;
-                    const toFilename = toWrap.dataset.filename;
-                    const fullOrder = soundsList.map(s => s.filename);
-                    const fromIdx = fullOrder.indexOf(fromFilename);
-                    const toIdx = fullOrder.indexOf(toFilename);
-                    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
-                    const order = [...fullOrder];
-                    order.splice(fromIdx, 1);
-                    const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
-                    order.splice(insertIdx, 0, fromFilename);
-                    const res = await api('/api/sounds/order', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
-                    if (res && res.ok) fetchSounds();
-                });
-            }
         })();
     </script>
 </body>
