@@ -1121,9 +1121,17 @@
             });
         }
 
+        const UNTAGGED_FILTER = '__untagged__';
         function getFilteredSounds() {
             const list = soundsList || [];
-            let filtered = selectedTag != null ? list.filter(s => (s.tags || []).includes(selectedTag)) : list;
+            let filtered;
+            if (selectedTag === UNTAGGED_FILTER) {
+                filtered = list.filter(s => !(s.tags || []).length);
+            } else if (selectedTag != null) {
+                filtered = list.filter(s => (s.tags || []).includes(selectedTag));
+            } else {
+                filtered = list;
+            }
             const q = (soundFilter || '').trim().toLowerCase();
             if (q) {
                 const terms = q.split(/\s+/).filter(t => t);
@@ -1380,6 +1388,7 @@
             await checkAuth();
             applyPrefs();
             startPlaybackPolling();
+            startSoundsPolling();
             fetchSounds();
             return false;
         }
@@ -1433,6 +1442,7 @@
             await checkAuth();
             applyPrefs();
             startPlaybackPolling();
+            startSoundsPolling();
             fetchChannels();
             fetchSounds();
             fetch('/api/volume', { credentials: CREDENTIALS }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1978,7 +1988,7 @@
             tagsList = d.tags || [];
             hiddenTags = d.hidden || [];
             const prefs = loadPrefs();
-            if (prefs.lastTag != null && tagsList.includes(prefs.lastTag)) selectedTag = prefs.lastTag;
+            if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
             renderTagTabs();
         }
 
@@ -1989,6 +1999,7 @@
             const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const visibleTags = showManage ? (tagsList || []) : (tagsList || []).filter(t => !hiddenTags.includes(t));
             let html = '<button type="button" class="tag-tab' + (selectedTag === null ? ' active' : '') + '" data-tag="" onclick="selectTag(null)">All</button>';
+            html += '<button type="button" class="tag-tab' + (selectedTag === UNTAGGED_FILTER ? ' active' : '') + '" data-tag="' + UNTAGGED_FILTER + '" onclick="selectTag(\'' + UNTAGGED_FILTER + '\')" title="Sounds with no tag">No tag</button>';
             visibleTags.forEach(t => {
                 const active = selectedTag === t;
                 const isHidden = hiddenTags.includes(t);
@@ -2120,7 +2131,7 @@
                 if (Array.isArray(data.tags)) tagsList = data.tags;
                 if (Array.isArray(data.hidden)) hiddenTags = data.hidden;
                 const prefs = loadPrefs();
-                if (prefs.lastTag != null && tagsList.includes(prefs.lastTag)) selectedTag = prefs.lastTag;
+                if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
                 renderTagTabs();
             }
             renderSoundsGrid();
@@ -2464,6 +2475,8 @@
             if (soundPanelEndTime != null && soundPanelEndTime < soundPanelWaveformDuration) params.push('end=' + encodeURIComponent(soundPanelEndTime));
             if (params.length) url += '?' + params.join('&');
             const audio = new Audio(url);
+            const volEl = document.getElementById('soundPanelVolume');
+            audio.volume = volEl ? Math.max(0, Math.min(1, parseFloat(volEl.value) || 1)) : 1;
             soundPanelPreviewAudio = audio;
             const onTimeUpdate = () => {
                 soundPanelPreviewPlayheadTime = soundPanelStartTime + audio.currentTime;
@@ -2595,7 +2608,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, displayName, tags, color: color || null, volume: Number.isFinite(volume) ? volume : 1, startTime, endTime }),
             });
-            if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; }
+            if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; closeSoundPanel(); }
         }
 
         async function joinChannel() {
@@ -2856,6 +2869,13 @@
 
         let playbackPollingStarted = false;
         let pendingCountPollingStarted = false;
+        let soundsPollingStarted = false;
+        function startSoundsPolling() {
+            if (soundsPollingStarted) return;
+            soundsPollingStarted = true;
+            setInterval(fetchSounds, 10000);
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && user) fetchSounds(); });
+        }
         function startPlaybackPolling() {
             if (playbackPollingStarted) return;
             playbackPollingStarted = true;
@@ -3078,6 +3098,7 @@
             applyPrefs();
             renderRecentlyPlayed();
             startPlaybackPolling();
+            startSoundsPolling();
             setInterval(tickWaveform, 100);
             fetchChannels();
             fetchSounds();
