@@ -205,7 +205,7 @@
         .sounds-header-buttons { display: flex; gap: 0.35rem; align-items: center; }
         .toggle-btn { font-size: 0.8rem; }
         .toggle-btn.active { background: var(--accent); color: white; }
-        .sound-grid.reorder-mode .sound-item { cursor: grab; }
+        .sound-grid.reorder-mode .sound-item { cursor: grab; user-select: none; -webkit-user-drag: element; }
         .sound-grid.reorder-mode .sound-item:active { cursor: grabbing; }
         .sound-grid.reorder-mode .sound-item.dragging { opacity: 0.5; }
         .sound-grid.reorder-mode .sound-item.drag-over { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -906,7 +906,7 @@
                 if (!canPlay) title = playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play');
                 else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
                 const inner = `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
+                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" ${reorderMode ? 'draggable="true"' : ''}>
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
@@ -914,9 +914,6 @@
                         </button>
                         ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
                     </div>`;
-                if (reorderMode) {
-                    return `<div class="sound-item-wrap sound-item-wrap-draggable" data-filename="${filename}" draggable="true">${inner}</div>`;
-                }
                 return `<div class="sound-item-wrap" data-filename="${filename}">${inner}</div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
@@ -1313,9 +1310,10 @@
             if (grid) {
                 grid.addEventListener('dragstart', (e) => {
                     if (!reorderMode) return;
+                    const item = e.target.closest('.sound-item[draggable="true"]');
                     const wrap = e.target.closest('.sound-item-wrap');
-                    if (!wrap || wrap.getAttribute('draggable') !== 'true') return;
-                    e.dataTransfer.setData('text/plain', wrap.dataset.filename || '');
+                    if (!item || !wrap) return;
+                    e.dataTransfer.setData('text/plain', item.dataset.filename || wrap.dataset.filename || '');
                     e.dataTransfer.effectAllowed = 'move';
                     e.stopPropagation();
                     wrap.classList.add('dragging');
@@ -1331,7 +1329,7 @@
                     e.dataTransfer.dropEffect = 'move';
                     const wrap = e.target.closest('.sound-item-wrap');
                     grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
-                    if (wrap && wrap.getAttribute('draggable') === 'true') wrap.classList.add('drag-over');
+                    if (wrap) wrap.classList.add('drag-over');
                 });
                 grid.addEventListener('drop', async (e) => {
                     if (!reorderMode) return;
