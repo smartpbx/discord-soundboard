@@ -377,7 +377,7 @@
         </div>
     </div>
 
-    <div class="app" id="app">
+    <div class="app hidden" id="app">
         <div class="header-row">
             <h1>🔊 Soundboard</h1>
             <div class="header-right">
@@ -649,7 +649,8 @@
         }
 
         function getFilteredSounds() {
-            let filtered = selectedTag != null ? soundsList.filter(s => (s.tags || []).includes(selectedTag)) : soundsList;
+            const list = soundsList || [];
+            let filtered = selectedTag != null ? list.filter(s => (s.tags || []).includes(selectedTag)) : list;
             const q = (soundFilter || '').trim().toLowerCase();
             if (q) {
                 const terms = q.split(/\s+/).filter(t => t);
