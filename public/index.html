@@ -177,13 +177,15 @@
             border: none; background: var(--surface);
             border-radius: 4px; color: var(--text-muted);
             cursor: pointer; display: flex; align-items: center; justify-content: center;
-            opacity: 0.7; transition: opacity 0.15s;
+            opacity: 0; pointer-events: none; transition: opacity 0.15s;
         }
+        .sound-item:hover .sound-edit { opacity: 0.7; pointer-events: auto; }
         .sound-edit:hover { opacity: 1; color: var(--accent); }
         .sound-edit.hidden { display: none; }
         .sound-edit svg { width: 12px; height: 12px; }
         .sound-duration { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
-        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
+        .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
+        .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
         .upload-zone label { cursor: pointer; display: block; }
         .upload-zone .browse { color: var(--accent); font-weight: 500; }
@@ -518,15 +520,15 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 return `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="false">
-                        <span class="sound-drag-handle" draggable="true" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
+                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="${reorderMode ? 'true' : 'false'}">
+                        <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">${name}</button>
                         ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
                         ${dur != null ? `<div class="sound-duration">${formatTime(dur)}</div>` : ''}
                     </div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
-            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = false; });
+            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = reorderMode; });
             const msg = document.getElementById('userLockedMsg');
             if (msg && isUser && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');
@@ -626,7 +628,10 @@
             playback.displayName = data.displayName ?? filename;
             playback.filename = filename;
             pausedAt = 0;
+            updateNowPlaying();
             updatePlayPauseButton();
+            const timeEl = document.getElementById('progressTime');
+            if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
             loadWaveform(filename);
         }
 
@@ -707,6 +712,9 @@
             if (waveformData && waveformDuration > 0 && (playback.status === 'playing' || playback.status === 'paused')) {
                 const current = getCurrentPlaybackTime();
                 drawWaveform(Math.min(current, waveformDuration));
+                const timeEl = document.getElementById('progressTime');
+                const dur = playback.duration;
+                if (timeEl) timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
             }
         }
 
@@ -733,6 +741,7 @@
                 playback.status = 'paused';
             } else if (playback.status === 'paused') {
                 await api('/api/resume', { method: 'POST' });
+                playback.startTime = Date.now() - (pausedAt * 1000);
                 playback.status = 'playing';
             }
             updatePlayPauseButton();
@@ -824,11 +833,21 @@
         (function initUploadZone() {
             const zone = document.getElementById('uploadZone');
             if (!zone) return;
-            zone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; });
-            zone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); });
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'copy';
+                zone.classList.add('drag-over');
+            });
+            zone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over');
+            });
             zone.addEventListener('drop', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                zone.classList.remove('drag-over');
                 const f = e.dataTransfer.files?.[0];
                 if (f) uploadSound(f);
             });
