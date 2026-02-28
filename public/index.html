@@ -102,7 +102,7 @@
         .header-hamburger-wrap { position: relative; }
         .header-hamburger-btn { position: relative; width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
         .header-hamburger-btn:hover { border-color: var(--accent); color: var(--accent); }
-        .header-hamburger-btn .pending-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; background: var(--danger); border-radius: 50%; }
+        .header-hamburger-btn .header-pending-badge { position: absolute; top: -2px; right: -2px; min-width: 16px; padding: 0.1rem 0.3rem; font-size: 0.65rem; line-height: 1; background: var(--danger); color: white; border-radius: 10px; white-space: nowrap; }
         .header-menu { position: absolute; top: 100%; right: 0; margin-top: 4px; min-width: 200px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; padding: 0.5rem; }
         .header-menu.hidden { display: none !important; }
         .header-menu-user { font-size: 0.85rem; color: var(--text-muted); padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 0.35rem; }
@@ -113,7 +113,8 @@
         .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
         .superadmin-close-btn:hover { border-color: var(--accent); color: var(--accent); }
         .superadmin-tabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; flex-wrap: wrap; }
-        .superadmin-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; }
+        .superadmin-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 0.35rem; }
+        .superadmin-tab .tab-badge { padding: 0.1rem 0.35rem; font-size: 0.7rem; background: var(--danger); color: white; border-radius: 10px; }
         .superadmin-tab:hover { border-color: var(--accent); color: var(--accent); }
         .superadmin-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
         .superadmin-panel { display: none; }
@@ -499,7 +500,7 @@
             <div class="header-right header-hamburger-wrap">
                 <button type="button" class="header-hamburger-btn" id="headerHamburgerBtn" onclick="toggleHeaderMenu()" title="Menu" aria-label="Menu">
                     <span style="line-height:1">☰</span>
-                    <span class="pending-dot hidden" id="headerPendingDot"></span>
+                    <span class="header-pending-badge hidden" id="headerPendingBadge"></span>
                 </button>
                 <div class="header-menu hidden" id="headerMenu">
                     <div class="header-menu-user">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span></div>
@@ -678,8 +679,8 @@
             <div class="superadmin-tabs">
                 <button type="button" class="superadmin-tab active" data-panel="access" onclick="switchSuperadminTab('access')">Access & Limits</button>
                 <button type="button" class="superadmin-tab" data-panel="guests" onclick="switchSuperadminTab('guests')">Guests</button>
-                <button type="button" class="superadmin-tab" data-panel="users" onclick="switchSuperadminTab('users')">Users</button>
-                <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation</button>
+                <button type="button" class="superadmin-tab" data-panel="users" onclick="switchSuperadminTab('users')">Users<span class="tab-badge hidden" id="superadminTabUsersBadge">0</span></button>
+                <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation<span class="tab-badge hidden" id="superadminTabModerationBadge">0</span></button>
             </div>
 
             <div id="superadminPanelAccess" class="superadmin-panel active">
@@ -1493,7 +1494,7 @@
             }
             applyVolumeExpanded();
             if ((user && user.role) === 'superadmin' && d.pendingCount !== undefined) {
-                updatePendingBadge(d.pendingCount);
+                updatePendingBadge(d.pendingCount, 0);
             }
             updateUploadCardVisibility();
         }
@@ -1657,24 +1658,61 @@
             if (res && res.ok) fetchBlockedIPs();
         }
 
-        function updatePendingBadge(count) {
+        function updatePendingBadge(uploads, signups) {
+            const total = (uploads || 0) + (signups || 0);
             const badge = document.getElementById('pendingBadge');
-            const dot = document.getElementById('headerPendingDot');
+            const headerBadge = document.getElementById('headerPendingBadge');
+            const hamburgerBtn = document.getElementById('headerHamburgerBtn');
+            const usersTabBadge = document.getElementById('superadminTabUsersBadge');
+            const moderationTabBadge = document.getElementById('superadminTabModerationBadge');
             if (badge) {
-                if (count > 0) {
-                    badge.textContent = count > 99 ? '99+' : String(count);
+                if (total > 0) {
+                    badge.textContent = total > 99 ? '99+' : String(total);
                     badge.classList.remove('hidden');
                 } else {
                     badge.classList.add('hidden');
                 }
             }
-            if (dot) dot.classList.toggle('hidden', count === 0);
+            if (headerBadge) {
+                if (total > 0) {
+                    const parts = [];
+                    if ((uploads || 0) > 0) parts.push((uploads > 99 ? '99+' : uploads) + ' upload' + (uploads === 1 ? '' : 's'));
+                    if ((signups || 0) > 0) parts.push((signups > 99 ? '99+' : signups) + ' signup' + (signups === 1 ? '' : 's'));
+                    headerBadge.textContent = (uploads || 0) > 0 && (signups || 0) > 0 ? (uploads > 99 ? '99+' : uploads) + '↑ ' + (signups > 99 ? '99+' : signups) + '👤' : (uploads || 0) > 0 ? (uploads > 99 ? '99+' : uploads) + '↑' : (signups > 99 ? '99+' : signups) + '👤';
+                    headerBadge.classList.remove('hidden');
+                } else {
+                    headerBadge.classList.add('hidden');
+                }
+            }
+            if (hamburgerBtn) {
+                const parts = [];
+                if ((uploads || 0) > 0) parts.push((uploads > 99 ? '99+' : uploads) + ' pending upload' + (uploads === 1 ? '' : 's'));
+                if ((signups || 0) > 0) parts.push((signups > 99 ? '99+' : signups) + ' pending signup' + (signups === 1 ? '' : 's'));
+                hamburgerBtn.title = total > 0 ? (parts.length ? parts.join(', ') : 'Menu') : 'Menu';
+            }
+            if (usersTabBadge) {
+                if ((signups || 0) > 0) {
+                    usersTabBadge.textContent = signups > 99 ? '99+' : String(signups);
+                    usersTabBadge.classList.remove('hidden');
+                } else {
+                    usersTabBadge.classList.add('hidden');
+                }
+            }
+            if (moderationTabBadge) {
+                if ((uploads || 0) > 0) {
+                    moderationTabBadge.textContent = uploads > 99 ? '99+' : String(uploads);
+                    moderationTabBadge.classList.remove('hidden');
+                } else {
+                    moderationTabBadge.classList.add('hidden');
+                }
+            }
         }
         function toggleHeaderMenu() {
             const menu = document.getElementById('headerMenu');
             if (!menu) return;
             menu.classList.toggle('hidden');
             if (!menu.classList.contains('hidden')) {
+                if ((user && user.role) === 'superadmin') fetchPendingCount();
                 setTimeout(function() { document.addEventListener('click', closeHeaderMenuOnClick); }, 0);
             } else {
                 document.removeEventListener('click', closeHeaderMenuOnClick);
@@ -1698,7 +1736,7 @@
             const d = await res.json().catch(() => ({}));
             const uploads = d.count != null ? d.count : 0;
             const signups = d.pendingSignupsCount != null ? d.pendingSignupsCount : 0;
-            updatePendingBadge(uploads + signups);
+            updatePendingBadge(uploads, signups);
         }
 
         async function fetchPendingUploads() {
@@ -2586,6 +2624,7 @@
             pendingCountPollingStarted = true;
             fetchPendingCount();
             setInterval(fetchPendingCount, 30000);
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && (user && user.role) === 'superadmin') fetchPendingCount(); });
         }
 
         function refreshPlaybackState() {
