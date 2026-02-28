@@ -149,12 +149,12 @@
         .volume-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
         .volume-label { font-size: 0.8rem; color: var(--text-muted); min-width: 2.5rem; }
         .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
-        .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; }
+        .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; min-height: 100px; }
         .sound-btn {
             background: var(--surface-hover);
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            padding: 0.85rem;
+            padding: 0.6rem 0.5rem 0.4rem;
             color: var(--text);
             font: inherit;
             font-size: 0.85rem;
@@ -163,11 +163,15 @@
             transition: background 0.15s, border-color 0.15s;
             text-align: center;
             word-break: break-word;
-            min-height: 52px;
+            min-height: 100px;
+            height: 100px;
             display: flex;
+            flex-direction: column;
             align-items: center;
-            justify-content: center;
+            justify-content: space-between;
         }
+        .sound-btn-label { flex: 1; display: flex; align-items: center; justify-content: center; line-height: 1.2; }
+        .sound-btn-duration { font-size: 0.7rem; color: var(--text-muted); flex-shrink: 0; }
         .sound-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
         .sound-btn:active:not(:disabled) { transform: scale(0.98); }
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
@@ -183,7 +187,6 @@
         .sound-edit:hover { opacity: 1; color: var(--accent); }
         .sound-edit.hidden { display: none; }
         .sound-edit svg { width: 12px; height: 12px; }
-        .sound-duration { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
         .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem; transition: border-color 0.15s, background 0.15s; }
         .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 58, 237, 0.1); }
         .upload-zone input[type="file"] { display: none; }
@@ -193,6 +196,7 @@
         .top-actions.hidden { display: none; }
         .sounds-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
         .sounds-card-header .card-title { margin-bottom: 0; }
+        .sounds-header-buttons { display: flex; gap: 0.35rem; align-items: center; }
         .toggle-btn { font-size: 0.8rem; }
         .toggle-btn.active { background: var(--accent); color: white; }
         .sound-grid.reorder-mode .sound-item { cursor: grab; }
@@ -219,6 +223,10 @@
         .folder-tab-rename { width: 6rem; padding: 0.2rem 0.4rem; font-size: 0.85rem; background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius-sm); color: var(--text); }
         .folders-admin { margin-bottom: 0.75rem; }
         .folders-admin .row { gap: 0.35rem; }
+        .sound-filter-row { margin-bottom: 0.75rem; }
+        .sound-filter-input { width: 100%; max-width: 320px; padding: 0.5rem 0.65rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
+        .sound-filter-input::placeholder { color: var(--text-muted); }
+        .sound-filter-input:focus { outline: none; border-color: var(--accent); }
         .top-bar-lock { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
         .top-bar-lock input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--accent); }
         .sound-panel { margin-top: 1rem; padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); }
@@ -302,14 +310,19 @@
         <div class="card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
-                <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
-                <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageFoldersBtn" onclick="toggleManageFolders()" title="Manage folders: rename, reorder, delete">Manage folders</button>
+                <div class="sounds-header-buttons">
+                    <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
+                    <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageFoldersBtn" onclick="toggleManageFolders()" title="Manage folders: rename, reorder, delete">Manage folders</button>
+                </div>
             </div>
-            <div class="folders-admin admin-only" id="foldersAdmin">
+            <div class="folders-admin admin-only hidden" id="foldersAdmin">
                 <div class="row">
                     <input type="text" id="newFolderInput" placeholder="New folder name" style="max-width: 160px; padding: 0.4rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.85rem;">
                     <button type="button" class="btn btn-ghost" style="padding: 0.4rem 0.6rem; font-size: 0.85rem;" onclick="addFolder()">Add folder</button>
                 </div>
+            </div>
+            <div class="sound-filter-row">
+                <input type="text" id="soundFilterInput" placeholder="Filter sounds by name..." class="sound-filter-input" autocomplete="off">
             </div>
             <div class="folder-tabs" id="folderTabs"></div>
             <div id="soundsList" class="sound-grid"></div>
@@ -342,6 +355,7 @@
         let selectedFolder = null;
         let selectedSound = null;
         let manageFoldersMode = false;
+        let soundFilter = '';
 
         async function api(path, opts = {}) {
             const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
@@ -484,6 +498,7 @@
             container.innerHTML = html;
             container.classList.toggle('manage-mode', showManage);
             document.getElementById('manageFoldersBtn')?.classList.toggle('active', manageFoldersMode);
+            document.getElementById('foldersAdmin')?.classList.toggle('hidden', !showManage);
             if (showManage) setupFolderTabDragDrop(container);
         }
 
@@ -605,7 +620,14 @@
 
         function renderSoundsGrid() {
             const grid = document.getElementById('soundsList');
-            const filtered = selectedFolder != null ? soundsList.filter(s => (s.folder || null) === selectedFolder) : soundsList;
+            let filtered = selectedFolder != null ? soundsList.filter(s => (s.folder || null) === selectedFolder) : soundsList;
+            const q = (soundFilter || '').trim().toLowerCase();
+            if (q) {
+                filtered = filtered.filter(s => {
+                    const title = (s.displayName || s.filename || '').toLowerCase();
+                    return title.includes(q);
+                });
+            }
             const isUser = user?.role === 'user';
             const canPlay = !isUser || !playbackLocked;
             const tooLong = (dur) => isUser && dur != null && dur > MAX_USER_DURATION;
@@ -618,16 +640,16 @@
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 return `
-                    <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}" draggable="false">
+                    <div class="sound-item${selected}${reorderMode ? ' sound-item-draggable' : ''}" data-filename="${filename}" data-index="${idx}" draggable="${reorderMode ? 'true' : 'false'}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">${name}</button>
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">
+                            <span class="sound-btn-label">${name}</span>
+                            <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
+                        </button>
                         ${isAdmin ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : ''}
-                        ${dur != null ? `<div class="sound-duration">${formatTime(dur)}</div>` : ''}
                     </div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
-            grid.querySelectorAll('.sound-item').forEach(el => { el.draggable = false; });
-            grid.querySelectorAll('.sound-drag-handle').forEach(h => { h.draggable = reorderMode; });
             const msg = document.getElementById('userLockedMsg');
             if (msg && isUser && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');
@@ -810,12 +832,16 @@
         }
 
         function tickWaveform() {
-            if (waveformData && waveformDuration > 0 && (playback.status === 'playing' || playback.status === 'paused')) {
+            const isActive = playback.status === 'playing' || playback.status === 'paused';
+            if (isActive) {
                 const current = getCurrentPlaybackTime();
-                drawWaveform(Math.min(current, waveformDuration));
                 const timeEl = document.getElementById('progressTime');
                 const dur = playback.duration;
                 if (timeEl) timeEl.textContent = formatTime(current) + ' / ' + (dur != null ? formatTime(dur) : '—');
+            }
+            if (waveformData && waveformDuration > 0 && isActive) {
+                const current = getCurrentPlaybackTime();
+                drawWaveform(Math.min(current, waveformDuration));
             }
         }
 
@@ -922,6 +948,11 @@
         }
 
         document.getElementById('volumeSlider').addEventListener('input', (e) => setVolume(e.target.value));
+
+        document.getElementById('soundFilterInput')?.addEventListener('input', (e) => {
+            soundFilter = (e.target.value || '').trim();
+            renderSoundsGrid();
+        });
 
         async function uploadSound(file) {
             const fileInput = document.getElementById('fileInput');
