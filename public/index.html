@@ -364,7 +364,7 @@
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
             <h1>🔊 Soundboard</h1>
-            <form id="loginForm" onsubmit="return doLogin(event)">
+            <form id="loginForm" onsubmit="doLogin(); return false;">
                 <label for="loginUser">Username</label>
                 <input type="text" id="loginUser" name="username" placeholder="Username" autocomplete="username" required>
                 <label for="loginPass">Password</label>
@@ -844,7 +844,7 @@
         }
 
         async function doLogin(e) {
-            e.preventDefault();
+            if (e && e.preventDefault) e.preventDefault();
             const username = document.getElementById('loginUser').value.trim();
             const password = document.getElementById('loginPass').value;
             document.getElementById('loginError').textContent = '';
@@ -859,9 +859,34 @@
                 document.getElementById('loginError').textContent = data.error || 'Login failed';
                 return false;
             }
-            await checkAuth();
+            user = data;
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            document.getElementById('currentUsername').textContent = user.username;
+            document.getElementById('currentRole').textContent = '(' + (user.role || 'user') + ')';
+            if (user.role === 'user' || user.role === 'guest') {
+                document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+                document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
+                document.getElementById('topActions').classList.add('hidden');
+                document.getElementById('playPauseBtn').classList.add('hidden');
+                document.getElementById('stopBtn').classList.add('hidden');
+            } else {
+                document.getElementById('topActions').classList.remove('hidden');
+                document.getElementById('playPauseBtn').classList.remove('hidden');
+                document.getElementById('stopBtn').classList.remove('hidden');
+                document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
+                if (user.role === 'superadmin') {
+                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
+                    startPendingCountPolling();
+                } else {
+                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
+                }
+            }
             applyPrefs();
             startPlaybackPolling();
+            fetchSettings();
+            if (user?.role === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+            updateUploadCardVisibility();
             fetchChannels();
             fetchSounds();
             fetchTags();
