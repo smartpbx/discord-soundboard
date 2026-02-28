@@ -244,6 +244,13 @@
         .sound-grid.reorder-mode .sound-btn { pointer-events: none; }
         .sound-grid.reorder-mode .sound-edit { pointer-events: none; }
         .sound-grid.reorder-mode .sound-item-actions { pointer-events: none; }
+        .sound-grid.compact-mode { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; }
+        .sound-grid.compact-mode .sound-item { min-height: 72px; }
+        .sound-grid.compact-mode .sound-btn { min-height: 72px; height: 72px; padding: 0.4rem 0.35rem 0.3rem; font-size: 0.78rem; }
+        .sound-grid.compact-mode .sound-btn-duration { font-size: 0.65rem; }
+        .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
+        .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit { width: 20px; height: 20px; }
+        .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg { width: 10px; height: 10px; }
         .settings-row { align-items: center; gap: 0.5rem; }
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
@@ -367,6 +374,7 @@
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-buttons">
+                    <button type="button" class="btn btn-ghost toggle-btn" id="compactBtn" onclick="toggleCompact()" title="Compact view: smaller buttons, more on screen">Compact</button>
                     <button type="button" class="btn btn-ghost toggle-btn" id="reorderBtn" onclick="toggleReorder()" title="Drag to reorder (switch to All to reorder)">Reorder</button>
                     <button type="button" class="btn btn-ghost toggle-btn admin-only" id="manageFoldersBtn" onclick="toggleManageFolders()" title="Manage folders: rename, reorder, delete">Manage folders</button>
                 </div>
@@ -469,6 +477,7 @@
         let manageFoldersMode = false;
         let soundFilter = '';
         let lastGuestCooldownShown = -1;
+        let compactMode = false;
 
         const PREFS_KEY = 'soundboard-prefs';
         function loadPrefs() {
@@ -488,6 +497,19 @@
             soundFilter = prefs.soundFilter || '';
             const filterInput = document.getElementById('soundFilterInput');
             if (filterInput) filterInput.value = soundFilter;
+            compactMode = prefs.compact === true;
+            const grid = document.getElementById('soundsList');
+            const compactBtn = document.getElementById('compactBtn');
+            if (grid) grid.classList.toggle('compact-mode', compactMode);
+            if (compactBtn) compactBtn.classList.toggle('active', compactMode);
+        }
+        function toggleCompact() {
+            compactMode = !compactMode;
+            const grid = document.getElementById('soundsList');
+            const compactBtn = document.getElementById('compactBtn');
+            if (grid) grid.classList.toggle('compact-mode', compactMode);
+            if (compactBtn) compactBtn.classList.toggle('active', compactMode);
+            savePrefs({ compact: compactMode });
         }
 
         function applyTheme(theme) {
@@ -1042,6 +1064,7 @@
                 return `<div class="sound-item-wrap" data-filename="${filename}" ${reorderMode && isAdmin ? 'draggable="true"' : ''}>${inner}</div>`;
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
+            grid.classList.toggle('compact-mode', compactMode);
             const msg = document.getElementById('userLockedMsg');
             if (msg && (isUser || isGuest) && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');

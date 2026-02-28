@@ -16,7 +16,7 @@ Features to implement, in rough priority order.
 - [x] **Sound preview** – Play locally in browser before sending to Discord (test volume/content)
 - [x] **Remember preferences** – Last channel, folder, sound filter (localStorage)
 - [x] **Theme toggle** – Dark/light mode (saved in preferences)
-- [ ] **Compact view** – Smaller sound buttons, more on screen
+- [x] **Compact view** – Smaller sound buttons, more on screen (saved in preferences)
 
 ---
 
