@@ -14,7 +14,136 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus } = require('@discordjs/voice');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
+const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
 const SOUNDS_META_PATH = path.join(SOUNDS_DIR, 'sounds.json');
+const GUEST_DATA_PATH = path.join(__dirname, 'guest.json');
+const PENDING_META_PATH = path.join(__dirname, 'pending.json');
+
+const GUEST_COOLDOWN_SEC = 30;
+const MAX_GUEST_SOUND_DURATION = 7;
+const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
+
+function getClientIP(req) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) return String(forwarded).split(',')[0].trim();
+    return req.ip || req.connection?.remoteAddress || 'unknown';
+}
+
+function loadGuestData() {
+    try {
+        const raw = fs.readFileSync(GUEST_DATA_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        return typeof data === 'object' && data !== null ? data : { enabled: false, blockedIPs: [], history: [] };
+    } catch {
+        return { enabled: false, blockedIPs: [], history: [] };
+    }
+}
+
+function saveGuestData(data) {
+    fs.writeFileSync(GUEST_DATA_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function getGuestEnabled() {
+    const d = loadGuestData();
+    return d.enabled === true;
+}
+
+function setGuestEnabled(enabled) {
+    const d = loadGuestData();
+    d.enabled = enabled === true;
+    saveGuestData(d);
+}
+
+function isIPBlocked(ip) {
+    const d = loadGuestData();
+    const list = Array.isArray(d.blockedIPs) ? d.blockedIPs : [];
+    return list.includes(String(ip).trim());
+}
+
+function blockIP(ip) {
+    const d = loadGuestData();
+    d.blockedIPs = Array.isArray(d.blockedIPs) ? d.blockedIPs : [];
+    const s = String(ip).trim();
+    if (s && !d.blockedIPs.includes(s)) d.blockedIPs.push(s);
+    saveGuestData(d);
+}
+
+function unblockIP(ip) {
+    const d = loadGuestData();
+    d.blockedIPs = (Array.isArray(d.blockedIPs) ? d.blockedIPs : []).filter(x => String(x).trim() !== String(ip).trim());
+    saveGuestData(d);
+}
+
+function appendGuestHistory(ip, filename, displayName) {
+    const d = loadGuestData();
+    d.history = Array.isArray(d.history) ? d.history : [];
+    d.history.push({ ip, timestamp: Date.now(), filename, displayName });
+    const max = 500;
+    if (d.history.length > max) d.history = d.history.slice(-max);
+    saveGuestData(d);
+}
+
+function getUserUploadEnabled() {
+    const d = loadGuestData();
+    return d.userUploadEnabled === true;
+}
+
+function setUserUploadEnabled(enabled) {
+    const d = loadGuestData();
+    d.userUploadEnabled = enabled === true;
+    saveGuestData(d);
+}
+
+function getMaxUploadDuration() {
+    const d = loadGuestData();
+    const n = Number(d.maxUploadDuration);
+    return Number.isFinite(n) && n > 0 ? n : 7;
+}
+
+function setMaxUploadDuration(sec) {
+    const d = loadGuestData();
+    d.maxUploadDuration = Number(sec) > 0 ? Number(sec) : 7;
+    saveGuestData(d);
+}
+
+function getMaxUploadBytes() {
+    const d = loadGuestData();
+    const n = Number(d.maxUploadBytes);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+function setMaxUploadBytes(bytes) {
+    const d = loadGuestData();
+    d.maxUploadBytes = Number(bytes) > 0 ? Number(bytes) : DEFAULT_MAX_UPLOAD_BYTES;
+    saveGuestData(d);
+}
+
+function loadPendingMeta() {
+    try {
+        const raw = fs.readFileSync(PENDING_META_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        return typeof data === 'object' && data !== null && Array.isArray(data.uploads) ? data : { uploads: [] };
+    } catch {
+        return { uploads: [] };
+    }
+}
+
+function savePendingMeta(data) {
+    fs.writeFileSync(PENDING_META_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function addPendingUpload(filename, meta) {
+    const d = loadPendingMeta();
+    d.uploads = d.uploads || [];
+    d.uploads.push({ filename, ...meta });
+    savePendingMeta(d);
+}
+
+function removePendingUpload(filename) {
+    const d = loadPendingMeta();
+    d.uploads = (d.uploads || []).filter(u => u.filename !== filename);
+    savePendingMeta(d);
+}
 
 function loadSoundsMeta() {
     try {
@@ -109,9 +238,12 @@ if (!fs.existsSync(SOUNDS_DIR)) {
     fs.mkdirSync(SOUNDS_DIR, { recursive: true });
     console.log('📁 Created sounds directory');
 }
+if (!fs.existsSync(PENDING_DIR)) {
+    fs.mkdirSync(PENDING_DIR, { recursive: true });
+}
 
 const app = express();
-const upload = multer({ dest: 'sounds/' });
+const upload = multer({ dest: 'sounds/', limits: { fileSize: 10 * 1024 * 1024 } });
 app.use(express.static('public'));
 app.use(express.json());
 app.use(require('cookie-parser')());
@@ -153,15 +285,28 @@ function loadUsers() {
     return users;
 }
 const USERS = loadUsers();
+const guestLastPlayByIP = new Map();
 
 function requireAuth(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
+    if (req.session.user.role === 'guest') {
+        if (!getGuestEnabled() || isIPBlocked(req.session.user.ip || getClientIP(req))) {
+            req.session.destroy(() => {});
+            return res.status(401).json({ error: 'Guest access disabled or IP blocked.' });
+        }
+    }
     next();
 }
 
 function requireAdmin(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
     if (req.session.user.role !== 'admin' && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
+    next();
+}
+
+function requireSuperadmin(req, res, next) {
+    if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
+    if (req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin only' });
     next();
 }
 
@@ -203,9 +348,26 @@ app.post('/api/logout', (req, res) => {
     req.session.destroy(() => res.json({ ok: true }));
 });
 
+app.get('/api/guest-status', (req, res) => {
+    res.json({ guestEnabled: getGuestEnabled() });
+});
+
+app.post('/api/guest/start', (req, res) => {
+    if (!getGuestEnabled()) return res.status(403).json({ error: 'Guest access is disabled.' });
+    const ip = getClientIP(req);
+    if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
+    req.session.user = { username: 'guest', role: 'guest', ip };
+    req.session.save((err) => {
+        if (err) return res.status(500).json({ error: 'Session error' });
+        res.json(req.session.user);
+    });
+});
+
 app.get('/api/me', (req, res) => {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
-    res.json(req.session.user);
+    const u = { ...req.session.user };
+    if (u.role === 'guest') delete u.ip;
+    res.json(u);
 });
 
 app.get('/api/channels', requireAdmin, (req, res) => {
@@ -383,28 +545,196 @@ app.delete('/api/folders/:name', requireAdmin, (req, res) => {
 
 app.get('/api/settings', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
-    res.json({ playbackLocked: getPlaybackLocked(meta), playbackLockedBy: getPlaybackLocked(meta) ? getPlaybackLockedBy(meta) : null });
+    const out = { playbackLocked: getPlaybackLocked(meta), playbackLockedBy: getPlaybackLocked(meta) ? getPlaybackLockedBy(meta) : null };
+    if (req.session.user.role === 'superadmin') {
+        out.guestEnabled = getGuestEnabled();
+        out.userUploadEnabled = getUserUploadEnabled();
+        out.maxUploadDuration = getMaxUploadDuration();
+        out.maxUploadBytes = getMaxUploadBytes();
+    }
+    if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
+        out.userUploadEnabled = getUserUploadEnabled();
+        if (getUserUploadEnabled()) {
+            out.maxUploadDuration = getMaxUploadDuration();
+            out.maxUploadBytes = getMaxUploadBytes();
+        }
+    }
+    res.json(out);
 });
 
 app.patch('/api/settings', requireAdmin, (req, res) => {
-    const { playbackLocked } = req.body;
-    if (typeof playbackLocked !== 'boolean') return res.status(400).json({ error: 'playbackLocked must be boolean' });
-    const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
-    setPlaybackLocked(playbackLocked, byRole);
-    res.json({ playbackLocked });
+    const { playbackLocked, guestEnabled, userUploadEnabled, maxUploadDuration, maxUploadBytes } = req.body;
+    const out = {};
+    if (typeof playbackLocked === 'boolean') {
+        const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
+        setPlaybackLocked(playbackLocked, byRole);
+        out.playbackLocked = playbackLocked;
+    }
+    if (req.session.user.role === 'superadmin') {
+        if (typeof guestEnabled === 'boolean') { setGuestEnabled(guestEnabled); out.guestEnabled = guestEnabled; }
+        if (typeof userUploadEnabled === 'boolean') { setUserUploadEnabled(userUploadEnabled); out.userUploadEnabled = userUploadEnabled; }
+        if (typeof maxUploadDuration === 'number' && maxUploadDuration > 0) { setMaxUploadDuration(maxUploadDuration); out.maxUploadDuration = maxUploadDuration; }
+        if (typeof maxUploadBytes === 'number' && maxUploadBytes > 0) { setMaxUploadBytes(maxUploadBytes); out.maxUploadBytes = maxUploadBytes; }
+    }
+    res.json(Object.keys(out).length ? out : { ok: true });
 });
 
-app.post('/api/upload', requireAdmin, upload.single('soundFile'), (req, res) => {
-    const tempPath = req.file.path;
-    const safeName = path.basename(req.file.originalname || 'sound');
-    const targetPath = path.join(SOUNDS_DIR, safeName);
-    const resolvedPath = path.resolve(targetPath);
-    if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).send('Invalid filename');
-    fs.rename(tempPath, targetPath, err => {
-        if (err) return res.status(500).send('Error saving file');
+app.get('/api/superadmin/pending-uploads', requireSuperadmin, (req, res) => {
+    const d = loadPendingMeta();
+    const uploads = (d.uploads || []).map(u => {
+        const filePath = path.join(PENDING_DIR, u.filename);
+        return { ...u, exists: fs.existsSync(filePath) };
+    }).filter(u => u.exists);
+    res.json(uploads);
+});
+
+app.post('/api/superadmin/pending-uploads/approve/:filename', requireSuperadmin, (req, res) => {
+    const safeFilename = path.basename(req.params.filename || '');
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
+    const pendingPath = path.join(PENDING_DIR, safeFilename);
+    const targetPath = path.join(SOUNDS_DIR, safeFilename);
+    if (!fs.existsSync(pendingPath)) return res.status(404).json({ error: 'Pending file not found' });
+    if (fs.existsSync(targetPath)) {
+        fs.unlinkSync(pendingPath);
+        removePendingUpload(safeFilename);
+        return res.status(400).json({ error: 'A sound with this name already exists' });
+    }
+    try {
+        fs.renameSync(pendingPath, targetPath);
         const duration = probeDuration(targetPath);
-        if (duration != null) setSoundMeta(safeName, { duration });
-        res.send('File uploaded!');
+        if (duration != null) setSoundMeta(safeFilename, { duration });
+        removePendingUpload(safeFilename);
+        res.json({ ok: true, filename: safeFilename });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to approve' });
+    }
+});
+
+app.delete('/api/superadmin/pending-uploads/reject/:filename', requireSuperadmin, (req, res) => {
+    const safeFilename = path.basename(req.params.filename || '');
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
+    const pendingPath = path.join(PENDING_DIR, safeFilename);
+    try {
+        if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath);
+        removePendingUpload(safeFilename);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to reject' });
+    }
+});
+
+app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {
+    const safeFilename = path.basename(req.params.filename || '');
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).send('Invalid file');
+    const filePath = path.join(PENDING_DIR, safeFilename);
+    if (!path.resolve(filePath).startsWith(path.resolve(PENDING_DIR)) || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+    const ext = path.extname(safeFilename).toLowerCase();
+    const mime = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' }[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', mime);
+    fs.createReadStream(filePath).pipe(res);
+});
+
+app.get('/api/guest/history', requireSuperadmin, (req, res) => {
+    const d = loadGuestData();
+    const history = Array.isArray(d.history) ? d.history : [];
+    res.json(history.slice().reverse());
+});
+
+app.get('/api/guest/blocked', requireSuperadmin, (req, res) => {
+    const d = loadGuestData();
+    res.json(Array.isArray(d.blockedIPs) ? d.blockedIPs : []);
+});
+
+app.post('/api/guest/block-ip', requireSuperadmin, (req, res) => {
+    const { ip } = req.body;
+    const s = (ip != null ? String(ip) : '').trim();
+    if (!s) return res.status(400).json({ error: 'IP required' });
+    blockIP(s);
+    res.json({ ok: true, blocked: s });
+});
+
+app.delete('/api/guest/block-ip/:ip', requireSuperadmin, (req, res) => {
+    const ip = decodeURIComponent(req.params.ip || '').trim();
+    if (!ip) return res.status(400).json({ error: 'IP required' });
+    unblockIP(ip);
+    res.json({ ok: true });
+});
+
+function uploadHandler(req, res, next) {
+    const role = req.session?.user?.role;
+    const isAdminOrSuper = role === 'admin' || role === 'superadmin';
+    const canDirectUpload = isAdminOrSuper;
+    const canPendingUpload = (role === 'user' || role === 'guest') && getUserUploadEnabled();
+    if (!canDirectUpload && !canPendingUpload) return res.status(403).json({ error: 'Upload not allowed for your role.' });
+    upload.single('soundFile')(req, res, (err) => {
+        if (err) return res.status(500).json({ error: err.message || 'Upload failed' });
+        if (!req.file) return res.status(400).json({ error: 'No file received' });
+        req._uploadMode = canDirectUpload ? 'direct' : 'pending';
+        next();
+    });
+}
+
+app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
+    const tempPath = req.file.path;
+    const origName = (req.file.originalname || 'sound').trim();
+    let safeName = path.basename(origName).replace(/[^a-zA-Z0-9._-]/g, '_') || 'sound';
+    if (!/\.(mp3|wav|ogg)$/i.test(safeName)) safeName += '.mp3';
+
+    const mode = req._uploadMode;
+    const role = req.session.user.role;
+    const uploadedBy = role === 'guest' ? `guest:${getClientIP(req)}` : req.session.user.username;
+    const uploadedByRole = role;
+    const uploadedByIP = role === 'guest' ? getClientIP(req) : null;
+
+    if (mode === 'direct') {
+        const targetPath = path.join(SOUNDS_DIR, safeName);
+        const resolvedPath = path.resolve(targetPath);
+        if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid filename' });
+        fs.rename(tempPath, targetPath, (err) => {
+            if (err) return res.status(500).json({ error: 'Error saving file' });
+            const duration = probeDuration(targetPath);
+            if (duration != null) setSoundMeta(safeName, { duration });
+            res.json({ ok: true, message: 'File uploaded!', pending: false });
+        });
+        return;
+    }
+
+    let targetPath = path.join(PENDING_DIR, safeName);
+    if (fs.existsSync(targetPath)) {
+        const ext = path.extname(safeName);
+        const base = path.basename(safeName, ext);
+        safeName = `${base}_${Date.now()}${ext}`;
+        targetPath = path.join(PENDING_DIR, safeName);
+    }
+    const resolvedPath = path.resolve(targetPath);
+    if (!resolvedPath.startsWith(path.resolve(PENDING_DIR))) return res.status(403).json({ error: 'Invalid filename' });
+
+    const stat = fs.statSync(tempPath);
+    const size = stat.size;
+    const maxBytes = getMaxUploadBytes();
+    if (size > maxBytes) {
+        fs.unlink(tempPath, () => {});
+        return res.status(400).json({ error: `File too large. Max ${Math.round(maxBytes / 1024)}KB.` });
+    }
+
+    fs.rename(tempPath, targetPath, (err) => {
+        if (err) return res.status(500).json({ error: 'Error saving file' });
+        const duration = probeDuration(targetPath);
+        const maxDur = getMaxUploadDuration();
+        if (duration != null && duration > maxDur) {
+            fs.unlinkSync(targetPath);
+            return res.status(400).json({ error: `File too long. Max ${maxDur} seconds. This file is ${Math.ceil(duration)}s.` });
+        }
+        addPendingUpload(safeName, {
+            uploadedBy,
+            uploadedByRole,
+            uploadedByIP,
+            uploadedAt: Date.now(),
+            duration: duration ?? null,
+            size,
+            originalName: origName,
+        });
+        res.json({ ok: true, message: 'Upload sent for moderation. A superadmin will review it.', pending: true });
     });
 });
 
@@ -430,17 +760,32 @@ app.post('/api/play', requireAuth, (req, res) => {
     }
     const displayName = getDisplayName(meta, safeFilename);
 
-    if (req.session.user.role === 'user' && duration != null && duration > MAX_USER_SOUND_DURATION) {
-        return res.status(403).json({ error: `Only sounds ${MAX_USER_SOUND_DURATION} seconds or shorter are allowed for your role. This sound is ${Math.ceil(duration)}s.` });
+    const role = req.session.user.role;
+    const isGuest = role === 'guest';
+
+    if (isGuest) {
+        if (!getGuestEnabled()) return res.status(403).json({ error: 'Guest access is disabled.' });
+        const ip = getClientIP(req);
+        if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
+        const lastPlay = guestLastPlayByIP.get(ip);
+        if (lastPlay != null) {
+            const elapsed = (Date.now() - lastPlay) / 1000;
+            if (elapsed < GUEST_COOLDOWN_SEC) {
+                return res.status(429).json({ error: `Wait ${Math.ceil(GUEST_COOLDOWN_SEC - elapsed)} seconds before playing again.`, cooldownRemaining: Math.ceil(GUEST_COOLDOWN_SEC - elapsed) });
+            }
+        }
+    }
+
+    if ((role === 'user' || isGuest) && duration != null && duration > MAX_USER_SOUND_DURATION) {
+        return res.status(403).json({ error: `Only sounds ${MAX_USER_SOUND_DURATION} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
     }
 
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
-        const role = req.session.user.role;
         if (lockedBy === 'superadmin') {
             return res.status(403).json({ error: 'Playback is locked by superadmin.' });
         }
-        if (role === 'user') {
+        if (role === 'user' || isGuest) {
             return res.status(403).json({ error: 'Playback is locked by an admin.' });
         }
     }
@@ -467,6 +812,10 @@ app.post('/api/play', requireAuth, (req, res) => {
         resource.volume.setVolume(currentVolume);
         player.play(resource);
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
+        if (isGuest) {
+            guestLastPlayByIP.set(getClientIP(req), Date.now());
+            appendGuestHistory(getClientIP(req), safeFilename, displayName);
+        }
         playbackState = {
             status: 'playing',
             filename: safeFilename,

@@ -6,6 +6,8 @@ node_modules/
 
 # Uploads and user data (local only; never commit or overwrite on pull)
 sounds/
+guest.json
+pending.json
 
 # OS and editor
 .DS_Store

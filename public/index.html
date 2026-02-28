@@ -69,7 +69,13 @@
         .login-card .btn { width: 100%; padding: 0.75rem; margin-top: 0.5rem; }
         .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
         .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+        .header-row { flex-wrap: wrap; }
         .header-row h1 { font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+        .header-right { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .main-tabs { display: flex; gap: 0.25rem; }
+        .main-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+        .main-tab:hover { border-color: var(--accent); }
+        .main-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
         .user-badge { font-size: 0.75rem; color: var(--text-muted); }
         .user-badge span { color: var(--accent); font-weight: 500; }
         .card {
@@ -242,6 +248,10 @@
         .sound-grid.reorder-mode .sound-drag-handle { display: block; }
         .sound-grid.reorder-mode .sound-drag-handle:active { cursor: grabbing; }
         .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .superadmin-only { }
+        .guest-history-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+        .guest-history-table .block-btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+        .blocked-ips-list .ip-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; }
     </style>
 </head>
 <body>
@@ -255,6 +265,8 @@
                 <input type="password" id="loginPass" name="password" placeholder="Password" autocomplete="current-password" required>
                 <button type="submit" class="btn btn-primary">Log in</button>
                 <div class="login-error" id="loginError"></div>
+                <div class="guest-divider" id="guestDivider" style="display:none; margin: 1rem 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">— or —</div>
+                <button type="button" class="btn btn-ghost" id="guestBtn" style="display:none; width:100%;" onclick="doGuestLogin()">Continue as guest</button>
             </form>
         </div>
     </div>
@@ -262,9 +274,16 @@
     <div class="app" id="app">
         <div class="header-row">
             <h1>🔊 Soundboard</h1>
-            <div class="user-badge">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span> <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem;" onclick="logout()">Log out</button></div>
+            <div class="header-right">
+                <div class="main-tabs superadmin-only hidden" id="mainTabs">
+                    <button type="button" class="main-tab active" data-tab="sounds" onclick="switchMainTab('sounds')">Sounds</button>
+                    <button type="button" class="main-tab" data-tab="superadmin" onclick="switchMainTab('superadmin')">Superadmin</button>
+                </div>
+                <div class="user-badge">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span> <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem;" onclick="logout()">Log out</button></div>
+            </div>
         </div>
 
+        <div id="soundsView" class="main-view">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
             <label class="top-bar-lock admin-only" title="Lock playback for users (superadmin locks everyone)">
@@ -304,12 +323,60 @@
             </div>
         </div>
 
-        <div class="card admin-only" id="uploadCard">
+        <div class="card" id="uploadCard">
             <div class="card-title">Upload Sound</div>
             <div class="upload-zone" id="uploadZone">
                 <label for="fileInput"><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
                 <input type="file" id="fileInput" accept="audio/*">
             </div>
+            <div class="upload-hint" id="uploadHint" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
+        </div>
+
+        <div id="superadminView" class="main-view hidden">
+        <div class="card" id="superadminCard">
+            <div class="card-title">Guest Access</div>
+            <div class="settings-row" style="margin-bottom: 0.75rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="guestEnabledToggle" onchange="setGuestEnabled(this.checked)">
+                    <span>Allow guest access (no login, 7s max, 30s cooldown)</span>
+                </label>
+            </div>
+            <div class="card-title" style="margin-top: 1rem;">User & Guest Uploads</div>
+            <div class="settings-row" style="margin-bottom: 0.5rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="checkbox" id="userUploadEnabledToggle" onchange="setUserUploadEnabled(this.checked)">
+                    <span>Allow users and guests to upload (goes to moderation queue)</span>
+                </label>
+            </div>
+            <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max duration (s):</span>
+                    <input type="number" id="maxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setMaxUploadDuration(this.value)">
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max size (KB):</span>
+                    <input type="number" id="maxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setMaxUploadBytes(this.value)">
+                </label>
+            </div>
+            <div class="card-title" style="margin-top: 1rem;">Guest History</div>
+            <div class="guest-history-table-wrap" style="max-height: 200px; overflow-y: auto; margin-bottom: 0.75rem;">
+                <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                    <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">IP</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Time</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Sound</th><th></th></tr></thead>
+                    <tbody id="guestHistoryBody"></tbody>
+                </table>
+            </div>
+            <div class="card-title">Blocked IPs</div>
+            <div id="blockedIPsList" class="blocked-ips-list" style="font-size: 0.85rem; margin-bottom: 1rem;"></div>
+            <div class="card-title">Moderation Queue</div>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">User and guest uploads await approval here.</p>
+            <div class="pending-uploads-wrap" style="max-height: 220px; overflow-y: auto;">
+                <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                    <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">File</th><th style="text-align:left; padding: 0.35rem 0.5rem;">By</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Time</th><th></th></tr></thead>
+                    <tbody id="pendingUploadsBody"></tbody>
+                </table>
+            </div>
+            <div id="pendingUploadsEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No pending uploads</div>
+        </div>
         </div>
 
         <div class="card">
@@ -343,14 +410,21 @@
             </div>
             <div class="user-locked-msg hidden" id="userLockedMsg">Playback is locked by an admin.</div>
         </div>
+        </div>
     </div>
 
     <script>
         const CREDENTIALS = 'include';
         const MAX_USER_DURATION = 7;
+        const GUEST_COOLDOWN_SEC = 30;
         let user = null;
         let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
         let playbackLockedBy = null;
+        let guestLastPlayTime = 0;
+        let guestEnabled = false;
+        let userUploadEnabled = false;
+        let maxUploadDuration = 7;
+        let maxUploadBytes = 2097152;
         let pausedAt = 0;
         let waveformData = null;
         let waveformDuration = 0;
@@ -362,6 +436,7 @@
         let selectedSound = null;
         let manageFoldersMode = false;
         let soundFilter = '';
+        let lastGuestCooldownShown = -1;
 
         async function api(path, opts = {}) {
             const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
@@ -370,6 +445,13 @@
         }
 
         function isAdminOrSuperadmin() { return user?.role === 'admin' || user?.role === 'superadmin'; }
+
+        function switchMainTab(tab) {
+            document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+            document.getElementById('soundsView').classList.toggle('hidden', tab !== 'sounds');
+            document.getElementById('superadminView').classList.toggle('hidden', tab !== 'superadmin');
+            if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+        }
 
         async function checkAuth() {
             const res = await api('/api/me');
@@ -380,8 +462,9 @@
                 document.getElementById('app').classList.remove('hidden');
                 document.getElementById('currentUsername').textContent = user.username;
                 document.getElementById('currentRole').textContent = '(' + (user.role || 'user') + ')';
-                if (user.role === 'user') {
+                if (user.role === 'user' || user.role === 'guest') {
                     document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
                     document.getElementById('topActions').classList.add('hidden');
                     document.getElementById('playPauseBtn').classList.add('hidden');
                     document.getElementById('stopBtn').classList.add('hidden');
@@ -389,8 +472,13 @@
                     document.getElementById('topActions').classList.remove('hidden');
                     document.getElementById('playPauseBtn').classList.remove('hidden');
                     document.getElementById('stopBtn').classList.remove('hidden');
+                    document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
+                    if (user.role === 'superadmin') document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
+                    else document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
                 }
                 fetchSettings();
+                if (user?.role === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
+                updateUploadCardVisibility();
                 return true;
             }
             showLogin();
@@ -401,6 +489,34 @@
             user = null;
             document.getElementById('loginScreen').classList.remove('hidden');
             document.getElementById('app').classList.add('hidden');
+            fetchGuestStatus();
+        }
+
+        async function fetchGuestStatus() {
+            try {
+                const res = await fetch('/api/guest-status', { credentials: CREDENTIALS });
+                if (res.ok) {
+                    const d = await res.json();
+                    guestEnabled = d.guestEnabled === true;
+                    const div = document.getElementById('guestDivider');
+                    const btn = document.getElementById('guestBtn');
+                    if (div && btn) { div.style.display = guestEnabled ? 'block' : 'none'; btn.style.display = guestEnabled ? 'block' : 'none'; }
+                }
+            } catch (e) {}
+        }
+
+        async function doGuestLogin() {
+            document.getElementById('loginError').textContent = '';
+            const res = await fetch('/api/guest/start', { method: 'POST', credentials: CREDENTIALS });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                document.getElementById('loginError').textContent = data.error || 'Guest access unavailable';
+                return;
+            }
+            await checkAuth();
+            fetchSounds();
+            fetchFolders();
+            return false;
         }
 
         async function doLogin(e) {
@@ -451,17 +567,146 @@
             const d = await res.json();
             playbackLocked = d.playbackLocked === true;
             playbackLockedBy = d.playbackLockedBy || null;
+            if (d.userUploadEnabled !== undefined) userUploadEnabled = d.userUploadEnabled;
+            if (d.maxUploadDuration !== undefined) maxUploadDuration = d.maxUploadDuration;
+            if (d.maxUploadBytes !== undefined) maxUploadBytes = d.maxUploadBytes;
             const cb = document.getElementById('playbackLockedTop');
             if (cb) cb.checked = playbackLocked;
             const msg = document.getElementById('userLockedMsg');
             if (msg) {
-                if (user?.role === 'user' && playbackLocked) {
+                if ((user?.role === 'user' || user?.role === 'guest') && playbackLocked) {
                     msg.textContent = playbackLockedBy === 'superadmin' ? 'Playback is locked by a superadmin.' : 'Playback is locked by an admin.';
                     msg.classList.remove('hidden');
                 } else {
                     msg.classList.add('hidden');
                 }
             }
+            if (user?.role === 'superadmin') {
+                if (d.guestEnabled !== undefined) { guestEnabled = d.guestEnabled; const g = document.getElementById('guestEnabledToggle'); if (g) g.checked = guestEnabled; }
+                if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
+                if (d.maxUploadDuration !== undefined) { const g = document.getElementById('maxUploadDurationInput'); if (g) g.value = d.maxUploadDuration; }
+                if (d.maxUploadBytes !== undefined) { const g = document.getElementById('maxUploadBytesInput'); if (g) g.value = Math.round(d.maxUploadBytes / 1024); }
+            }
+            updateUploadCardVisibility();
+        }
+
+        function updateUploadCardVisibility() {
+            const card = document.getElementById('uploadCard');
+            const hint = document.getElementById('uploadHint');
+            if (!card || !hint) return;
+            const canDirect = isAdminOrSuperadmin();
+            const canPending = (user?.role === 'user' || user?.role === 'guest') && (typeof userUploadEnabled !== 'undefined' ? userUploadEnabled : false);
+            if (canDirect) {
+                card.classList.remove('hidden');
+                hint.textContent = '';
+            } else if (canPending) {
+                card.classList.remove('hidden');
+                const maxSec = maxUploadDuration || 7;
+                const maxKB = Math.round((maxUploadBytes || 2097152) / 1024);
+                hint.textContent = 'Uploads go to a moderation queue. Max ' + maxSec + 's, ' + maxKB + 'KB. A superadmin must approve before they appear.';
+            } else {
+                card.classList.add('hidden');
+                hint.textContent = '';
+            }
+        }
+
+        async function setGuestEnabled(enabled) {
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestEnabled: enabled }) });
+            if (!res || !res.ok) return;
+            guestEnabled = enabled;
+            await fetchSettings();
+        }
+
+        async function setUserUploadEnabled(enabled) {
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userUploadEnabled: enabled }) });
+            if (!res || !res.ok) return;
+            userUploadEnabled = enabled;
+            await fetchSettings();
+            updateUploadCardVisibility();
+        }
+
+        async function setMaxUploadDuration(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 1) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxUploadDuration: n }) });
+            await fetchSettings();
+        }
+
+        async function setMaxUploadBytes(kb) {
+            const n = parseInt(kb, 10);
+            if (!Number.isFinite(n) || n < 100) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxUploadBytes: n * 1024 }) });
+            await fetchSettings();
+        }
+
+        async function fetchGuestHistory() {
+            const res = await api('/api/guest/history');
+            if (!res || !res.ok) return;
+            const history = await res.json();
+            const tbody = document.getElementById('guestHistoryBody');
+            if (!tbody) return;
+            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            tbody.innerHTML = history.slice(0, 100).map(h => {
+                const dt = new Date(h.timestamp);
+                const timeStr = dt.toLocaleString();
+                const ip = esc(h.ip);
+                return '<tr><td>' + ip + '</td><td>' + esc(timeStr) + '</td><td>' + esc(h.displayName || h.filename) + '</td><td><button type="button" class="btn btn-ghost block-btn" data-ip="' + ip + '" onclick="blockGuestIP(this.dataset.ip)">Block</button></td></tr>';
+            }).join('');
+        }
+
+        async function fetchBlockedIPs() {
+            const res = await api('/api/guest/blocked');
+            if (!res || !res.ok) return;
+            const ips = await res.json();
+            const el = document.getElementById('blockedIPsList');
+            if (!el) return;
+            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (ips.length === 0) { el.innerHTML = '<span style="color:var(--text-muted)">None</span>'; return; }
+            el.innerHTML = ips.map(ip => '<div class="ip-row"><span>' + esc(ip) + '</span><button type="button" class="btn btn-ghost block-btn" data-ip="' + esc(ip) + '" onclick="unblockGuestIP(this.dataset.ip)">Unblock</button></div>').join('');
+        }
+
+        async function blockGuestIP(ip) {
+            const res = await api('/api/guest/block-ip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) });
+            if (res && res.ok) fetchBlockedIPs();
+        }
+
+        async function unblockGuestIP(ip) {
+            const res = await api('/api/guest/block-ip/' + encodeURIComponent(ip), { method: 'DELETE' });
+            if (res && res.ok) fetchBlockedIPs();
+        }
+
+        async function fetchPendingUploads() {
+            const res = await api('/api/superadmin/pending-uploads');
+            if (!res || !res.ok) return;
+            const uploads = await res.json();
+            const tbody = document.getElementById('pendingUploadsBody');
+            const empty = document.getElementById('pendingUploadsEmpty');
+            if (!tbody || !empty) return;
+            const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (uploads.length === 0) {
+                tbody.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            tbody.innerHTML = uploads.map(u => {
+                const dt = new Date(u.uploadedAt);
+                const by = u.uploadedBy || (u.uploadedByIP ? 'guest' : '?');
+                const dur = u.duration != null ? u.duration.toFixed(1) + 's' : '—';
+                const sz = u.size != null ? Math.round(u.size / 1024) + 'KB' : '—';
+                return '<tr><td><a href="/api/superadmin/pending-uploads/audio/' + encodeURIComponent(u.filename) + '" target="_blank" rel="noopener" style="color:var(--accent)">' + esc(u.filename) + '</a> <span style="color:var(--text-muted);font-size:0.8em">' + dur + ' ' + sz + '</span></td><td>' + esc(by) + '</td><td>' + esc(dt.toLocaleString()) + '</td><td><button type="button" class="btn btn-primary block-btn" data-filename="' + esc(u.filename) + '" onclick="approvePendingUpload(this.dataset.filename)">Approve</button> <button type="button" class="btn btn-danger block-btn" data-filename="' + esc(u.filename) + '" onclick="rejectPendingUpload(this.dataset.filename)">Reject</button></td></tr>';
+            }).join('');
+        }
+
+        async function approvePendingUpload(filename) {
+            const res = await api('/api/superadmin/pending-uploads/approve/' + encodeURIComponent(filename), { method: 'POST' });
+            if (res && res.ok) { fetchPendingUploads(); fetchSounds(); }
+            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+        }
+
+        async function rejectPendingUpload(filename) {
+            const res = await api('/api/superadmin/pending-uploads/reject/' + encodeURIComponent(filename), { method: 'DELETE' });
+            if (res && res.ok) fetchPendingUploads();
         }
 
         async function setPlaybackLocked(locked) {
@@ -469,7 +714,13 @@
             if (!res || !res.ok) return;
             playbackLocked = locked;
             await fetchSettings();
-            if (user?.role === 'user') fetchSounds();
+            if (user?.role === 'user' || user?.role === 'guest') fetchSounds();
+        }
+
+        function getGuestCooldownRemaining() {
+            if (user?.role !== 'guest') return 0;
+            const elapsed = (Date.now() - guestLastPlayTime) / 1000;
+            return Math.max(0, Math.ceil(GUEST_COOLDOWN_SEC - elapsed));
         }
 
         function toggleReorder() {
@@ -639,8 +890,10 @@
                 });
             }
             const isUser = user?.role === 'user';
-            const canPlay = !isUser || !playbackLocked;
-            const tooLong = (dur) => isUser && dur != null && dur > MAX_USER_DURATION;
+            const isGuest = user?.role === 'guest';
+            const guestCooldown = getGuestCooldownRemaining();
+            const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true));
+            const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -649,10 +902,13 @@
                 const dur = s.duration;
                 const disabled = !canPlay || tooLong(dur);
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
+                let title = '';
+                if (!canPlay) title = playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play');
+                else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
                 const inner = `
                     <div class="sound-item${selected}" data-filename="${filename}" data-index="${idx}">
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${!canPlay ? 'Playback is locked' : tooLong(dur) ? 'Only sounds 7s or shorter allowed for your role' : ''}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur ?? ''}" data-folder="${esc(s.folder || '')}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -665,7 +921,7 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             const msg = document.getElementById('userLockedMsg');
-            if (msg && isUser && playbackLocked) msg.classList.remove('hidden');
+            if (msg && (isUser || isGuest) && playbackLocked) msg.classList.remove('hidden');
             else if (msg) msg.classList.add('hidden');
         }
 
@@ -753,9 +1009,15 @@
             if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert(data.error || data.message || 'Failed to play');
+                const msg = data.error || data.message || 'Failed to play';
+                if (res.status === 429 && data.cooldownRemaining) {
+                    guestLastPlayTime = Date.now() - (GUEST_COOLDOWN_SEC - data.cooldownRemaining) * 1000;
+                    renderSoundsGrid();
+                }
+                alert(msg);
                 return;
             }
+            if (user?.role === 'guest') guestLastPlayTime = Date.now();
             playback.duration = data.duration ?? null;
             playback.startTime = Date.now();
             playback.startTimeOffset = data.startTimeOffset ?? 0;
@@ -857,6 +1119,11 @@
             if (waveformData && waveformDuration > 0 && isActive) {
                 const current = getCurrentPlaybackTime();
                 drawWaveform(Math.min(current, waveformDuration));
+            }
+            if (user?.role === 'guest') {
+                const r = getGuestCooldownRemaining();
+                if (r > 0 && r !== lastGuestCooldownShown) { lastGuestCooldownShown = r; renderSoundsGrid(); }
+                else if (r === 0) lastGuestCooldownShown = -1;
             }
         }
 
@@ -993,7 +1260,15 @@
             const formData = new FormData();
             formData.append('soundFile', f);
             const res = await api('/api/upload', { method: 'POST', body: formData });
-            if (res && res.ok) { fileInput.value = ''; fetchSounds(); }
+            if (!res) return;
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                fileInput.value = '';
+                fetchSounds();
+                if (data.pending) alert(data.message || 'Upload sent for moderation.');
+            } else {
+                alert(data.error || 'Upload failed');
+            }
         }
 
         document.getElementById('fileInput').addEventListener('change', () => uploadSound());
@@ -1022,6 +1297,7 @@
         })();
 
         (async function init() {
+            fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;
             setTimeout(() => setInterval(refreshPlaybackState, 400), 600);

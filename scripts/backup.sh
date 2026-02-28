@@ -8,20 +8,16 @@ cd "$APP_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
 OUT="${1:-${APP_DIR}/discord-soundboard-backup-${TS}.tar.gz}"
 mkdir -p "$(dirname "$OUT")"
-echo "[*] Backing up .env and sounds/ to $OUT"
-if [[ -f .env ]]; then
-    if [[ -d sounds ]]; then
-        tar czf "$OUT" .env sounds/
-    else
-        tar czf "$OUT" .env
-    fi
-else
-    if [[ -d sounds ]]; then
-        tar czf "$OUT" sounds/
-    else
-        echo "[!] No .env or sounds/ found."
-        exit 1
-    fi
+echo "[*] Backing up .env, sounds/, and guest.json to $OUT"
+FILES=()
+[[ -f .env ]] && FILES+=(.env)
+[[ -d sounds ]] && FILES+=(sounds/)
+[[ -f guest.json ]] && FILES+=(guest.json)
+[[ -f pending.json ]] && FILES+=(pending.json)
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    echo "[!] No .env, sounds/, or guest.json found."
+    exit 1
 fi
+tar czf "$OUT" "${FILES[@]}"
 echo "[+] Backup saved: $OUT"
 echo "    Copy off container: pct pull <CTID> $OUT ./"

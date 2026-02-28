@@ -143,6 +143,8 @@ pct exec 200 -- bash -c 'cd /opt/discord-soundboard && ./scripts/restore.sh /opt
 - **Sounds:**  
   Upload via the Web UI; files and metadata live under `/opt/discord-soundboard/sounds/`. Back them up with `./scripts/backup.sh` (see Backup and restore above).
 
+- **Guest access:** Superadmins can enable guest mode in the Web UI (Guest Access card). Guests play without login (7s max, 30s cooldown), are identified by IP, and can be blocked. History and blocked IPs are stored in `guest.json`.
+
 ## Troubleshooting
 
 **"No IP on eth0" / eth0 DOWN / DNS fails:** The container needs `ip=dhcp` (or static IP) in its network config. If you're resuming a failed install on an existing container that was created before this fix, destroy it and run the installer again:
