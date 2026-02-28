@@ -16,7 +16,7 @@ STORAGE="${STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr0}"
 GW="${GW:-}"          # e.g. 192.168.1.1
 IP="${IP:-}"          # e.g. 192.168.1.200/24
-GIT_URL="${GIT_URL:-https://github.com/YOUR_USER/discord-soundboard.git}"  # Set your repo URL
+GIT_URL="${GIT_URL:-https://github.com/smartpbx/discord-soundboard.git}"  # Set your repo URL
 APP_DIR="/opt/discord-soundboard"
 TEMPLATE_DEBIAN="${TEMPLATE_DEBIAN:-}"   # e.g. local:vztmpl/debian-12-standard_12.2-1_amd64.tar.zst
 
