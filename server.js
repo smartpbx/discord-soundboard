@@ -616,6 +616,8 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.userUploadEnabled = getUserUploadEnabled();
         out.maxUploadDuration = getMaxUploadDuration();
         out.maxUploadBytes = getMaxUploadBytes();
+        const pending = (loadPendingMeta().uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
+        out.pendingCount = pending.length;
     }
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         out.userUploadEnabled = getUserUploadEnabled();

@@ -914,6 +914,9 @@
                 if (slider) slider.value = v;
                 if (label) label.textContent = Math.round(v * 100) + '%';
             }
+            if (user?.role === 'superadmin' && d.pendingCount !== undefined) {
+                updatePendingBadge(d.pendingCount);
+            }
             updateUploadCardVisibility();
         }
 
