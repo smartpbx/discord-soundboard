@@ -21,9 +21,33 @@ const GUEST_DATA_PATH = path.join(DATA_DIR, 'guest.json');
 const PENDING_META_PATH = path.join(DATA_DIR, 'pending.json');
 const SERVER_STATE_PATH = path.join(DATA_DIR, 'state.json');
 
-const GUEST_COOLDOWN_SEC = 10;
-const MAX_GUEST_SOUND_DURATION = 7;
+const DEFAULT_GUEST_COOLDOWN_SEC = 10;
+const DEFAULT_GUEST_MAX_DURATION = 7;
 const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
+
+function getGuestCooldownSec() {
+    const d = loadGuestData();
+    const n = Number(d.guestCooldownSec);
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_GUEST_COOLDOWN_SEC;
+}
+
+function setGuestCooldownSec(sec) {
+    const d = loadGuestData();
+    d.guestCooldownSec = Number(sec) >= 0 ? Number(sec) : DEFAULT_GUEST_COOLDOWN_SEC;
+    saveGuestData(d);
+}
+
+function getGuestMaxDuration() {
+    const d = loadGuestData();
+    const n = Number(d.guestMaxDuration);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_GUEST_MAX_DURATION;
+}
+
+function setGuestMaxDuration(sec) {
+    const d = loadGuestData();
+    d.guestMaxDuration = Number(sec) > 0 ? Number(sec) : DEFAULT_GUEST_MAX_DURATION;
+    saveGuestData(d);
+}
 
 function getClientIP(req) {
     const forwarded = req.headers['x-forwarded-for'];
@@ -203,6 +227,10 @@ function setSoundMeta(filename, updates) {
         const arr = Array.isArray(updates.tags) ? updates.tags : (updates.tags ? [updates.tags] : []);
         next.tags = arr.filter(t => typeof t === 'string' && t.trim() !== '').map(t => t.trim());
     }
+    if (updates.color !== undefined) {
+        const c = updates.color === null || updates.color === '' ? null : String(updates.color).trim();
+        next.color = (c && /^#[0-9a-fA-F]{6}$/.test(c)) ? c : null;
+    }
     if (updates.folder !== undefined) {
         const f = updates.folder === null || updates.folder === '' ? null : String(updates.folder);
         next.folder = f;
@@ -217,6 +245,12 @@ function getTags(meta, filename) {
     if (m && typeof m === 'object' && Array.isArray(m.tags)) return m.tags.filter(t => typeof t === 'string' && t.trim() !== '');
     if (m && typeof m === 'object' && m.folder != null) return [String(m.folder)];
     return [];
+}
+
+function getColor(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && typeof m.color === 'string' && m.color.trim() !== '') return m.color.trim();
+    return null;
 }
 
 function getAllTagsFromSounds(meta) {
@@ -590,6 +624,7 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             displayName: getDisplayName(meta, filename),
             duration: getDuration(meta, filename),
             tags: getTags(meta, filename),
+            color: getColor(meta, filename),
         }));
         const tagOrder = getTagOrder(meta);
         const hidden = getHiddenTags(meta);
@@ -621,7 +656,7 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
 });
 
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
-    const { filename, displayName, tags } = req.body;
+    const { filename, displayName, tags, color } = req.body;
     const safeFilename = filename && path.basename(filename);
     if (!safeFilename) return res.status(400).send('Filename required');
     const filePath = path.join(SOUNDS_DIR, safeFilename);
@@ -629,9 +664,10 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     const updates = {};
     if (displayName !== undefined) updates.displayName = displayName != null ? String(displayName) : undefined;
     if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags : (tags ? [tags] : []);
+    if (color !== undefined) updates.color = color === null || color === '' ? null : String(color).trim();
     setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename) });
 });
 
 app.get('/api/tags', requireAuth, (req, res) => {
@@ -714,6 +750,8 @@ app.get('/api/settings', requireAuth, (req, res) => {
     }
     if (req.session.user.role === 'superadmin') {
         out.guestEnabled = getGuestEnabled();
+        out.guestMaxDuration = getGuestMaxDuration();
+        out.guestCooldownSec = getGuestCooldownSec();
         out.userUploadEnabled = getUserUploadEnabled();
         out.maxUploadDuration = getMaxUploadDuration();
         out.maxUploadBytes = getMaxUploadBytes();
@@ -726,12 +764,16 @@ app.get('/api/settings', requireAuth, (req, res) => {
             out.maxUploadDuration = getMaxUploadDuration();
             out.maxUploadBytes = getMaxUploadBytes();
         }
+        if (req.session.user.role === 'guest') {
+            out.guestMaxDuration = getGuestMaxDuration();
+            out.guestCooldownSec = getGuestCooldownSec();
+        }
     }
     res.json(out);
 });
 
 app.patch('/api/settings', requireAdmin, (req, res) => {
-    const { playbackLocked, guestEnabled, userUploadEnabled, maxUploadDuration, maxUploadBytes } = req.body;
+    const { playbackLocked, guestEnabled, guestMaxDuration, guestCooldownSec, userUploadEnabled, maxUploadDuration, maxUploadBytes } = req.body;
     const out = {};
     if (typeof playbackLocked === 'boolean') {
         const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
@@ -740,6 +782,8 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
     }
     if (req.session.user.role === 'superadmin') {
         if (typeof guestEnabled === 'boolean') { setGuestEnabled(guestEnabled); out.guestEnabled = guestEnabled; }
+        if (typeof guestMaxDuration === 'number' && guestMaxDuration > 0) { setGuestMaxDuration(guestMaxDuration); out.guestMaxDuration = guestMaxDuration; }
+        if (typeof guestCooldownSec === 'number' && guestCooldownSec >= 0) { setGuestCooldownSec(guestCooldownSec); out.guestCooldownSec = guestCooldownSec; }
         if (typeof userUploadEnabled === 'boolean') { setUserUploadEnabled(userUploadEnabled); out.userUploadEnabled = userUploadEnabled; }
         if (typeof maxUploadDuration === 'number' && maxUploadDuration > 0) { setMaxUploadDuration(maxUploadDuration); out.maxUploadDuration = maxUploadDuration; }
         if (typeof maxUploadBytes === 'number' && maxUploadBytes > 0) { setMaxUploadBytes(maxUploadBytes); out.maxUploadBytes = maxUploadBytes; }
@@ -942,16 +986,18 @@ app.post('/api/play', requireAuth, (req, res) => {
         const ip = getClientIP(req);
         if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
         const lastPlay = guestLastPlayByIP.get(ip);
-        if (lastPlay != null) {
+        const cooldownSec = getGuestCooldownSec();
+        if (lastPlay != null && cooldownSec > 0) {
             const elapsed = (Date.now() - lastPlay) / 1000;
-            if (elapsed < GUEST_COOLDOWN_SEC) {
-                return res.status(429).json({ error: `Wait ${Math.ceil(GUEST_COOLDOWN_SEC - elapsed)} seconds before playing again.`, cooldownRemaining: Math.ceil(GUEST_COOLDOWN_SEC - elapsed) });
+            if (elapsed < cooldownSec) {
+                return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before playing again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
             }
         }
     }
 
-    if ((role === 'user' || isGuest) && duration != null && duration > MAX_USER_SOUND_DURATION) {
-        return res.status(403).json({ error: `Only sounds ${MAX_USER_SOUND_DURATION} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
+    const maxDur = isGuest ? getGuestMaxDuration() : MAX_USER_SOUND_DURATION;
+    if ((role === 'user' || isGuest) && duration != null && duration > maxDur) {
+        return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
     }
 
     if (getPlaybackLocked(meta)) {

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Discord Soundboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔊</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
@@ -140,6 +141,7 @@
         }
         .btn:active { transform: scale(0.98); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
         .btn-primary { background: var(--accent); color: white; }
         .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
         .btn-danger { background: var(--danger); color: white; }
@@ -202,7 +204,10 @@
         .volume-card-row { display: flex; align-items: center; gap: 1rem; }
         .volume-card-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
         .sounds-header-actions { display: flex; align-items: center; gap: 0.5rem; }
-        .upload-toggle-btn { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
+        .upload-toggle-btn { padding: 0.4rem 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--accent); color: white; border: 1px solid var(--accent); border-radius: var(--radius-sm); font-weight: 500; }
+        .upload-toggle-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: white; }
+        .upload-btn-icon { display: inline-flex; align-items: center; }
+        .upload-btn-icon svg { width: 1rem; height: 1rem; }
         .upload-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
         .upload-card-header .card-title { margin-bottom: 0; }
         .upload-close-btn { padding: 0.25rem 0.4rem; font-size: 1rem; line-height: 1; color: var(--text-muted); }
@@ -343,6 +348,8 @@
         .mobile-grid-btn:active:not(:disabled) { transform: scale(0.98); }
         .mobile-grid-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .mobile-grid-btn .duration { font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
+        .mobile-grid-btn { position: relative; }
+        .mobile-grid-color { position: absolute; top: 0; left: 0; right: 0; height: 4px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
         .mobile-grid-nav { display: none; flex-shrink: 0; align-items: center; justify-content: center; gap: 1rem; padding: 0.5rem 1rem; }
         .mobile-grid-wrap.paged .mobile-grid-nav { display: flex !important; }
         .mobile-grid-nav button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); font-size: 1.2rem; cursor: pointer; }
@@ -393,6 +400,14 @@
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
         .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
+        .sound-color-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; flex: 1; }
+        .sound-color-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .sound-color-preset { width: 24px; height: 24px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+        .sound-color-preset:hover { transform: scale(1.1); }
+        .sound-color-preset.selected { border-color: var(--text); box-shadow: 0 0 0 1px var(--surface); }
+        .sound-color-custom { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
+        .sound-color-custom input[type="color"] { width: 28px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; background: var(--surface); }
+        .sound-color-dot { position: absolute; top: 6px; left: 6px; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.2); box-shadow: 0 0 0 1px rgba(255,255,255,0.3); pointer-events: none; }
         .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
         .sound-grid.reorder-mode .sound-drag-handle { display: block; }
         .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -520,7 +535,7 @@
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-actions">
-                    <button type="button" class="btn btn-ghost upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound">Upload</button>
+                    <button type="button" class="btn upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound"><span class="upload-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span> Upload</button>
                     <div class="sounds-options-wrap">
                     <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
                     <div class="sounds-options-menu hidden" id="soundsOptionsMenu">
@@ -557,6 +572,17 @@
                 <div class="row"><label>Name</label><input type="text" id="soundPanelName" placeholder="Display name"></div>
                 <div class="row"><label>Tags</label><div class="tags-input-wrap"><input type="text" id="soundPanelTags" placeholder="Add tags (comma or space separated)" class="tags-input" autocomplete="off"><div id="soundPanelTagsSuggestions" class="tags-suggestions hidden"></div></div></div>
                 <div class="row"><label>Duration</label><span id="soundPanelDuration" class="text-muted">—</span></div>
+                <div class="row">
+                    <label>Color</label>
+                    <div class="sound-color-picker">
+                        <div class="sound-color-presets" id="soundPanelColorPresets"></div>
+                        <label class="sound-color-custom">
+                            <span>Custom</span>
+                            <input type="color" id="soundPanelColorCustom" value="#7c3aed" title="Custom color" onchange="selectSoundPanelColor(this.value)">
+                        </label>
+                        <button type="button" class="btn btn-ghost btn-sm" id="soundPanelColorClear" onclick="clearSoundPanelColor()">Clear</button>
+                    </div>
+                </div>
                 <div class="row" style="margin-top: 0.5rem;">
                     <button type="button" class="btn btn-primary" onclick="saveSoundPanel()">Save</button>
                     <button type="button" class="btn btn-ghost" onclick="closeSoundPanel()">Close</button>
@@ -569,10 +595,20 @@
         <div id="superadminView" class="main-view hidden">
         <div class="card" id="superadminCard">
             <div class="card-title">Guest Access</div>
-            <div class="settings-row" style="margin-bottom: 0.75rem;">
+            <div class="settings-row" style="margin-bottom: 0.5rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                     <input type="checkbox" id="guestEnabledToggle" onchange="setGuestEnabled(this.checked)">
-                    <span>Allow guest access (no login, 7s max, 10s cooldown)</span>
+                    <span>Allow guest access (no login)</span>
+                </label>
+            </div>
+            <div class="row" style="margin-bottom: 0.75rem; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Max duration (s):</span>
+                    <input type="number" id="guestMaxDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxDuration(this.value)">
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <span>Cooldown (s):</span>
+                    <input type="number" id="guestCooldownInput" min="0" max="300" value="10" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestCooldown(this.value)">
                 </label>
             </div>
             <div class="card-title" style="margin-top: 1rem;">User & Guest Uploads</div>
@@ -617,8 +653,10 @@
     <script>
         const CREDENTIALS = 'include';
         const MAX_USER_DURATION = 7;
-        const GUEST_COOLDOWN_SEC = 10;
+        const SOUND_COLOR_PRESETS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#6b7280'];
         let user = null;
+        let guestMaxDuration = 7;
+        let guestCooldownSec = 10;
         let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
         let playbackLockedBy = null;
         let guestLastPlayTime = 0;
@@ -812,7 +850,8 @@
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
             const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
-            const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
+            const maxDur = isGuest ? (guestMaxDuration || 7) : MAX_USER_DURATION;
+            const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             if (filtered.length === 0) {
                 area.innerHTML = '<div style="grid-column:1/-1; padding:2rem; text-align:center; color:var(--text-muted)">No sounds</div>';
                 if (pageEl) pageEl.textContent = '—';
@@ -826,7 +865,9 @@
                 const name = (s.displayName || s.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                 const dur = s.duration != null ? formatTime(s.duration) : '—';
                 const fn = (s.filename || '').replace(/"/g, '&quot;');
-                return `<button type="button" class="mobile-grid-btn ${disabled ? 'disabled' : ''}" data-filename="${fn}" ${disabled ? 'disabled' : ''} onclick="playSound(this.dataset.filename)"><span>${name}</span><span class="duration">${dur}</span></button>`;
+                const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
+                const colorBar = color ? '<span class="mobile-grid-color" style="background:' + color + '"></span>' : '';
+                return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
             }).join('');
             if (pageEl) pageEl.textContent = isPaged ? `${mobilePageIndex + 1} / ${totalPages}` : '—';
             if (prevBtn) prevBtn.disabled = !isPaged || mobilePageIndex <= 0;
@@ -1040,8 +1081,12 @@
                     msg.classList.add('hidden');
                 }
             }
+            if (d.guestMaxDuration !== undefined) guestMaxDuration = d.guestMaxDuration;
+            if (d.guestCooldownSec !== undefined) guestCooldownSec = d.guestCooldownSec;
             if ((user && user.role) === 'superadmin') {
                 if (d.guestEnabled !== undefined) { guestEnabled = d.guestEnabled; const g = document.getElementById('guestEnabledToggle'); if (g) g.checked = guestEnabled; }
+                if (d.guestMaxDuration !== undefined) { const g = document.getElementById('guestMaxDurationInput'); if (g) g.value = d.guestMaxDuration; }
+                if (d.guestCooldownSec !== undefined) { const g = document.getElementById('guestCooldownInput'); if (g) g.value = d.guestCooldownSec; }
                 if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
                 if (d.maxUploadDuration !== undefined) { const g = document.getElementById('maxUploadDurationInput'); if (g) g.value = d.maxUploadDuration; }
                 if (d.maxUploadBytes !== undefined) { const g = document.getElementById('maxUploadBytesInput'); if (g) g.value = Math.round(d.maxUploadBytes / 1024); }
@@ -1095,6 +1140,22 @@
             const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestEnabled: enabled }) });
             if (!res || !res.ok) return;
             guestEnabled = enabled;
+            await fetchSettings();
+        }
+
+        async function setGuestMaxDuration(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 1) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestMaxDuration: n }) });
+            guestMaxDuration = n;
+            await fetchSettings();
+        }
+
+        async function setGuestCooldown(sec) {
+            const n = parseInt(sec, 10);
+            if (!Number.isFinite(n) || n < 0) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestCooldownSec: n }) });
+            guestCooldownSec = n;
             await fetchSettings();
         }
 
@@ -1221,7 +1282,7 @@
         function getGuestCooldownRemaining() {
             if ((user && user.role) !== 'guest') return 0;
             const elapsed = (Date.now() - guestLastPlayTime) / 1000;
-            return Math.max(0, Math.ceil(GUEST_COOLDOWN_SEC - elapsed));
+            return Math.max(0, Math.ceil((guestCooldownSec || 10) - elapsed));
         }
 
         function toggleReorder() {
@@ -1443,7 +1504,8 @@
             const adminPlaying = (playback.status === 'playing' || playback.status === 'paused') && ((playback.startedBy && playback.startedBy.role) === 'admin' || (playback.startedBy && playback.startedBy.role) === 'superadmin');
             const cannotOverride = (isUser || isGuest) && adminPlaying;
             const canPlay = (!isUser && !isGuest) || ((!playbackLocked) && (isGuest ? guestCooldown === 0 : true) && !cannotOverride);
-            const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
+            const maxDur = isGuest ? (guestMaxDuration || 7) : MAX_USER_DURATION;
+            const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > maxDur;
             const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -1454,15 +1516,18 @@
                 const selected = selectedSound === s.filename ? ' sound-item-selected' : '';
                 let title = '';
                 if (!canPlay) title = cannotOverride ? 'An admin or superadmin is playing. You cannot override.' : (playbackLocked ? 'Playback is locked' : (isGuest && guestCooldown > 0 ? 'Wait ' + guestCooldown + 's before playing again' : 'Cannot play'));
-                else if (tooLong(dur)) title = 'Only sounds 7s or shorter allowed';
+                else if (tooLong(dur)) title = 'Only sounds ' + maxDur + 's or shorter allowed';
                 const editBtn = isAdmin && !reorderMode ? `<button type="button" class="sound-edit" data-filename="${filename}" title="Edit sound" onclick="event.stopPropagation(); openSoundPanelFromSound(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>` : '';
                 const favIdx = getFavorites().indexOf(s.filename);
                 const favActive = favIdx >= 0 ? ' active' : '';
                 const favTitle = favIdx >= 0 ? `Favorite slot ${favIdx + 1} (click to remove)` : 'Add to favorites (1–9)';
                 const favBtn = `<button type="button" class="sound-fav${favActive}" data-filename="${filename}" title="${favTitle}" onclick="event.stopPropagation(); toggleFavorite(this.dataset.filename)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
                 const favorited = favIdx >= 0 ? ' favorited' : '';
+                const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
+                const colorDot = color ? '<span class="sound-color-dot" style="background:' + color + '"></span>' : '';
                 const inner = `
                     <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
+                        ${colorDot}
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
                         <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
@@ -1578,13 +1643,43 @@
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
             const durEl = document.getElementById('soundPanelDuration');
+            const customEl = document.getElementById('soundPanelColorCustom');
+            const presetsEl = document.getElementById('soundPanelColorPresets');
             if (!panel || !nameEl || !tagsEl) return;
             nameEl.value = (s && (s.displayName || s.filename)) || '';
             nameEl.dataset.filename = (s && s.filename) || '';
             tagsEl.value = (s && (s.tags || []).join(', ')) || '';
             durEl.textContent = (s && s.duration != null) ? formatTime(s.duration) : '—';
+            const color = (s && s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
+            if (presetsEl) {
+                presetsEl.innerHTML = SOUND_COLOR_PRESETS.map(function(hex) {
+                    var sel = (color === hex) ? ' selected' : '';
+                    return '<button type="button" class="sound-color-preset' + sel + '" style="background:' + hex + '" data-color="' + hex + '" onclick="selectSoundPanelColor(this.dataset.color)" title="' + hex + '"></button>';
+                }).join('');
+            }
+            if (customEl) customEl.value = color || '#7c3aed';
+            panel.dataset.soundColor = color || '';
             panel.classList.remove('hidden');
             setupTagsAutocomplete(tagsEl);
+        }
+
+        function selectSoundPanelColor(hex) {
+            var panel = document.getElementById('soundPanel');
+            var presets = document.getElementById('soundPanelColorPresets');
+            var customEl = document.getElementById('soundPanelColorCustom');
+            if (!panel || !presets) return;
+            presets.querySelectorAll('.sound-color-preset').forEach(function(btn) {
+                btn.classList.toggle('selected', btn.dataset.color === hex);
+            });
+            if (customEl && hex) customEl.value = hex;
+            panel.dataset.soundColor = hex || '';
+        }
+
+        function clearSoundPanelColor() {
+            var panel = document.getElementById('soundPanel');
+            var presets = document.getElementById('soundPanelColorPresets');
+            if (panel) panel.dataset.soundColor = '';
+            if (presets) presets.querySelectorAll('.sound-color-preset').forEach(function(btn) { btn.classList.remove('selected'); });
         }
 
         function openSoundPanelFromSound(filename) {
@@ -1637,15 +1732,19 @@
         async function saveSoundPanel() {
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
+            const panel = document.getElementById('soundPanel');
+            const customColorEl = document.getElementById('soundPanelColorCustom');
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
             const displayName = ((nameEl && nameEl.value) || '').trim() || filename;
             const tagsRaw = ((tagsEl && tagsEl.value) || '').trim();
             const tags = tagsRaw ? tagsRaw.split(/[,\s]+/).map(t => t.trim()).filter(Boolean) : [];
+            var color = (panel && panel.dataset.soundColor) || (customColorEl && customColorEl.value) || null;
+            if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) color = null;
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, displayName, tags }),
+                body: JSON.stringify({ filename, displayName, tags, color: color || null }),
             });
             if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; }
         }
@@ -1670,7 +1769,7 @@
             if (!res.ok) {
                 const msg = data.error || data.message || 'Failed to play';
                 if (res.status === 429 && data.cooldownRemaining) {
-                    guestLastPlayTime = Date.now() - (GUEST_COOLDOWN_SEC - data.cooldownRemaining) * 1000;
+                    guestLastPlayTime = Date.now() - ((guestCooldownSec || 10) - data.cooldownRemaining) * 1000;
                     renderSoundsGrid();
                 }
                 alert(msg);
