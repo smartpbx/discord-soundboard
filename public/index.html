@@ -250,7 +250,7 @@
             <h1>🔊 Soundboard</h1>
             <form id="loginForm" onsubmit="return doLogin(event)">
                 <label for="loginUser">Username</label>
-                <input type="text" id="loginUser" name="username" placeholder="admin or user" autocomplete="username" required>
+                <input type="text" id="loginUser" name="username" placeholder="Username" autocomplete="username" required>
                 <label for="loginPass">Password</label>
                 <input type="password" id="loginPass" name="password" placeholder="Password" autocomplete="current-password" required>
                 <button type="submit" class="btn btn-primary">Log in</button>
@@ -267,7 +267,7 @@
 
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-            <label class="top-bar-lock admin-only" title="Lock user playback">
+            <label class="top-bar-lock admin-only" title="Lock playback for users (superadmin locks everyone)">
                 <span class="top-bar-lock-label">Lock playback</span>
                 <input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)">
             </label>
@@ -349,7 +349,8 @@
         const CREDENTIALS = 'include';
         const MAX_USER_DURATION = 7;
         let user = null;
-        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0 };
+        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
+        let playbackLockedBy = null;
         let pausedAt = 0;
         let waveformData = null;
         let waveformDuration = 0;
@@ -368,6 +369,8 @@
             return res;
         }
 
+        function isAdminOrSuperadmin() { return user?.role === 'admin' || user?.role === 'superadmin'; }
+
         async function checkAuth() {
             const res = await api('/api/me');
             if (!res) return false;
@@ -376,7 +379,7 @@
                 document.getElementById('loginScreen').classList.add('hidden');
                 document.getElementById('app').classList.remove('hidden');
                 document.getElementById('currentUsername').textContent = user.username;
-                document.getElementById('currentRole').textContent = user.role === 'admin' ? '(admin)' : '(user)';
+                document.getElementById('currentRole').textContent = '(' + (user.role || 'user') + ')';
                 if (user.role === 'user') {
                     document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
                     document.getElementById('topActions').classList.add('hidden');
@@ -434,7 +437,7 @@
         }
 
         async function fetchChannels() {
-            if (user?.role !== 'admin') return;
+            if (!isAdminOrSuperadmin()) return;
             const res = await api('/api/channels');
             if (!res || !res.ok) return;
             const channels = await res.json();
@@ -447,12 +450,17 @@
             if (!res || !res.ok) return;
             const d = await res.json();
             playbackLocked = d.playbackLocked === true;
+            playbackLockedBy = d.playbackLockedBy || null;
             const cb = document.getElementById('playbackLockedTop');
             if (cb) cb.checked = playbackLocked;
             const msg = document.getElementById('userLockedMsg');
             if (msg) {
-                if (user?.role === 'user' && playbackLocked) msg.classList.remove('hidden');
-                else msg.classList.add('hidden');
+                if (user?.role === 'user' && playbackLocked) {
+                    msg.textContent = playbackLockedBy === 'superadmin' ? 'Playback is locked by a superadmin.' : 'Playback is locked by an admin.';
+                    msg.classList.remove('hidden');
+                } else {
+                    msg.classList.add('hidden');
+                }
             }
         }
 
@@ -460,11 +468,8 @@
             const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playbackLocked: locked }) });
             if (!res || !res.ok) return;
             playbackLocked = locked;
-            if (user?.role === 'user') {
-                const msg = document.getElementById('userLockedMsg');
-                if (msg) msg.classList.toggle('hidden', !locked);
-                fetchSounds();
-            }
+            await fetchSettings();
+            if (user?.role === 'user') fetchSounds();
         }
 
         function toggleReorder() {
@@ -485,7 +490,7 @@
 
         function renderFolderTabs() {
             const container = document.getElementById('folderTabs');
-            const isAdmin = user?.role === 'admin';
+            const isAdmin = isAdminOrSuperadmin();
             const showManage = isAdmin && manageFoldersMode;
             const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             let html = '<button type="button" class="folder-tab' + (selectedFolder === null ? ' active' : '') + '" data-folder="" onclick="selectFolder(null)">All</button>';
@@ -636,7 +641,7 @@
             const isUser = user?.role === 'user';
             const canPlay = !isUser || !playbackLocked;
             const tooLong = (dur) => isUser && dur != null && dur > MAX_USER_DURATION;
-            const isAdmin = user?.role === 'admin';
+            const isAdmin = isAdminOrSuperadmin();
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
@@ -671,7 +676,7 @@
             const newName = prompt('Button label:', currentName);
             if (newName === null) return;
             let newFolder = currentFolder;
-            if (user?.role === 'admin' && foldersList.length > 0) {
+            if (isAdminOrSuperadmin() && foldersList.length > 0) {
                 const msg = 'Folder (number or name, or leave blank for None):\n' + foldersList.map((f, i) => (i + 1) + ' = ' + f).join('\n');
                 const folderPrompt = prompt(msg, currentFolder || '');
                 if (folderPrompt !== null) {
@@ -757,6 +762,7 @@
             playback.status = 'playing';
             playback.displayName = data.displayName ?? filename;
             playback.filename = filename;
+            playback.startedBy = data.startedBy ?? { username: user?.username, role: user?.role };
             pausedAt = 0;
             updateNowPlaying();
             updatePlayPauseButton();
@@ -857,7 +863,7 @@
         async function stopPlayback() {
             const res = await api('/api/stop', { method: 'POST' });
             if (!res) return;
-            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0 };
+            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, startedBy: null };
             pausedAt = 0;
             waveformData = null;
             waveformDuration = 0;
@@ -890,6 +896,17 @@
             btn.disabled = !isActive;
             btn.textContent = playback.status === 'playing' ? '⏸' : '▶';
             btn.title = playback.status === 'playing' ? 'Pause' : 'Play';
+            updateStopButtons();
+        }
+
+        function updateStopButtons() {
+            const stopAll = document.getElementById('stopAllBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const isActive = playback.status === 'playing' || playback.status === 'paused';
+            const adminCantStop = user?.role === 'admin' && playback.startedBy && (playback.startedBy.role === 'admin' || playback.startedBy.role === 'superadmin');
+            const disabled = !isActive || adminCantStop;
+            if (stopAll) { stopAll.disabled = disabled; stopAll.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop playback'; }
+            if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop'; }
         }
 
         function updateNowPlaying() {
@@ -899,7 +916,11 @@
                 text.innerHTML = 'Nothing playing';
                 card.classList.add('player-idle');
             } else {
-                text.innerHTML = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
+                let html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
+                if (playback.startedBy && playback.startedBy.username) {
+                    html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
+                }
+                text.innerHTML = html;
                 card.classList.remove('player-idle');
             }
         }
@@ -923,12 +944,14 @@
                 playback.status = state.status;
                 playback.filename = state.filename;
                 playback.displayName = state.displayName ?? state.filename;
+                playback.startedBy = state.startedBy ?? null;
                 if (state.startTime != null) playback.startTime = Number(state.startTime);
                 if (state.duration != null) playback.duration = state.duration;
                 if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
-                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; }
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; }
                 updateNowPlaying();
                 updatePlayPauseButton();
+                updateStopButtons();
 
                 const timeEl = document.getElementById('progressTime');
                 let current = getCurrentPlaybackTime();

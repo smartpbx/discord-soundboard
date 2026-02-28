@@ -84,9 +84,15 @@ function getPlaybackLocked(meta) {
     return meta._playbackLocked === true;
 }
 
-function setPlaybackLocked(locked) {
+function getPlaybackLockedBy(meta) {
+    const by = meta._playbackLockedBy;
+    return (by === 'superadmin' || by === 'admin') ? by : 'admin';
+}
+
+function setPlaybackLocked(locked, byRole) {
     const meta = loadSoundsMeta();
     meta._playbackLocked = locked === true;
+    meta._playbackLockedBy = (byRole === 'superadmin' || byRole === 'admin') ? byRole : 'admin';
     saveSoundsMeta(meta);
 }
 
@@ -116,9 +122,37 @@ app.use(require('express-session')({
     cookie: { httpOnly: true, secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 },
 }));
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const USER_PASSWORD = process.env.USER_PASSWORD || '';
 const MAX_USER_SOUND_DURATION = 7;
+
+// Parse users from env: USERS=username:password:role,username:password:role,...
+// Roles: superadmin (stop everyone), admin (stop users only), user
+// Fallback: ADMIN_PASSWORD, USER_PASSWORD, SUPERADMIN_PASSWORD for single-user per role
+function loadUsers() {
+    const users = new Map(); // username -> { username, password, role }
+    const raw = (process.env.USERS || '').trim();
+    if (raw) {
+        for (const entry of raw.split(',')) {
+            const parts = entry.trim().split(':');
+            if (parts.length >= 3) {
+                const username = parts[0].trim().toLowerCase();
+                const password = parts[1];
+                const role = parts.slice(2).join(':').trim().toLowerCase();
+                if (username && password && ['superadmin', 'admin', 'user'].includes(role)) {
+                    users.set(username, { username, password, role });
+                }
+            }
+        }
+    }
+    // Fallback: legacy single-user vars
+    const adminPw = (process.env.ADMIN_PASSWORD || '').trim();
+    const userPw = (process.env.USER_PASSWORD || '').trim();
+    const superPw = (process.env.SUPERADMIN_PASSWORD || '').trim();
+    if (adminPw && !users.has('admin')) users.set('admin', { username: 'admin', password: adminPw, role: 'admin' });
+    if (userPw && !users.has('user')) users.set('user', { username: 'user', password: userPw, role: 'user' });
+    if (superPw && !users.has('superadmin')) users.set('superadmin', { username: 'superadmin', password: superPw, role: 'superadmin' });
+    return users;
+}
+const USERS = loadUsers();
 
 function requireAuth(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
@@ -127,13 +161,15 @@ function requireAuth(req, res, next) {
 
 function requireAdmin(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
-    if (req.session.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (req.session.user.role !== 'admin' && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
     next();
 }
 
 function checkCredentials(username, password) {
-    if (username === 'admin' && password === ADMIN_PASSWORD) return { username: 'admin', role: 'admin' };
-    if (username === 'user' && password === USER_PASSWORD) return { username: 'user', role: 'user' };
+    const u = username ? String(username).trim().toLowerCase() : '';
+    const p = String(password || '');
+    const entry = USERS.get(u);
+    if (entry && entry.password === p) return { username: entry.username, role: entry.role };
     return null;
 }
 
@@ -146,7 +182,7 @@ const player = createAudioPlayer({
 
 let currentConnection = null;
 let currentVolume = 0.5;
-let playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+let playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
@@ -188,12 +224,12 @@ let activeGuildId = null; // Track the server ID
 player.on('error', error => {
     const meta = error.resource?.metadata ?? 'unknown';
     console.error(`❌ Audio Player Error: ${error.message} (resource: ${meta})`);
-    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
 });
 
 player.on('stateChange', (oldState, newState) => {
     if (newState.status === AudioPlayerStatus.Idle) {
-        playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+        playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
     }
 });
 
@@ -347,13 +383,14 @@ app.delete('/api/folders/:name', requireAdmin, (req, res) => {
 
 app.get('/api/settings', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
-    res.json({ playbackLocked: getPlaybackLocked(meta) });
+    res.json({ playbackLocked: getPlaybackLocked(meta), playbackLockedBy: getPlaybackLocked(meta) ? getPlaybackLockedBy(meta) : null });
 });
 
 app.patch('/api/settings', requireAdmin, (req, res) => {
     const { playbackLocked } = req.body;
     if (typeof playbackLocked !== 'boolean') return res.status(400).json({ error: 'playbackLocked must be boolean' });
-    setPlaybackLocked(playbackLocked);
+    const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
+    setPlaybackLocked(playbackLocked, byRole);
     res.json({ playbackLocked });
 });
 
@@ -397,8 +434,15 @@ app.post('/api/play', requireAuth, (req, res) => {
         return res.status(403).json({ error: `Only sounds ${MAX_USER_SOUND_DURATION} seconds or shorter are allowed for your role. This sound is ${Math.ceil(duration)}s.` });
     }
 
-    if (req.session.user.role === 'user' && getPlaybackLocked(meta)) {
-        return res.status(403).json({ error: 'Playback is currently locked by an admin.' });
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        const role = req.session.user.role;
+        if (lockedBy === 'superadmin') {
+            return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        }
+        if (role === 'user') {
+            return res.status(403).json({ error: 'Playback is locked by an admin.' });
+        }
     }
 
     const startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : 0;
@@ -422,14 +466,16 @@ app.post('/api/play', requireAuth, (req, res) => {
         });
         resource.volume.setVolume(currentVolume);
         player.play(resource);
+        const startedBy = { username: req.session.user.username, role: req.session.user.role };
         playbackState = {
             status: 'playing',
             filename: safeFilename,
             displayName,
             startTime: Date.now(),
             duration,
+            startedBy,
         };
-        res.json({ ok: true, duration, displayName, startTimeOffset: startTime });
+        res.json({ ok: true, duration, displayName, startTimeOffset: startTime, startedBy });
     } catch (err) {
         console.error('Play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play audio' });
@@ -457,17 +503,34 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
 });
 
 app.post('/api/stop', requireAdmin, (req, res) => {
+    const role = req.session.user.role;
+    const startedBy = playbackState.startedBy;
+    if (role === 'superadmin') {
+        // Superadmin can stop everyone
+    } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
+        return res.status(403).json({ error: 'Only superadmin can stop admin playback.' });
+    }
     player.stop();
-    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null };
+    playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
     res.json({ ok: true });
 });
 
 app.post('/api/pause', requireAdmin, (req, res) => {
+    const role = req.session.user.role;
+    const startedBy = playbackState.startedBy;
+    if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
+        return res.status(403).json({ error: 'Only superadmin can pause admin playback.' });
+    }
     player.pause(true);
     res.json({ ok: true });
 });
 
 app.post('/api/resume', requireAdmin, (req, res) => {
+    const role = req.session.user.role;
+    const startedBy = playbackState.startedBy;
+    if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
+        return res.status(403).json({ error: 'Only superadmin can resume admin playback.' });
+    }
     player.unpause();
     res.json({ ok: true });
 });
@@ -482,7 +545,12 @@ app.post('/api/volume', requireAdmin, (req, res) => {
 
 app.get('/api/volume', requireAuth, (req, res) => res.json({ volume: currentVolume }));
 
-client.login(process.env.DISCORD_TOKEN);
+const token = (process.env.DISCORD_TOKEN || '').trim();
+if (!token || token === 'your_bot_token_here') {
+    console.error('DISCORD_TOKEN is missing or still the placeholder. Set it in .env from Discord Developer Portal → Your App → Bot → Token');
+    process.exit(1);
+}
+client.login(token);
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);

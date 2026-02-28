@@ -34,10 +34,10 @@ if [[ ! -f "${APP_DIR}/.env" ]]; then
 DISCORD_TOKEN=your_bot_token_here
 PORT=3000
 SESSION_SECRET=${SESSION_SECRET}
-ADMIN_PASSWORD=change_admin_password
-USER_PASSWORD=change_user_password
+# Users: username:password:role (comma-separated). Roles: superadmin, admin, user
+USERS=admin:change_admin_password:superadmin,user:change_user_password:user
 ENVFILE
-    echo "[!] Set DISCORD_TOKEN and passwords in ${APP_DIR}/.env"
+    echo "[!] Set DISCORD_TOKEN and USERS in ${APP_DIR}/.env"
 fi
 
 echo "[*] Installing systemd service..."
