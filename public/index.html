@@ -674,7 +674,7 @@
                         </div>
                         <div class="sound-panel-preview-row">
                             <span id="soundPanelTrimLabel" class="text-muted" style="font-size:0.85rem;">Start: 0:00 — End: full</span>
-                            <button type="button" class="btn btn-ghost btn-sm" onclick="soundPanelPreview()">▶ Preview</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="soundPanelPreviewBtn" onclick="soundPanelPreview()">▶ Preview</button>
                             <button type="button" class="btn btn-ghost btn-sm" onclick="soundPanelResetTrim()">Reset trim</button>
                         </div>
                     </div>
@@ -2275,8 +2275,17 @@
         let soundPanelWaveformDuration = 0;
         let soundPanelStartTime = 0;
         let soundPanelEndTime = null;
+        let soundPanelPreviewAudio = null;
+        let soundPanelPreviewPlayheadTime = null;
 
         function openSoundPanel(s) {
+            if (soundPanelPreviewAudio) {
+                soundPanelPreviewAudio.pause();
+                soundPanelPreviewAudio = null;
+                soundPanelPreviewPlayheadTime = null;
+                const btn = document.getElementById('soundPanelPreviewBtn');
+                if (btn) btn.textContent = '▶ Preview';
+            }
             const panel = document.getElementById('soundPanel');
             const nameEl = document.getElementById('soundPanelName');
             const tagsEl = document.getElementById('soundPanelTags');
@@ -2375,6 +2384,12 @@
                 ctx.fillStyle = inRange ? 'rgba(124, 58, 237, 0.7)' : 'rgba(80, 80, 90, 0.5)';
                 ctx.fillRect(x, center - halfH, barW, halfH * 2);
             });
+            if (soundPanelPreviewPlayheadTime != null && dur > 0) {
+                const playheadPct = soundPanelPreviewPlayheadTime / dur;
+                const playheadX = Math.max(0, Math.min(w, playheadPct * w));
+                ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                ctx.fillRect(Math.floor(playheadX), 0, 2, h);
+            }
             updateSoundPanelTrimLabel();
             updateSoundPanelHandlePositions();
         }
@@ -2430,6 +2445,16 @@
         }
 
         function soundPanelPreview() {
+            const btn = document.getElementById('soundPanelPreviewBtn');
+            if (soundPanelPreviewAudio) {
+                soundPanelPreviewAudio.pause();
+                soundPanelPreviewAudio.currentTime = 0;
+                soundPanelPreviewAudio = null;
+                soundPanelPreviewPlayheadTime = null;
+                drawSoundPanelWaveform();
+                if (btn) btn.textContent = '▶ Preview';
+                return;
+            }
             const nameEl = document.getElementById('soundPanelName');
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
@@ -2439,7 +2464,31 @@
             if (soundPanelEndTime != null && soundPanelEndTime < soundPanelWaveformDuration) params.push('end=' + encodeURIComponent(soundPanelEndTime));
             if (params.length) url += '?' + params.join('&');
             const audio = new Audio(url);
-            audio.play().catch(() => {});
+            soundPanelPreviewAudio = audio;
+            const onTimeUpdate = () => {
+                soundPanelPreviewPlayheadTime = soundPanelStartTime + audio.currentTime;
+                drawSoundPanelWaveform();
+            };
+            const onEnded = () => {
+                soundPanelPreviewAudio = null;
+                soundPanelPreviewPlayheadTime = null;
+                drawSoundPanelWaveform();
+                if (btn) btn.textContent = '▶ Preview';
+                audio.removeEventListener('timeupdate', onTimeUpdate);
+            };
+            const onError = () => {
+                soundPanelPreviewAudio = null;
+                soundPanelPreviewPlayheadTime = null;
+                drawSoundPanelWaveform();
+                if (btn) btn.textContent = '▶ Preview';
+            };
+            audio.addEventListener('timeupdate', onTimeUpdate);
+            audio.addEventListener('ended', onEnded);
+            audio.addEventListener('error', onError);
+            if (btn) btn.textContent = '⏹ Stop';
+            soundPanelPreviewPlayheadTime = soundPanelStartTime;
+            drawSoundPanelWaveform();
+            audio.play().catch(onError);
         }
 
         function soundPanelResetTrim() {
@@ -2511,6 +2560,13 @@
         }
 
         function closeSoundPanel() {
+            if (soundPanelPreviewAudio) {
+                soundPanelPreviewAudio.pause();
+                soundPanelPreviewAudio = null;
+                soundPanelPreviewPlayheadTime = null;
+                const btn = document.getElementById('soundPanelPreviewBtn');
+                if (btn) btn.textContent = '▶ Preview';
+            }
             selectedSound = null;
             const sp = document.getElementById('soundPanel'); if (sp) sp.classList.add('hidden');
             renderSoundsGrid();
