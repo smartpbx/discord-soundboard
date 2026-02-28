@@ -1065,6 +1065,7 @@
             playback.duration = data.duration ?? null;
             playback.startTime = Date.now();
             playback.startTimeOffset = data.startTimeOffset ?? 0;
+            playback.serverCurrentTime = undefined;
             playback.status = 'playing';
             playback.displayName = data.displayName ?? filename;
             playback.filename = filename;
@@ -1211,6 +1212,9 @@
             } else if (playback.status === 'paused') {
                 await api('/api/resume', { method: 'POST' });
                 playback.startTime = Date.now() - (pausedAt * 1000);
+                playback.startTimeOffset = pausedAt;
+                playback.serverCurrentTime = pausedAt;
+                lastServerCurrentTimeReceivedAt = Date.now();
                 playback.status = 'playing';
             }
             updatePlayPauseButton();
