@@ -19,8 +19,12 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
 
 echo "[*] Cloning app to ${APP_DIR}..."
-rm -rf "${APP_DIR}"
-git clone "${GIT_URL}" "${APP_DIR}"
+# Preserve data/ if it exists (bind mount from host); clone to temp then move
+TEMP_CLONE=$(mktemp -d)
+git clone "${GIT_URL}" "${TEMP_CLONE}"
+mkdir -p "${APP_DIR}"
+rsync -a --exclude='data' "${TEMP_CLONE}/" "${APP_DIR}/"
+rm -rf "${TEMP_CLONE}"
 chmod +x "${APP_DIR}"/scripts/*.sh 2>/dev/null || true
 
 echo "[*] Installing npm dependencies..."

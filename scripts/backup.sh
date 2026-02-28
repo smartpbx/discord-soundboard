@@ -8,14 +8,13 @@ cd "$APP_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
 OUT="${1:-${APP_DIR}/discord-soundboard-backup-${TS}.tar.gz}"
 mkdir -p "$(dirname "$OUT")"
-echo "[*] Backing up .env, sounds/, and guest.json to $OUT"
+echo "[*] Backing up .env, sounds/, data/ to $OUT"
 FILES=()
 [[ -f .env ]] && FILES+=(.env)
 [[ -d sounds ]] && FILES+=(sounds/)
-[[ -f guest.json ]] && FILES+=(guest.json)
-[[ -f pending.json ]] && FILES+=(pending.json)
+[[ -d data ]] && FILES+=(data/)
 if [[ ${#FILES[@]} -eq 0 ]]; then
-    echo "[!] No .env, sounds/, or guest.json found."
+    echo "[!] No .env, sounds/, or data/ found."
     exit 1
 fi
 tar czf "$OUT" "${FILES[@]}"

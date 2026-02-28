@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run inside the container to restore from a backup tarball.
 # Usage: ./scripts/restore.sh /path/to/discord-soundboard-backup-*.tar.gz
-# Tarball should contain .env, sounds/, and optionally guest.json, pending.json (as created by backup.sh).
+# Tarball should contain .env, sounds/, and optionally data/ (as created by backup.sh).
 set -e
 APP_DIR="${APP_DIR:-/opt/discord-soundboard}"
 ARCHIVE="${1:?Usage: $0 /path/to/backup.tar.gz}"
@@ -17,4 +17,4 @@ echo "[*] Restoring from $ARCHIVE..."
 tar xzf "$ARCHIVE" -C "$APP_DIR"
 echo "[*] Starting service..."
 systemctl start discord-soundboard
-echo "[+] Restore done. .env, sounds/, guest.json, pending.json (if present) replaced from backup."
+echo "[+] Restore done. .env, sounds/, data/ (volume, channel, guest settings) replaced from backup."

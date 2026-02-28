@@ -26,11 +26,11 @@ Features to implement, in rough priority order.
 - [ ] **Recently played** – Last 5–10 sounds for quick re-play
 - [x] **Favorites** – Up to 9 favorites, mapped to keys 1–9 (saved in preferences)
 - [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
+- [ ] **Sound button icons** – Icons, emojis, or custom images on each sound button
+- [ ] **Pending uploads badge** – Badge on Superadmin tab when uploads await approval
 ---
 
 ## Nice to Have
-
-- [ ] **Pending uploads badge** – Badge on Superadmin tab when uploads await approval
 - [ ] **Duplicate sound** – Copy a sound (file + metadata) for variations
 - [ ] **Per-sound volume** – Volume adjustment per sound for normalization
 

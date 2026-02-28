@@ -130,8 +130,12 @@ if ! pct status "${CTID}" &>/dev/null; then
     else
         NS_FOR_CT="--nameserver 8.8.8.8"
     fi
+    # Bind-mount data dir on host so volume, channel, guest settings persist across container rebuilds
+    DATA_MOUNT_HOST="/var/lib/discord-soundboard-data/${CTID}"
+    mkdir -p "${DATA_MOUNT_HOST}"
     pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
-        --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0 ${NS_FOR_CT} --onboot 1
+        --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0 ${NS_FOR_CT} --onboot 1 \
+        --mp0 "${DATA_MOUNT_HOST},mp=${APP_DIR}/data"
 
     ROOT_PASSWORD="${ROOT_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
     echo "[*] Starting container..."

@@ -143,7 +143,31 @@ pct exec 200 -- bash -c 'cd /opt/discord-soundboard && ./scripts/restore.sh /opt
 - **Sounds:**  
   Upload via the Web UI; files and metadata live under `/opt/discord-soundboard/sounds/`. Back them up with `./scripts/backup.sh` (see Backup and restore above).
 
+- **Data persistence (volume, channel, guest settings):**  
+  The installer bind-mounts `data/` to `/var/lib/discord-soundboard-data/<CTID>` on the Proxmox host. This survives container restarts and updates. If you created the container before this was added, add the mount manually: stop the CT, add `mp0: /var/lib/discord-soundboard-data/<CTID>,mp=/opt/discord-soundboard/data` to `/etc/pve/lxc/<CTID>.conf`, create the host dir with `mkdir -p /var/lib/discord-soundboard-data/<CTID>`, then start the CT.
+
 - **Guest access:** Superadmins can enable guest mode in the Web UI (Guest Access card). Guests play without login (7s max, 30s cooldown), are identified by IP, and can be blocked. History and blocked IPs are stored in `guest.json`.
+
+## Adding data mount to an existing container
+
+If you installed before the data bind-mount was added, volume and channel settings won't persist across updates. To fix:
+
+1. **Stop the container:** `pct stop <CTID>`
+2. **Create the host directory:** `mkdir -p /var/lib/discord-soundboard-data/<CTID>`
+3. **Copy existing data** (if any) from the container into that directory:
+   ```bash
+   pct start <CTID>
+   pct exec <CTID> -- sh -c 'tar czf - -C /opt/discord-soundboard data 2>/dev/null' | tar xzf - -C /var/lib/discord-soundboard-data/<CTID> --strip-components=1
+   pct stop <CTID>
+   ```
+   Or if `data/` is empty or doesn't exist yet, skip this step.
+4. **Add the mount** to `/etc/pve/lxc/<CTID>.conf`:
+   ```
+   mp0: /var/lib/discord-soundboard-data/<CTID>,mp=/opt/discord-soundboard/data
+   ```
+5. **Start the container:** `pct start <CTID>`
+
+After this, volume, channel, guest settings, and pending uploads will persist across updates and container restarts.
 
 ## Troubleshooting
 
