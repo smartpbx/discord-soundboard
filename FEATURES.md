@@ -27,7 +27,7 @@ Features to implement, in rough priority order.
 - [x] **Favorites** – Up to 9 favorites, mapped to keys 1–9 (saved in preferences)
 - [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
 - [ ] **Sound button icons** – Icons, emojis, or custom images on each sound button
-- [ ] **Pending uploads badge** – Badge on Superadmin tab when uploads await approval
+- [x] **Pending uploads badge** – Badge on Superadmin tab when uploads await approval
 ---
 
 ## Nice to Have
@@ -48,3 +48,17 @@ Features to implement, in rough priority order.
 - [x] Waveform display for remote viewers (guests)
 - [x] Pause/resume with correct position
 - [x] Remember preferences
+- [x] Pending uploads badge on Superadmin tab
+
+
+### How to update data mount on older installs
+For an existing container
+To add the data mount to a container that was created before this change:
+- Stop the container: `pct stop 200` (replace 200 with your CTID)
+- Create the host directory: `mkdir -p /var/lib/discord-soundboard-data/200`
+- Copy existing data (if you have any):
+   ```pct start 200   pct exec 200 -- sh -c 'tar czf - -C /opt/discord-soundboard data 2>/dev/null' | tar xzf - -C /var/lib/discord-soundboard-data/200 --strip-components=1   pct stop 200```
+- Add the mount – append this line to `/etc/pve/lxc/200.conf`:
+   ```mp0: /var/lib/discord-soundboard-data/200,mp=/opt/discord-soundboard/data```
+- Start the container: pct start 200
+After this, volume, channel, guest settings, and pending uploads will persist across updates and restarts.

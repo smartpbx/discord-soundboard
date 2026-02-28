@@ -101,9 +101,10 @@
         .header-row h1 { font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
         .header-right { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
         .main-tabs { display: flex; gap: 0.25rem; }
-        .main-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+        .main-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; position: relative; }
         .main-tab:hover { border-color: var(--accent); }
         .main-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+        .main-tab .pending-badge { position: absolute; top: -4px; right: -4px; min-width: 1.1rem; height: 1.1rem; padding: 0 0.25rem; font-size: 0.7rem; font-weight: 600; line-height: 1.1rem; text-align: center; background: var(--danger); color: white; border-radius: 10px; }
         .user-badge { font-size: 0.75rem; color: var(--text-muted); }
         .user-badge span { color: var(--accent); font-weight: 500; }
         .card {
@@ -375,7 +376,7 @@
             <div class="header-right">
                 <div class="main-tabs superadmin-only hidden" id="mainTabs">
                     <button type="button" class="main-tab active" data-tab="sounds" onclick="switchMainTab('sounds')">Sounds</button>
-                    <button type="button" class="main-tab" data-tab="superadmin" onclick="switchMainTab('superadmin')">Superadmin</button>
+                    <button type="button" class="main-tab" data-tab="superadmin" onclick="switchMainTab('superadmin')">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
                 </div>
                 <div class="user-badge">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span> <button type="button" class="btn btn-ghost" style="padding: 0.35rem 0.5rem; font-size: 0.8rem;" onclick="logout()">Log out</button></div>
             </div>
@@ -777,8 +778,12 @@
                     document.getElementById('playPauseBtn').classList.remove('hidden');
                     document.getElementById('stopBtn').classList.remove('hidden');
                     document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
-                    if (user.role === 'superadmin') document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
-                    else document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
+                    if (user.role === 'superadmin') {
+                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
+                    startPendingCountPolling();
+                } else {
+                    document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
+                }
                 }
                 fetchSettings();
                 if (user?.role === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); }
@@ -997,10 +1002,30 @@
             if (res && res.ok) fetchBlockedIPs();
         }
 
+        function updatePendingBadge(count) {
+            const badge = document.getElementById('pendingBadge');
+            if (!badge) return;
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : String(count);
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        async function fetchPendingCount() {
+            if (user?.role !== 'superadmin') return;
+            const res = await api('/api/superadmin/pending-count');
+            if (!res || !res.ok) return;
+            const d = await res.json().catch(() => ({}));
+            updatePendingBadge(d.count ?? 0);
+        }
+
         async function fetchPendingUploads() {
             const res = await api('/api/superadmin/pending-uploads');
             if (!res || !res.ok) return;
             const uploads = await res.json();
+            updatePendingBadge(uploads.length);
             const tbody = document.getElementById('pendingUploadsBody');
             const empty = document.getElementById('pendingUploadsEmpty');
             if (!tbody || !empty) return;
@@ -1650,11 +1675,18 @@
         }
 
         let playbackPollingStarted = false;
+        let pendingCountPollingStarted = false;
         function startPlaybackPolling() {
             if (playbackPollingStarted) return;
             playbackPollingStarted = true;
             refreshPlaybackState();
             setTimeout(() => setInterval(refreshPlaybackState, 400), 600);
+        }
+        function startPendingCountPolling() {
+            if (pendingCountPollingStarted || user?.role !== 'superadmin') return;
+            pendingCountPollingStarted = true;
+            fetchPendingCount();
+            setInterval(fetchPendingCount, 30000);
         }
 
         function refreshPlaybackState() {

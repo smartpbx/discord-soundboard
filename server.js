@@ -644,6 +644,12 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
     res.json(Object.keys(out).length ? out : { ok: true });
 });
 
+app.get('/api/superadmin/pending-count', requireSuperadmin, (req, res) => {
+    const d = loadPendingMeta();
+    const uploads = (d.uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
+    res.json({ count: uploads.length });
+});
+
 app.get('/api/superadmin/pending-uploads', requireSuperadmin, (req, res) => {
     const d = loadPendingMeta();
     const uploads = (d.uploads || []).map(u => {
