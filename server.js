@@ -440,6 +440,14 @@ function setPlaybackLocked(locked, byRole) {
     saveSoundsMeta(meta);
 }
 
+function getPlaybackSuperadminOnly(meta) {
+    return meta._playbackSuperadminOnly === true;
+}
+
+function setPlaybackSuperadminOnly(meta, value) {
+    meta._playbackSuperadminOnly = value === true;
+}
+
 function probeDuration(filePath) {
     try {
         const out = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath.replace(/"/g, '\\"')}"`, { encoding: 'utf8', timeout: 5000 });
@@ -518,7 +526,8 @@ function loadApprovedSignups() {
         return list.filter(u => u && u.username && u.password).map(u => ({
             username: String(u.username).trim().toLowerCase(),
             password: u.password,
-            role: (u.role === 'admin' ? 'admin' : 'user')
+            role: (u.role === 'admin' ? 'admin' : 'user'),
+            mustChangePassword: u.mustChangePassword === true
         }));
     } catch {
         return [];
@@ -532,7 +541,7 @@ function loadUsers() {
     const signups = loadApprovedSignups();
     signups.forEach(u => {
         const un = u.username;
-        if (un && !env.has(un)) env.set(un, { username: un, password: u.password, role: u.role });
+        if (un && !env.has(un)) env.set(un, { username: un, password: u.password, role: u.role, mustChangePassword: u.mustChangePassword });
     });
     return env;
 }
@@ -556,8 +565,8 @@ function addApprovedUser(username, password, role) {
     const un = String(username).trim().toLowerCase();
     if (!un || !password) return false;
     const r = (role === 'admin' ? 'admin' : 'user');
-    USERS.set(un, { username: un, password: password, role: r });
-    approvedSignups.push({ username: un, password, role: r });
+    USERS.set(un, { username: un, password: password, role: r, mustChangePassword: false });
+    approvedSignups.push({ username: un, password, role: r, mustChangePassword: false });
     saveApprovedSignups(approvedSignups);
     return true;
 }
@@ -580,6 +589,37 @@ function removeManagedUser(username) {
     if (idx < 0) return false;
     approvedSignups.splice(idx, 1);
     USERS.delete(un);
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
+function updateManagedUserPassword(username, newPassword, forceChange) {
+    const un = String(username).trim().toLowerCase();
+    if (!un || envUsernames.has(un)) return false;
+    const idx = approvedSignups.findIndex(u => u.username === un);
+    if (idx < 0) return false;
+    if (!newPassword || newPassword.length < 6) return false;
+    approvedSignups[idx].password = newPassword;
+    approvedSignups[idx].mustChangePassword = forceChange === true;
+    const entry = USERS.get(un);
+    if (entry) {
+        entry.password = newPassword;
+        entry.mustChangePassword = forceChange === true;
+    }
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
+function updateOwnPassword(username, currentPassword, newPassword) {
+    const un = String(username).trim().toLowerCase();
+    const entry = USERS.get(un);
+    if (!entry || entry.password !== currentPassword) return false;
+    if (envUsernames.has(un)) return false;
+    const idx = approvedSignups.findIndex(u => u.username === un);
+    if (idx < 0) return false;
+    if (!newPassword || newPassword.length < 6) return false;
+    approvedSignups[idx].password = newPassword;
+    approvedSignups[idx].mustChangePassword = false;
+    entry.password = newPassword;
+    entry.mustChangePassword = false;
     saveApprovedSignups(approvedSignups);
     return true;
 }
@@ -613,7 +653,9 @@ function checkCredentials(username, password) {
     const u = username ? String(username).trim().toLowerCase() : '';
     const p = String(password || '');
     const entry = USERS.get(u);
-    if (entry && entry.password === p) return { username: entry.username, role: entry.role };
+    if (entry && entry.password === p) {
+        return { username: entry.username, role: entry.role, mustChangePassword: entry.mustChangePassword === true };
+    }
     return null;
 }
 
@@ -699,7 +741,9 @@ app.post('/api/guest/start', (req, res) => {
 
 app.get('/api/me', (req, res) => {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
+    const entry = req.session.user.role !== 'guest' ? USERS.get((req.session.user.username || '').toLowerCase()) : null;
     const u = { ...req.session.user };
+    if (entry && entry.mustChangePassword !== undefined) u.mustChangePassword = entry.mustChangePassword === true;
     if (u.role === 'guest') delete u.ip;
     res.json(u);
 });
@@ -924,6 +968,7 @@ app.delete('/api/tags/:name', requireAdmin, (req, res) => {
 app.get('/api/settings', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
     const out = { playbackLocked: getPlaybackLocked(meta), playbackLockedBy: getPlaybackLocked(meta) ? getPlaybackLockedBy(meta) : null };
+    if (req.session.user.role === 'superadmin') out.playbackSuperadminOnly = getPlaybackSuperadminOnly(meta);
     if (req.session.user.role === 'admin' || req.session.user.role === 'superadmin') {
         out.volume = currentVolume;
     }
@@ -965,7 +1010,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
 });
 
 app.patch('/api/settings', requireAdmin, (req, res) => {
-    const { playbackLocked, guestEnabled, guestMaxDuration, guestCooldownSec, guestUploadEnabled, guestMaxUploadDuration, guestMaxUploadBytes, userUploadEnabled, userMaxUploadDuration, userMaxUploadBytes, userMaxDuration, userCooldownSec } = req.body;
+    const { playbackLocked, playbackSuperadminOnly, guestEnabled, guestMaxDuration, guestCooldownSec, guestUploadEnabled, guestMaxUploadDuration, guestMaxUploadBytes, userUploadEnabled, userMaxUploadDuration, userMaxUploadBytes, userMaxDuration, userCooldownSec } = req.body;
     const out = {};
     if (typeof playbackLocked === 'boolean') {
         const byRole = req.session.user.role === 'superadmin' ? 'superadmin' : 'admin';
@@ -973,6 +1018,12 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         out.playbackLocked = playbackLocked;
     }
     if (req.session.user.role === 'superadmin') {
+        if (typeof playbackSuperadminOnly === 'boolean') {
+            const meta = loadSoundsMeta();
+            setPlaybackSuperadminOnly(meta, playbackSuperadminOnly);
+            saveSoundsMeta(meta);
+            out.playbackSuperadminOnly = playbackSuperadminOnly;
+        }
         if (typeof guestEnabled === 'boolean') { setGuestEnabled(guestEnabled); out.guestEnabled = guestEnabled; }
         if (typeof guestMaxDuration === 'number' && guestMaxDuration > 0) { setGuestMaxDuration(guestMaxDuration); out.guestMaxDuration = guestMaxDuration; }
         if (typeof guestCooldownSec === 'number' && guestCooldownSec >= 0) { setGuestCooldownSec(guestCooldownSec); out.guestCooldownSec = guestCooldownSec; }
@@ -1081,9 +1132,27 @@ app.get('/api/superadmin/users', requireSuperadmin, (req, res) => {
 app.patch('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     const un = String(req.params.username || '').trim().toLowerCase();
     if (!un) return res.status(400).json({ error: 'Username required' });
-    const role = (req.body && req.body.role === 'admin') ? 'admin' : 'user';
-    if (!updateManagedUserRole(un, role)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
-    res.json({ ok: true, username: un, role });
+    const body = req.body || {};
+    if (body.role !== undefined) {
+        const role = body.role === 'admin' ? 'admin' : 'user';
+        if (!updateManagedUserRole(un, role)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
+    }
+    if (body.password !== undefined && body.password !== null && body.password !== '') {
+        const newPw = String(body.password);
+        const forceChange = body.forceChange === true;
+        if (!updateManagedUserPassword(un, newPw, forceChange)) return res.status(400).json({ error: 'User not found, env-configured, or password too short (min 6 chars)' });
+    }
+    res.json({ ok: true, username: un });
+});
+
+app.patch('/api/me/password', requireAuth, (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests cannot change password' });
+    const { currentPassword, newPassword } = req.body || {};
+    const un = (req.session.user.username || '').toLowerCase();
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required' });
+    if (!updateOwnPassword(un, String(currentPassword), String(newPassword))) return res.status(400).json({ error: 'Current password incorrect or new password too short (min 6 chars)' });
+    req.session.user.mustChangePassword = false;
+    res.json({ ok: true });
 });
 
 app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
@@ -1264,6 +1333,9 @@ app.post('/api/play', requireAuth, (req, res) => {
         return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(duration)}s.` });
     }
 
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can play.' });
+    }
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
         if (lockedBy === 'superadmin') {
