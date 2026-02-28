@@ -266,14 +266,21 @@
         .sounds-card.mobile-active .folder-tabs { flex-shrink: 0; margin: 0 1rem 0.5rem; }
         .mobile-grid-wrap { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
         .mobile-grid-area {
-            flex: 1; overflow-y: auto; padding: 0 1rem 1rem; -webkit-overflow-scrolling: touch;
-            display: grid; gap: 0.5rem; align-content: start;
-            grid-template-columns: repeat(3, 1fr); /* 3x3 = 9 on small */
+            flex: 1; min-height: 0; padding: 0 1rem 1rem;
+            display: grid; gap: 0.5rem;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
         }
-        @media (min-width: 380px) { .mobile-grid-area { grid-template-columns: repeat(4, 1fr); } } /* 4x3 = 12 */
-        @media (min-width: 520px) { .mobile-grid-area { grid-template-columns: repeat(4, 1fr); } } /* 4x4 = 16 on larger */
+        @media (min-width: 380px) {
+            .mobile-grid-area { grid-template-columns: repeat(4, 1fr); }
+        }
+        @media (min-height: 480px) {
+            .mobile-grid-area { grid-template-rows: repeat(4, 1fr); }
+        }
+        .mobile-grid-area.paged { overflow: hidden; }
         .mobile-grid-btn {
-            aspect-ratio: 1; min-height: 0; padding: 0.5rem;
+            aspect-ratio: 1; min-width: 0; min-height: 0; max-width: 160px; max-height: 160px;
+            padding: 0.5rem; width: 100%; height: 100%;
             background: var(--surface-hover); border: 2px solid var(--border);
             border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 600;
             color: var(--text); cursor: pointer; display: flex; flex-direction: column;
@@ -281,10 +288,17 @@
             transition: background 0.15s, border-color 0.15s, transform 0.2s;
             word-break: break-word; text-align: center; overflow: hidden;
         }
+        .mobile-grid-area.paged .mobile-grid-btn { max-width: none; max-height: none; }
         .mobile-grid-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
         .mobile-grid-btn:active:not(:disabled) { transform: scale(0.98); }
         .mobile-grid-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .mobile-grid-btn .duration { font-size: 0.7rem; font-weight: 400; color: var(--text-muted); }
+        .mobile-grid-nav { display: none; flex-shrink: 0; align-items: center; justify-content: center; gap: 1rem; padding: 0.5rem 1rem; }
+        .mobile-grid-wrap.paged .mobile-grid-nav { display: flex !important; }
+        .mobile-grid-nav button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); font-size: 1.2rem; cursor: pointer; }
+        .mobile-grid-nav button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .mobile-grid-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .mobile-grid-page { font-size: 0.8rem; color: var(--text-muted); min-width: 4rem; text-align: center; }
         .settings-row { align-items: center; gap: 0.5rem; }
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
@@ -426,6 +440,11 @@
             <div class="folder-tabs" id="folderTabs"></div>
             <div class="mobile-grid-wrap" id="mobileGridWrap">
                 <div class="mobile-grid-area" id="mobileGridArea"></div>
+                <div class="mobile-grid-nav" id="mobileGridNav">
+                    <button type="button" id="mobilePrevBtn" onclick="mobilePagePrev()" title="Previous page">‹</button>
+                    <span class="mobile-grid-page" id="mobileGridPage">—</span>
+                    <button type="button" id="mobileNextBtn" onclick="mobilePageNext()" title="Next page">›</button>
+                </div>
             </div>
             <div id="soundsList" class="sound-grid"></div>
             <div class="sound-panel hidden" id="soundPanel">
@@ -517,6 +536,8 @@
         let lastGuestCooldownShown = -1;
         let compactMode = false;
         let mobileView = false;
+        let mobilePageIndex = 0;
+        let mobileTouchStartX = 0;
 
         const PREFS_KEY = 'soundboard-prefs';
         function loadPrefs() {
@@ -574,10 +595,33 @@
             return filtered;
         }
 
+        function getMobileGridLayout() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const cols = w < 380 ? 3 : 4;
+            const rows = h < 480 ? 3 : 4;
+            return { cols, rows, perPage: cols * rows };
+        }
+
         function renderMobileGrid() {
             const area = document.getElementById('mobileGridArea');
+            const wrap = document.getElementById('mobileGridWrap');
+            const nav = document.getElementById('mobileGridNav');
+            const pageEl = document.getElementById('mobileGridPage');
+            const prevBtn = document.getElementById('mobilePrevBtn');
+            const nextBtn = document.getElementById('mobileNextBtn');
             if (!area || !mobileView) return;
             const filtered = getFilteredSounds();
+            const { perPage } = getMobileGridLayout();
+            const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+            const isPaged = filtered.length > perPage;
+            if (isPaged) {
+                mobilePageIndex = Math.max(0, Math.min(mobilePageIndex, totalPages - 1));
+            } else {
+                mobilePageIndex = 0;
+            }
+            wrap?.classList.toggle('paged', isPaged);
+            area.classList.toggle('paged', isPaged);
             const isUser = user?.role === 'user';
             const isGuest = user?.role === 'guest';
             const guestCooldown = getGuestCooldownRemaining();
@@ -587,15 +631,49 @@
             const tooLong = (dur) => (isUser || isGuest) && dur != null && dur > MAX_USER_DURATION;
             if (filtered.length === 0) {
                 area.innerHTML = '<div style="grid-column:1/-1; padding:2rem; text-align:center; color:var(--text-muted)">No sounds</div>';
+                if (pageEl) pageEl.textContent = '—';
                 return;
             }
-            area.innerHTML = filtered.map(s => {
+            const start = isPaged ? mobilePageIndex * perPage : 0;
+            const end = isPaged ? Math.min(start + perPage, filtered.length) : filtered.length;
+            const pageSounds = filtered.slice(start, end);
+            area.innerHTML = pageSounds.map(s => {
                 const disabled = !canPlay || tooLong(s.duration);
                 const name = (s.displayName || s.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                 const dur = s.duration != null ? formatTime(s.duration) : '—';
                 const fn = (s.filename || '').replace(/"/g, '&quot;');
                 return `<button type="button" class="mobile-grid-btn ${disabled ? 'disabled' : ''}" data-filename="${fn}" ${disabled ? 'disabled' : ''} onclick="playSound(this.dataset.filename)"><span>${name}</span><span class="duration">${dur}</span></button>`;
             }).join('');
+            if (pageEl) pageEl.textContent = isPaged ? `${mobilePageIndex + 1} / ${totalPages}` : '—';
+            if (prevBtn) prevBtn.disabled = !isPaged || mobilePageIndex <= 0;
+            if (nextBtn) nextBtn.disabled = !isPaged || mobilePageIndex >= totalPages - 1;
+            if (isPaged) setupMobileSwipeHandlers();
+        }
+
+        function mobilePagePrev() {
+            const filtered = getFilteredSounds();
+            const { perPage } = getMobileGridLayout();
+            if (filtered.length <= perPage) return;
+            if (mobilePageIndex > 0) { mobilePageIndex--; renderMobileGrid(); }
+        }
+
+        function mobilePageNext() {
+            const filtered = getFilteredSounds();
+            const { perPage } = getMobileGridLayout();
+            const totalPages = Math.ceil(filtered.length / perPage);
+            if (mobilePageIndex < totalPages - 1) { mobilePageIndex++; renderMobileGrid(); }
+        }
+
+        function setupMobileSwipeHandlers() {
+            const area = document.getElementById('mobileGridArea');
+            if (!area) return;
+            area.ontouchstart = (e) => { mobileTouchStartX = e.touches[0].clientX; };
+            area.ontouchend = (e) => {
+                if (!e.changedTouches?.[0]) return;
+                const dx = e.changedTouches[0].clientX - mobileTouchStartX;
+                if (dx > 60) mobilePagePrev();
+                else if (dx < -60) mobilePageNext();
+            };
         }
 
         function applyTheme(theme) {
@@ -1077,6 +1155,7 @@
         function selectFolder(folder) {
             selectedFolder = folder || null;
             savePrefs({ lastFolder: selectedFolder });
+            if (mobileView) mobilePageIndex = 0;
             renderFolderTabs();
             renderSoundsGrid();
         }
@@ -1637,7 +1716,7 @@
             fetchFolders();
             updateNowPlaying();
             updatePlayPauseButton();
-
+            window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
         })();
     </script>
 </body>

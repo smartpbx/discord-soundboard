@@ -17,7 +17,7 @@ Features to implement, in rough priority order.
 - [x] **Remember preferences** – Last channel, folder, sound filter (localStorage + server-side state.json for volume/channel across restarts)
 - [x] **Theme toggle** – Dark/light mode (saved in preferences)
 - [x] **Compact view** – Smaller sound buttons, more on screen (saved in preferences)
-- [x] **Mobile view** – Fullscreen soundboard with responsive grid (9–16 buttons by screen size), folder tabs (saved in preferences)
+- [x] **Mobile view** – Fullscreen soundboard, buttons fill screen (min/max size), pagination with swipe when many sounds (saved in preferences)
 
 ---
 
