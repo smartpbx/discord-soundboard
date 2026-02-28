@@ -182,6 +182,14 @@
         }
         .progress-time { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; }
         .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
+        .player-recent-toggle { margin-left: auto; }
+        .player-recent-toggle.expanded { transform: rotate(180deg); }
+        .player-recent { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+        .player-recent.hidden { display: none !important; }
+        .player-recent-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .player-recent-list { display: flex; flex-direction: column; gap: 0.35rem; }
+        .player-recent-item { padding: 0.4rem 0.5rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s; }
+        .player-recent-item:hover { border-color: var(--accent); background: var(--surface); }
         .volume-btn-wrap { display: flex; align-items: center; }
         .volume-btn { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.6rem; font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
         .volume-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -503,6 +511,11 @@
             <div class="player-buttons">
                 <button type="button" class="btn btn-ghost btn-icon" id="playPauseBtn" onclick="togglePlayPause()" title="Play / Pause" disabled>▶</button>
                 <button type="button" class="btn btn-ghost btn-icon" id="stopBtn" onclick="stopPlayback()" title="Stop">⏹</button>
+                <button type="button" class="btn btn-ghost btn-icon player-recent-toggle" id="recentToggleBtn" onclick="toggleRecentPlayed()" title="Recently played">▼</button>
+            </div>
+            <div class="player-recent hidden" id="playerRecent">
+                <div class="player-recent-title">Recently played</div>
+                <div class="player-recent-list" id="playerRecentList"></div>
             </div>
         </div>
 
@@ -716,6 +729,7 @@
             if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
             if (mobileView) renderMobileGrid();
             applyVolumeExpanded();
+            applyRecentPlayerExpanded();
         }
         function toggleCompact() {
             compactMode = !compactMode;
@@ -734,6 +748,46 @@
             if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
             savePrefs({ mobileView });
             if (mobileView) renderMobileGrid();
+        }
+
+        function getRecentlyPlayed() {
+            const arr = loadPrefs().recentPlayed;
+            return Array.isArray(arr) ? arr.slice(0, 5) : [];
+        }
+        function addToRecentlyPlayed(filename, displayName) {
+            if (!filename) return;
+            let list = getRecentlyPlayed();
+            list = list.filter(function(x) { return x.filename !== filename; });
+            list.unshift({ filename: filename, displayName: displayName || filename });
+            list = list.slice(0, 5);
+            savePrefs({ recentPlayed: list });
+            renderRecentlyPlayed();
+        }
+        function toggleRecentPlayed() {
+            const expanded = loadPrefs().recentPlayerExpanded !== true;
+            savePrefs({ recentPlayerExpanded: expanded });
+            applyRecentPlayerExpanded();
+        }
+        function applyRecentPlayerExpanded() {
+            const expanded = loadPrefs().recentPlayerExpanded === true;
+            const section = document.getElementById('playerRecent');
+            const btn = document.getElementById('recentToggleBtn');
+            if (section) section.classList.toggle('hidden', !expanded);
+            if (btn) btn.classList.toggle('expanded', expanded);
+        }
+        function renderRecentlyPlayed() {
+            const list = getRecentlyPlayed();
+            const el = document.getElementById('playerRecentList');
+            if (!el) return;
+            if (list.length === 0) {
+                el.innerHTML = '<div class="player-recent-empty" style="font-size:0.85rem;color:var(--text-muted);padding:0.5rem 0">No sounds played yet</div>';
+            } else {
+                el.innerHTML = list.map(function(item) {
+                    var name = (item.displayName || item.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                    var fn = (item.filename || '').replace(/"/g, '&quot;');
+                    return '<button type="button" class="player-recent-item" data-filename="' + fn + '" onclick="playSound(this.dataset.filename)">' + name + '</button>';
+                }).join('');
+            }
         }
 
         function toggleSoundsOptionsMenu() {
@@ -1793,6 +1847,7 @@
             const timeEl = document.getElementById('progressTime');
             if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
             loadWaveform(filename);
+            addToRecentlyPlayed(filename, playback.displayName);
         }
 
         async function loadWaveform(filename) {
@@ -2013,6 +2068,7 @@
             api('/api/playback-state').then(async (res) => {
                 if (!res || !res.ok) return;
                 const state = await res.json();
+                const prevFilename = playback.filename;
                 if (state.status === 'idle' && playback.status === 'playing' && playback.startTime != null) {
                     const started = Number(playback.startTime);
                     if (Number.isFinite(started) && (Date.now() - started) < 3000) return;
@@ -2030,6 +2086,7 @@
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
+                if ((state.status === 'playing' || state.status === 'paused') && state.filename && state.filename !== prevFilename) addToRecentlyPlayed(state.filename, state.displayName);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 updateNowPlaying();
                 updatePlayPauseButton();
@@ -2195,6 +2252,7 @@
             const ok = await checkAuth();
             if (!ok) return;
             applyPrefs();
+            renderRecentlyPlayed();
             startPlaybackPolling();
             setInterval(tickWaveform, 100);
             fetchChannels();
