@@ -930,6 +930,32 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
     }
 });
 
+app.delete('/api/sounds/:filename', requireSuperadmin, (req, res) => {
+    const raw = req.params.filename;
+    const safeFilename = path.basename(raw);
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
+    const filePath = path.join(SOUNDS_DIR, safeFilename);
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid path' });
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+    try {
+        if (playbackState.filename === safeFilename) {
+            player.stop();
+            playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
+        }
+        fs.unlinkSync(filePath);
+        const meta = loadSoundsMeta();
+        delete meta[safeFilename];
+        const order = getSoundOrder(meta).filter(f => f !== safeFilename);
+        meta._order = order;
+        saveSoundsMeta(meta);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Delete sound error:', err);
+        res.status(500).json({ error: err.message || 'Failed to delete sound' });
+    }
+});
+
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     const { filename, displayName, tags, color, volume, startTime, endTime } = req.body;
     const safeFilename = filename && path.basename(filename);

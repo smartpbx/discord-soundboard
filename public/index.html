@@ -695,6 +695,7 @@
                 <div class="row" style="margin-top: 0.5rem;">
                     <button type="button" class="btn btn-primary" onclick="saveSoundPanel()">Save</button>
                     <button type="button" class="btn btn-ghost" onclick="closeSoundPanel()">Close</button>
+                    <button type="button" class="btn btn-danger superadmin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
                 </div>
             </div>
             <div class="user-locked-msg hidden" id="userLockedMsg">Playback is locked by an admin.</div>
@@ -2649,6 +2650,22 @@
                 body: JSON.stringify({ filename, displayName, tags, color: color || null, volume: Number.isFinite(volume) ? volume : 1, startTime, endTime }),
             });
             if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; closeSoundPanel(); }
+        }
+
+        async function deleteSoundPanel() {
+            const nameEl = document.getElementById('soundPanelName');
+            const filename = nameEl && nameEl.dataset.filename;
+            if (!filename) return;
+            const displayName = (nameEl && nameEl.value) ? nameEl.value.trim() : filename;
+            if (!confirm('Delete "' + displayName + '" permanently? This cannot be undone.')) return;
+            const res = await api('/api/sounds/' + encodeURIComponent(filename), { method: 'DELETE' });
+            if (res && res.ok) {
+                fetchSounds();
+                closeSoundPanel();
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                alert(d.error || 'Failed to delete sound.');
+            }
         }
 
         async function joinChannel() {
