@@ -2997,6 +2997,11 @@
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
+                if (state.volume !== undefined && Number.isFinite(state.volume) && isAdminOrSuperadmin()) {
+                    const slider = document.getElementById('volumeSlider');
+                    const current = slider ? parseFloat(slider.value) : NaN;
+                    if (Math.abs(current - state.volume) > 0.005) setVolume(String(state.volume), true);
+                }
                 updateNowPlaying();
                 updatePlayPauseButton();
                 updateStopButtons();
@@ -3044,8 +3049,9 @@
             if (t < trimStart + trimDuration - 0.5) playSound(playback.filename, Number(t));
         });
 
-        function setVolume(volume) {
+        function setVolume(volume, syncOnly) {
             const v = parseFloat(volume);
+            if (!Number.isFinite(v)) return;
             const pct = Math.round(v * 100) + '%';
             const label = document.getElementById('volumeLabel');
             const labelCard = document.getElementById('volumeLabelCard');
@@ -3057,7 +3063,7 @@
             if (btnPct) btnPct.textContent = pct;
             if (slider) slider.value = v;
             if (sliderCard) sliderCard.value = v;
-            fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: CREDENTIALS, body: JSON.stringify({ volume: v }) });
+            if (!syncOnly) fetch('/api/volume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: CREDENTIALS, body: JSON.stringify({ volume: v }) });
         }
 
         function setVolumeExpanded(expanded) {

@@ -1511,6 +1511,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         }
     }
     state.recentlyPlayed = getRecentlyPlayedFromState();
+    state.volume = currentVolume;
     res.json(state);
 });
 
