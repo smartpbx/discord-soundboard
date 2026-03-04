@@ -7,11 +7,12 @@ When the bot doesn't produce audio (UI shows playback but Discord doesn't light 
 1. **Join a voice channel** – you should see:
    ```
    [DIAG] voice.join channelId=... guildId=... connectionState=...
+   [DIAG] voice.stateChange connecting -> ready
    ```
 
 2. **Play a sound** – you should see:
    ```
-   [DIAG] play.start filename=... effectiveVolume=... playerStatusBefore=...
+   [DIAG] play.start filename=... effectiveVolume=... playerStatusBefore=... voiceConnectionStatus=...
    [DIAG] player.stateChange idle -> buffering
    [DIAG] player.stateChange buffering -> playing
    ... (when done) ...
@@ -27,6 +28,8 @@ When the bot doesn't produce audio (UI shows playback but Discord doesn't light 
 | `[DIAG] player.error` appears | Audio player error – check the error message |
 | `[DIAG] ffmpeg.error` or `ffmpeg.close code=1` | ffmpeg failing – file format or path issue |
 | `[DIAG] voice.connectionError` | Voice connection broken – Discord/network |
+| `voiceConnectionStatus` not `ready` when play.start | Connection not ready yet – wait for `voice.stateChange ... -> ready` before playing |
+| `voice.stateChange` never reaches `ready` | Voice connection stuck – Discord/network/firewall |
 | No `[DIAG]` lines at all | Logs not reaching stdout – check how you run the server |
 
 ## How to capture

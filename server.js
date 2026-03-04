@@ -716,6 +716,7 @@ client.once('ready', () => {
                 console.error('Voice connection error:', err.message);
                 leaveVoiceChannel();
             });
+            currentConnection.on('stateChange', (o, n) => { console.log('[DIAG] voice.stateChange', o.status, '->', n.status); });
             currentConnection.subscribe(player);
             console.log(`🔊 Auto-joined ${channel.name}`);
         }
@@ -851,6 +852,7 @@ app.post('/api/join', requireAdmin, (req, res) => {
         console.log('[DIAG] voice.connectionError', err.message);
         leaveVoiceChannel();
     });
+    currentConnection.on('stateChange', (o, n) => { console.log('[DIAG] voice.stateChange', o.status, '->', n.status); });
     currentConnection.subscribe(player);
     console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
@@ -1482,8 +1484,10 @@ app.post('/api/play', requireAuth, (req, res) => {
             metadata: { filename: safeFilename, displayName },
         });
         resource.volume.setVolume(effectiveVolume);
+        const conn = getVoiceConnection(activeGuildId);
+        const connStatus = conn?.state?.status ?? 'no-connection';
+        console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'playerStatusBefore=', player.state.status, 'voiceConnectionStatus=', connStatus);
         player.play(resource);
-        console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'playerStatusBefore=', player.state.status);
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
         if (isGuest) {
             guestLastPlayByIP.set(getClientIP(req), Date.now());
