@@ -2,6 +2,14 @@
 
 When the bot doesn't produce audio (UI shows playback but Discord doesn't light up), run the server and capture logs while reproducing. Look for `[DIAG]` lines.
 
+## Voice never reaches `ready` (LXC/Docker/firewall)
+
+If `voice.stateChange` cycles `signalling -> connecting -> signalling` and never reaches `ready`, the voice connection cannot establish. This is almost always a **network** issue:
+
+- **Discord voice requires UDP** outbound to Discord's voice servers
+- LXC containers, Docker, and firewalls often block or restrict UDP
+- **Fix**: Allow UDP outbound from the host/container, or run the bot on a host with direct internet access
+
 ## What to capture
 
 1. **Join a voice channel** – you should see:
@@ -28,8 +36,8 @@ When the bot doesn't produce audio (UI shows playback but Discord doesn't light 
 | `[DIAG] player.error` appears | Audio player error – check the error message |
 | `[DIAG] ffmpeg.error` or `ffmpeg.close code=1` | ffmpeg failing – file format or path issue |
 | `[DIAG] voice.connectionError` | Voice connection broken – Discord/network |
-| `voiceConnectionStatus` not `ready` when play.start | Connection not ready yet – wait for `voice.stateChange ... -> ready` before playing |
-| `voice.stateChange` never reaches `ready` | Voice connection stuck – Discord/network/firewall |
+| `voiceConnectionStatus` not `ready` when play.start | Connection not ready yet – play handler now waits for ready (or returns 503) |
+| `voice.stateChange` never reaches `ready` | **Voice connection stuck** – almost always a **network/firewall** issue. Discord voice needs UDP outbound. In LXC/Docker/behind NAT, ensure UDP is allowed. |
 | No `[DIAG]` lines at all | Logs not reaching stdout – check how you run the server |
 
 ## How to capture

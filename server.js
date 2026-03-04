@@ -11,7 +11,7 @@ const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -1366,7 +1366,7 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
     });
 });
 
-app.post('/api/play', requireAuth, (req, res) => {
+app.post('/api/play', requireAuth, async (req, res) => {
     const { filename } = req.body;
     if (!filename || typeof filename !== 'string') return res.status(400).json({ error: 'Filename required' });
 
@@ -1487,6 +1487,17 @@ app.post('/api/play', requireAuth, (req, res) => {
         const conn = getVoiceConnection(activeGuildId);
         const connStatus = conn?.state?.status ?? 'no-connection';
         console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'playerStatusBefore=', player.state.status, 'voiceConnectionStatus=', connStatus);
+        if (conn && connStatus !== 'ready') {
+            try {
+                await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
+                console.log('[DIAG] voice ready, proceeding with play');
+            } catch (err) {
+                console.error('[DIAG] voice connection never reached ready:', err.message);
+                return res.status(503).json({
+                    error: "Voice connection failed to establish. Discord voice requires UDP outbound. If you're running in a container or behind a firewall, ensure UDP is allowed.",
+                });
+            }
+        }
         player.play(resource);
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
         if (isGuest) {
