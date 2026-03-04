@@ -4,6 +4,7 @@
   "main": "server.js",
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
+    "@snazzah/davey": "^0.1.6",
     "@discordjs/voice": "^0.19.0",
     "@noble/ciphers": "^1.0.0",
     "cookie-parser": "^1.4.6",

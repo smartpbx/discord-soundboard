@@ -807,10 +807,12 @@ let lastChannelId = null; // Persisted for auto-join on restart
 player.on('error', error => {
     const meta = error.resource?.metadata ?? 'unknown';
     console.error(`❌ Audio Player Error: ${error.message} (resource: ${meta})`);
+    console.log('[DIAG] player.error', error.message, 'resource:', meta);
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
 });
 
 player.on('stateChange', (oldState, newState) => {
+    console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
     if (newState.status === AudioPlayerStatus.Idle) {
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
     }
@@ -846,9 +848,11 @@ app.post('/api/join', requireAdmin, (req, res) => {
     });
     currentConnection.on('error', err => {
         console.error('Voice connection error:', err.message);
+        console.log('[DIAG] voice.connectionError', err.message);
         leaveVoiceChannel();
     });
     currentConnection.subscribe(player);
+    console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
     saveServerState({ lastChannelId });
     res.send(`Joined ${channel.name}`);
@@ -1467,8 +1471,8 @@ app.post('/api/play', requireAuth, (req, res) => {
             stream = ff.stdout;
             let errBuf = '';
             ff.stderr.on('data', (chunk) => { errBuf += chunk.toString(); });
-            ff.on('error', (err) => { console.error('ffmpeg spawn error', err); });
-            ff.on('close', (code) => { if (code !== 0 && code !== null) console.error('ffmpeg exit', code, errBuf.slice(-500)); });
+            ff.on('error', (err) => { console.error('ffmpeg spawn error', err); console.log('[DIAG] ffmpeg.error', String(err)); });
+            ff.on('close', (code) => { if (code !== 0 && code !== null) { console.error('ffmpeg exit', code, errBuf.slice(-500)); console.log('[DIAG] ffmpeg.close code=', code, 'file=', safeFilename); } });
         } else {
             stream = fs.createReadStream(filePath);
         }
@@ -1479,6 +1483,7 @@ app.post('/api/play', requireAuth, (req, res) => {
         });
         resource.volume.setVolume(effectiveVolume);
         player.play(resource);
+        console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'playerStatusBefore=', player.state.status);
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
         if (isGuest) {
             guestLastPlayByIP.set(getClientIP(req), Date.now());
