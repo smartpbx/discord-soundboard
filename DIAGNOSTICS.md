@@ -40,6 +40,10 @@ If `voice.stateChange` cycles `signalling -> connecting -> signalling` and never
 | `voice.stateChange` never reaches `ready` | **Voice connection stuck** – almost always a **network/firewall** issue. Discord voice needs UDP outbound. In LXC/Docker/behind NAT, ensure UDP is allowed. |
 | No `[DIAG]` lines at all | Logs not reaching stdout – check how you run the server |
 
+## Networking codes (networkingCode in stateChange)
+
+When `voice.stateChange` fires, `networkingCode` shows the internal state: `0`=OpeningWs, `1`=Identifying, `2`=UdpHandshaking, `3`=SelectingProtocol, `4`=Ready, `5`=Resuming, `6`=Closed. If it gets stuck at 2, UDP handshake may be failing.
+
 ## How to capture
 
 - **systemd**: `journalctl -u <service> -f` or `journalctl -u <service> -n 200`

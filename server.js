@@ -710,13 +710,20 @@ client.once('ready', () => {
                 channelId: channel.id,
                 guildId: channel.guild.id,
                 adapterCreator: channel.guild.voiceAdapterCreator,
-                daveEncryption: false,
+                daveEncryption: true,
+                debug: true,
             });
             currentConnection.on('error', err => {
                 console.error('Voice connection error:', err.message);
                 leaveVoiceChannel();
             });
-            currentConnection.on('stateChange', (o, n) => { console.log('[DIAG] voice.stateChange', o.status, '->', n.status); });
+            currentConnection.on('close', code => { console.log('[DIAG] voice.close code=', code); });
+            currentConnection.on('debug', msg => { console.log('[DIAG] voice.debug', msg); });
+            currentConnection.on('stateChange', (o, n) => {
+                const rejoin = currentConnection?.rejoinAttempts ?? '?';
+                const nwCode = n.networking?.state?.code ?? '?';
+                console.log('[DIAG] voice.stateChange', o.status, '->', n.status, 'rejoinAttempts=', rejoin, 'networkingCode=', nwCode);
+            });
             currentConnection.subscribe(player);
             console.log(`🔊 Auto-joined ${channel.name}`);
         }
@@ -844,15 +851,21 @@ app.post('/api/join', requireAdmin, (req, res) => {
         channelId: channel.id,
         guildId: channel.guild.id,
         adapterCreator: channel.guild.voiceAdapterCreator,
-        // Use classic voice encryption; DAVE (end-to-end) requires @snazzah/davey
-        daveEncryption: false,
+        daveEncryption: true,
+        debug: true,
     });
     currentConnection.on('error', err => {
         console.error('Voice connection error:', err.message);
         console.log('[DIAG] voice.connectionError', err.message);
         leaveVoiceChannel();
     });
-    currentConnection.on('stateChange', (o, n) => { console.log('[DIAG] voice.stateChange', o.status, '->', n.status); });
+    currentConnection.on('close', code => { console.log('[DIAG] voice.close code=', code); });
+    currentConnection.on('debug', msg => { console.log('[DIAG] voice.debug', msg); });
+    currentConnection.on('stateChange', (o, n) => {
+        const rejoin = currentConnection?.rejoinAttempts ?? '?';
+        const nwCode = n.networking?.state?.code ?? '?';
+        console.log('[DIAG] voice.stateChange', o.status, '->', n.status, 'rejoinAttempts=', rejoin, 'networkingCode=', nwCode);
+    });
     currentConnection.subscribe(player);
     console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
