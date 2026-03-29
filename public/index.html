@@ -463,6 +463,45 @@
         .guest-history-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
         .guest-history-table .block-btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
         .blocked-ips-list .ip-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; }
+
+        /* Online users */
+        .player-online { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+        .player-online-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.4rem; }
+        .online-list { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+        .online-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 500; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); }
+        .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+        .online-pill.role-superadmin { border-color: rgba(124,58,237,0.5); color: var(--accent); }
+        .online-pill.role-admin { border-color: rgba(124,58,237,0.3); }
+        .online-pill.role-guest { color: var(--text-muted); }
+
+        /* Now-playing highlight on sound buttons */
+        .sound-btn.is-playing { border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.3); }
+        .mobile-grid-btn.is-playing { border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.3); }
+
+        /* Toast notifications */
+        #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; max-width: 320px; }
+        .toast { padding: 0.65rem 1rem; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; box-shadow: var(--shadow); pointer-events: auto; animation: toastIn 0.2s ease; word-break: break-word; }
+        .toast.fading { animation: toastOut 0.3s ease forwards; }
+        .toast-success { background: #14532d; color: #bbf7d0; border: 1px solid #15803d; }
+        .toast-error { background: #450a0a; color: #fecaca; border: 1px solid #dc2626; }
+        .toast-info { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(1rem); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateX(1rem); } }
+        [data-theme="light"] .toast-success { background: #dcfce7; color: #166534; border-color: #15803d; }
+        [data-theme="light"] .toast-error { background: #fee2e2; color: #991b1b; border-color: #dc2626; }
+
+        /* Keyboard shortcuts modal */
+        .shortcuts-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .shortcuts-overlay.hidden { display: none !important; }
+        .shortcuts-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; max-width: 400px; width: 100%; box-shadow: var(--shadow); }
+        .shortcuts-modal h3 { margin: 0 0 1rem; font-size: 1rem; display: flex; align-items: center; justify-content: space-between; }
+        .shortcuts-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0; }
+        .shortcuts-close:hover { color: var(--text); }
+        .shortcut-row { display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; color: var(--text-muted); }
+        .shortcut-row:last-child { border-bottom: none; }
+        .shortcut-row span:first-child { color: var(--text); }
+        .shortcut-keys { display: inline-flex; align-items: center; gap: 0.2rem; }
+        .kbd { display: inline-block; padding: 0.15rem 0.45rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 4px; font-size: 0.75rem; font-family: monospace; color: var(--text); line-height: 1.4; }
     </style>
 </head>
 <body>
@@ -515,6 +554,7 @@
                     <div class="header-menu-user">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span></div>
                     <button type="button" class="header-menu-item" id="headerMenuTheme" onclick="toggleTheme(); updateHeaderMenuThemeLabel();">Theme: <span id="headerMenuThemeLabel">Dark</span></button>
                     <button type="button" class="header-menu-item user-only hidden" id="headerMenuChangePassword" onclick="openChangePasswordModal(); closeHeaderMenu();">Change password</button>
+                    <button type="button" class="header-menu-item" onclick="openShortcuts(); closeHeaderMenu();">Keyboard shortcuts</button>
                     <button type="button" class="header-menu-item" onclick="logout(); closeHeaderMenu();">Log out</button>
                     <button type="button" class="header-menu-item superadmin-only hidden" id="headerMenuSuperadmin" onclick="switchMainTab('superadmin'); closeHeaderMenu();">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
                 </div>
@@ -584,6 +624,10 @@
             <div class="player-recent hidden" id="playerRecent">
                 <div class="player-recent-title">Recently played</div>
                 <div class="player-recent-list" id="playerRecentList"></div>
+            </div>
+            <div class="player-online" id="onlineSection">
+                <div class="player-online-title">Online now</div>
+                <div class="online-list" id="onlineList"></div>
             </div>
         </div>
 
@@ -695,6 +739,8 @@
                 <div class="row" style="margin-top: 0.5rem;">
                     <button type="button" class="btn btn-primary" onclick="saveSoundPanel()">Save</button>
                     <button type="button" class="btn btn-ghost" onclick="closeSoundPanel()">Close</button>
+                    <button type="button" class="btn btn-ghost admin-only hidden" id="soundPanelDuplicateBtn" onclick="duplicateSoundPanel()" title="Duplicate this sound so you can set different trim points">Duplicate</button>
+                    <button type="button" class="btn btn-ghost admin-only hidden" id="soundPanelNormalizeBtn" onclick="normalizeSoundPanel()" title="Normalize volume using loudnorm (modifies the file)">Normalize</button>
                     <button type="button" class="btn btn-danger superadmin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
                 </div>
             </div>
@@ -895,6 +941,29 @@
         let soundFilter = '';
         let lastGuestCooldownShown = -1;
         let lastUserCooldownShown = -1;
+
+        function showToast(message, type) {
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-' + (type || 'info');
+            toast.textContent = message;
+            container.appendChild(toast);
+            const duration = type === 'error' ? 5000 : 3000;
+            setTimeout(() => {
+                toast.classList.add('fading');
+                setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+            }, duration);
+        }
+
+        function openShortcuts() {
+            const el = document.getElementById('shortcutsOverlay');
+            if (el) el.classList.remove('hidden');
+        }
+        function closeShortcuts() {
+            const el = document.getElementById('shortcutsOverlay');
+            if (el) el.classList.add('hidden');
+        }
         let compactMode = false;
         let mobileView = false;
         let mobilePageIndex = 0;
@@ -1197,7 +1266,8 @@
                 const fn = (s.filename || '').replace(/"/g, '&quot;');
                 const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
                 const colorBar = color ? '<span class="mobile-grid-color" style="background:' + color + '"></span>' : '';
-                return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
+                const playing = playback.filename === s.filename && playback.status !== 'idle' ? ' is-playing' : '';
+                return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + playing + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
             }).join('');
             if (pageEl) pageEl.textContent = isPaged ? `${mobilePageIndex + 1} / ${totalPages}` : '—';
             if (prevBtn) prevBtn.disabled = !isPaged || mobilePageIndex <= 0;
@@ -1391,6 +1461,7 @@
             applyPrefs();
             startPlaybackPolling();
             startSoundsPolling();
+            startPresencePolling();
             fetchSounds();
             return false;
         }
@@ -1445,6 +1516,7 @@
             applyPrefs();
             startPlaybackPolling();
             startSoundsPolling();
+            startPresencePolling();
             fetchChannels();
             fetchSounds();
             fetch('/api/volume', { credentials: CREDENTIALS }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1457,6 +1529,7 @@
 
         async function logout() {
             await fetch('/api/logout', { method: 'POST', credentials: CREDENTIALS });
+            renderOnlineUsers([]);
             showLogin();
         }
 
@@ -1809,7 +1882,7 @@
         async function approvePendingUpload(filename) {
             const res = await api('/api/superadmin/pending-uploads/approve/' + encodeURIComponent(filename), { method: 'POST' });
             if (res && res.ok) { fetchPendingUploads(); fetchSounds(); }
-            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function rejectPendingUpload(filename) {
@@ -1842,7 +1915,7 @@
         async function approvePendingSignup(username, role) {
             const res = await api('/api/superadmin/pending-signups/approve/' + encodeURIComponent(username), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: role || 'user' }) });
             if (res && res.ok) { fetchPendingSignups(); fetchUsers(); }
-            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function rejectPendingSignup(username) {
@@ -1881,24 +1954,24 @@
         async function updateUserRole(username, role) {
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }) });
             if (res && res.ok) fetchUsers();
-            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function resetUserPassword(username) {
             const newPw = prompt('New password for ' + username + ' (min 6 characters):');
             if (newPw == null) return;
-            if (newPw.length < 6) { alert('Password must be at least 6 characters'); return; }
+            if (newPw.length < 6) { showToast('Password must be at least 6 characters', 'error'); return; }
             const forceChange = confirm('Force user to change password on next login?');
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: newPw, forceChange }) });
-            if (res && res.ok) { fetchUsers(); alert('Password updated.'); }
-            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+            if (res && res.ok) { fetchUsers(); showToast('Password updated.', 'success'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function deleteUser(username) {
             if (!confirm('Remove user "' + username + '"? They will no longer be able to log in.')) return;
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'DELETE' });
             if (res && res.ok) fetchUsers();
-            else if (res) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function setPlaybackLocked(locked) {
@@ -1929,7 +2002,7 @@
         }
 
         function toggleReorder() {
-            if (selectedTag != null) { alert('Switch to "All" to reorder sounds.'); return; }
+            if (selectedTag != null) { showToast('Switch to "All" to reorder sounds.', 'info'); return; }
             reorderMode = !reorderMode;
             const btn = document.getElementById('reorderBtn');
             const grid = document.getElementById('soundsList');
@@ -2203,7 +2276,7 @@
                     <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
                         ${colorDot}
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${playback.filename === s.filename && playback.status !== 'idle' ? ' is-playing' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -2664,7 +2737,46 @@
                 closeSoundPanel();
             } else {
                 const d = res ? await res.json().catch(() => ({})) : {};
-                alert(d.error || 'Failed to delete sound.');
+                showToast(d.error || 'Failed to delete sound.', 'error');
+            }
+        }
+
+        async function duplicateSoundPanel() {
+            const nameEl = document.getElementById('soundPanelName');
+            const filename = nameEl && nameEl.dataset.filename;
+            if (!filename) return;
+            const btn = document.getElementById('soundPanelDuplicateBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Duplicating…'; }
+            const res = await api('/api/sounds/duplicate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) });
+            if (btn) { btn.disabled = false; btn.textContent = 'Duplicate'; }
+            if (res && res.ok) {
+                const d = await res.json().catch(() => ({}));
+                fetchSounds();
+                closeSoundPanel();
+                if (d.filename) {
+                    setTimeout(() => { openSoundPanelFromSound(d.filename); }, 150);
+                }
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Failed to duplicate sound.', 'error');
+            }
+        }
+
+        async function normalizeSoundPanel() {
+            const nameEl = document.getElementById('soundPanelName');
+            const filename = nameEl && nameEl.dataset.filename;
+            if (!filename) return;
+            const displayName = (nameEl && nameEl.value) ? nameEl.value.trim() : filename;
+            if (!confirm('Normalize "' + displayName + '"? This will permanently modify the audio file to balance its volume.')) return;
+            const btn = document.getElementById('soundPanelNormalizeBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Normalizing…'; }
+            const res = await api('/api/sounds/normalize/' + encodeURIComponent(filename), { method: 'POST' });
+            if (btn) { btn.disabled = false; btn.textContent = 'Normalize'; }
+            if (res && res.ok) {
+                fetchSounds();
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Failed to normalize sound.', 'error');
             }
         }
 
@@ -2695,7 +2807,7 @@
                     }
                     renderSoundsGrid();
                 }
-                alert(msg);
+                showToast(msg, 'error');
                 return;
             }
             if ((user && user.role) === 'guest') guestLastPlayTime = Date.now();
@@ -2897,7 +3009,7 @@
                 const res = await api('/api/pause', { method: 'POST' });
                 if (!res || !res.ok) {
                     const d = res ? await res.json().catch(() => ({})) : {};
-                    alert(d.error || 'Could not pause.');
+                    showToast(d.error || 'Could not pause.', 'error');
                     return;
                 }
                 const offset = playback.startTimeOffset || 0;
@@ -2909,7 +3021,7 @@
                 const res = await api('/api/resume', { method: 'POST' });
                 if (!res || !res.ok) {
                     const d = res ? await res.json().catch(() => ({})) : {};
-                    alert(d.error || 'Could not resume.');
+                    showToast(d.error || 'Could not resume.', 'error');
                     return;
                 }
                 playback.startTime = Date.now();
@@ -2933,10 +3045,10 @@
             const stopAll = document.getElementById('stopAllBtn');
             const stopBtn = document.getElementById('stopBtn');
             const isActive = playback.status === 'playing' || playback.status === 'paused';
-            const adminCantStop = (user && user.role) === 'admin' && playback.startedBy && (playback.startedBy.role === 'admin' || playback.startedBy.role === 'superadmin');
+            const adminCantStop = (user && user.role) === 'admin' && playback.startedBy && playback.startedBy.role === 'superadmin';
             const disabled = !isActive || adminCantStop;
-            if (stopAll) { stopAll.disabled = disabled; stopAll.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop playback'; }
-            if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop admin playback' : 'Stop'; }
+            if (stopAll) { stopAll.disabled = disabled; stopAll.title = adminCantStop ? 'Only superadmin can stop superadmin playback' : 'Stop playback'; }
+            if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop superadmin playback' : 'Stop'; }
         }
 
         let lastNowPlayingHtml = '';
@@ -2974,6 +3086,7 @@
         let playbackPollingStarted = false;
         let pendingCountPollingStarted = false;
         let soundsPollingStarted = false;
+        let presencePollingStarted = false;
         function startSoundsPolling() {
             if (soundsPollingStarted) return;
             soundsPollingStarted = true;
@@ -2992,6 +3105,41 @@
             fetchPendingCount();
             setInterval(fetchPendingCount, 30000);
             document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && (user && user.role) === 'superadmin') fetchPendingCount(); });
+        }
+        function startPresencePolling() {
+            if (presencePollingStarted) return;
+            presencePollingStarted = true;
+            sendHeartbeat();
+            fetchOnlineUsers();
+            setInterval(sendHeartbeat, 15000);
+            setInterval(fetchOnlineUsers, 15000);
+            document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && user) { sendHeartbeat(); fetchOnlineUsers(); } });
+        }
+        function sendHeartbeat() {
+            if (!user) return;
+            api('/api/heartbeat', { method: 'POST' });
+        }
+        async function fetchOnlineUsers() {
+            if (!user) return;
+            const res = await api('/api/online');
+            if (!res || !res.ok) return;
+            const list = await res.json().catch(() => []);
+            renderOnlineUsers(list);
+        }
+        function renderOnlineUsers(list) {
+            const el = document.getElementById('onlineList');
+            if (!el) return;
+            if (!Array.isArray(list) || list.length === 0) {
+                el.innerHTML = '<span style="font-size:0.8rem;color:var(--text-muted)">—</span>';
+                return;
+            }
+            const roleOrder = { superadmin: 0, admin: 1, user: 2, guest: 3 };
+            const sorted = [...list].sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9));
+            el.innerHTML = sorted.map(u => {
+                const label = u.role === 'guest' ? 'Guest' : (u.username || u.role);
+                const roleClass = 'role-' + (u.role || 'user');
+                return '<span class="online-pill ' + roleClass + '"><span class="online-dot"></span>' + label.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
+            }).join('');
         }
 
         function refreshPlaybackState() {
@@ -3182,9 +3330,9 @@
                 fileInput.value = '';
                 fetchSounds();
                 hideUploadSection();
-                if (data.pending) alert(data.message || 'Upload sent for moderation.');
+                if (data.pending) showToast(data.message || 'Upload sent for moderation.', 'info');
             } else {
-                alert(data.error || 'Upload failed');
+                showToast(data.error || 'Upload failed', 'error');
             }
         }
 
@@ -3222,6 +3370,7 @@
             renderRecentlyPlayed();
             startPlaybackPolling();
             startSoundsPolling();
+            startPresencePolling();
             setInterval(tickWaveform, 250);
             fetchChannels();
             fetchSounds();
@@ -3240,11 +3389,29 @@
                     e.preventDefault();
                     stopPlayback();
                 } else if (e.key === 'Escape') {
+                    const overlay = document.getElementById('shortcutsOverlay');
+                    if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
                     const panel = document.getElementById('soundPanel');
                     if (panel && !panel.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
+                } else if (e.key === '?') {
+                    e.preventDefault();
+                    openShortcuts();
                 }
             });
         })();
     </script>
+
+    <div id="toastContainer"></div>
+
+    <div class="shortcuts-overlay hidden" id="shortcutsOverlay" onclick="if(event.target===this)closeShortcuts()">
+        <div class="shortcuts-modal">
+            <h3>Keyboard Shortcuts <button type="button" class="shortcuts-close" onclick="closeShortcuts()" title="Close">✕</button></h3>
+            <div class="shortcut-row"><span>Play favorites</span><span class="shortcut-keys"><kbd class="kbd">1</kbd> – <kbd class="kbd">9</kbd></span></div>
+            <div class="shortcut-row"><span>Play / Pause current sound</span><span class="shortcut-keys"><kbd class="kbd">Space</kbd></span></div>
+            <div class="shortcut-row"><span>Stop playback</span><span class="shortcut-keys"><kbd class="kbd">S</kbd></span></div>
+            <div class="shortcut-row"><span>Close panel</span><span class="shortcut-keys"><kbd class="kbd">Esc</kbd></span></div>
+            <div class="shortcut-row"><span>Show this reference</span><span class="shortcut-keys"><kbd class="kbd">?</kbd></span></div>
+        </div>
+    </div>
 </body>
 </html>

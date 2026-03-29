@@ -993,6 +993,69 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename) });
 });
 
+app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
+    const { filename, newName } = req.body || {};
+    const safeFilename = filename && path.basename(String(filename));
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
+    const srcPath = path.join(SOUNDS_DIR, safeFilename);
+    if (!path.resolve(srcPath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(srcPath)) return res.status(404).json({ error: 'File not found' });
+
+    const ext = path.extname(safeFilename);
+    const base = path.basename(safeFilename, ext);
+    let dstName = newName
+        ? path.basename(String(newName)).replace(/[^a-zA-Z0-9._-]/g, '_')
+        : `${base}_copy${ext}`;
+    if (!/\.(mp3|wav|ogg)$/i.test(dstName)) dstName += ext;
+    if (fs.existsSync(path.join(SOUNDS_DIR, dstName))) {
+        dstName = `${path.basename(dstName, path.extname(dstName))}_${Date.now()}${path.extname(dstName)}`;
+    }
+    const dstPath = path.join(SOUNDS_DIR, dstName);
+    if (!path.resolve(dstPath).startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid filename' });
+
+    try {
+        fs.copyFileSync(srcPath, dstPath);
+        const meta = loadSoundsMeta();
+        const srcMeta = meta[safeFilename];
+        meta[dstName] = srcMeta && typeof srcMeta === 'object' ? { ...srcMeta } : (typeof srcMeta === 'string' ? { displayName: srcMeta } : {});
+        const order = getSoundOrder(meta);
+        const srcIdx = order.indexOf(safeFilename);
+        if (srcIdx >= 0) order.splice(srcIdx + 1, 0, dstName);
+        else order.push(dstName);
+        meta._order = order;
+        saveSoundsMeta(meta);
+        res.json({ ok: true, filename: dstName });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to duplicate sound' });
+    }
+});
+
+app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
+    const safeFilename = path.basename(req.params.filename || '');
+    if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
+    const filePath = path.join(SOUNDS_DIR, safeFilename);
+    if (!path.resolve(filePath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    const tmpPath = filePath + '.norm.tmp.mp3';
+    const ff = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'loudnorm=I=-16:LRA=11:TP=-1.5', '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let errBuf = '';
+    ff.stderr.on('data', chunk => { errBuf += chunk.toString(); });
+    ff.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
+    ff.on('close', code => {
+        if (code !== 0) {
+            try { fs.unlinkSync(tmpPath); } catch {}
+            return res.status(500).json({ error: 'Normalization failed.' });
+        }
+        try {
+            fs.renameSync(tmpPath, filePath);
+            const duration = probeDuration(filePath);
+            if (duration != null) setSoundMeta(safeFilename, { duration });
+            res.json({ ok: true });
+        } catch (err2) {
+            res.status(500).json({ error: err2.message || 'Failed to save normalized file' });
+        }
+    });
+});
+
 app.get('/api/tags', requireAuth, (req, res) => {
     const meta = loadSoundsMeta();
     const order = getTagOrder(meta);
@@ -1577,10 +1640,8 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
 app.post('/api/stop', requireAdmin, (req, res) => {
     const role = req.session.user.role;
     const startedBy = playbackState.startedBy;
-    if (role === 'superadmin') {
-        // Superadmin can stop everyone
-    } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
-        return res.status(403).json({ error: 'Only superadmin can stop admin playback.' });
+    if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can stop superadmin playback.' });
     }
     player.stop();
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
@@ -1590,8 +1651,8 @@ app.post('/api/stop', requireAdmin, (req, res) => {
 app.post('/api/pause', requireAdmin, async (req, res) => {
     const role = req.session.user.role;
     const startedBy = playbackState.startedBy;
-    if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
-        return res.status(403).json({ error: 'Only superadmin can pause admin playback.' });
+    if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can pause superadmin playback.' });
     }
     const status = player.state.status;
     if (status === AudioPlayerStatus.Idle) {
@@ -1620,8 +1681,8 @@ app.post('/api/pause', requireAdmin, async (req, res) => {
 app.post('/api/resume', requireAdmin, (req, res) => {
     const role = req.session.user.role;
     const startedBy = playbackState.startedBy;
-    if (role === 'superadmin') { /* ok */ } else if (role === 'admin' && startedBy && startedBy.role !== 'user') {
-        return res.status(403).json({ error: 'Only superadmin can resume admin playback.' });
+    if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can resume superadmin playback.' });
     }
     if (player.state.status !== AudioPlayerStatus.Paused && player.state.status !== AudioPlayerStatus.AutoPaused) {
         return res.json({ ok: true });
@@ -1647,6 +1708,35 @@ app.post('/api/volume', requireAdmin, (req, res) => {
 });
 
 app.get('/api/volume', requireAuth, (req, res) => res.json({ volume: currentVolume }));
+
+// --- Presence / online users ---
+const PRESENCE_TIMEOUT_MS = 45 * 1000;
+const activePresence = new Map(); // key -> { username, role, lastSeen }
+
+function presenceKey(req) {
+    const u = req.session.user;
+    return u.role === 'guest' ? `guest:${u.ip || getClientIP(req)}` : `user:${u.username}`;
+}
+
+app.post('/api/heartbeat', requireAuth, (req, res) => {
+    const u = req.session.user;
+    const key = presenceKey(req);
+    activePresence.set(key, { username: u.role === 'guest' ? null : u.username, role: u.role, lastSeen: Date.now() });
+    res.json({ ok: true });
+});
+
+app.get('/api/online', requireAuth, (req, res) => {
+    const now = Date.now();
+    const online = [];
+    activePresence.forEach((v, k) => {
+        if (now - v.lastSeen <= PRESENCE_TIMEOUT_MS) {
+            online.push({ username: v.username, role: v.role });
+        } else {
+            activePresence.delete(k);
+        }
+    });
+    res.json(online);
+});
 
 const token = (process.env.DISCORD_TOKEN || '').trim();
 if (!token || token === 'your_bot_token_here') {

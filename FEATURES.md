@@ -31,7 +31,8 @@ Features to implement, in rough priority order.
 ---
 
 ## Nice to Have
-- [ ] **Duplicate sound** – Copy a sound (file + metadata) for variations
+- [x] **Duplicate sound** – Copy a sound (file + metadata); opens duplicate in edit panel so trim can be set independently
+- [x] **Normalize audio** – Normalize a sound's volume in-place via ffmpeg loudnorm (EBU R128, -16 LUFS); button in sound edit panel
 - [ ] **Per-sound volume** – Volume adjustment per sound for normalization
 
 ---
@@ -47,6 +48,7 @@ Features to implement, in rough priority order.
 - [x] Playback hierarchy (users/guests can't override admin/superadmin)
 - [x] Waveform display for remote viewers (guests)
 - [x] Pause/resume with correct position
+- [x] Admin can pause/stop their own, other admins', users', and guests' playback (superadmin-only playback remains superadmin-protected)
 - [x] Recently played (last 5, waveform background, who played & when)
 - [x] Remember preferences
 - [x] Pending uploads badge on Superadmin tab
