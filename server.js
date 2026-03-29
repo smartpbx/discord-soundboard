@@ -1195,19 +1195,33 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
     pass1.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
     pass1.on('close', code1 => {
         if (code1 !== 0) return res.status(500).json({ error: 'Normalization measurement failed.' });
-        // Parse loudnorm JSON output from stderr
-        const jsonMatch = pass1Err.match(/\{[\s\S]*"input_i"[\s\S]*\}/);
-        if (!jsonMatch) return res.status(500).json({ error: 'Could not parse loudnorm measurement.' });
+        // Parse loudnorm JSON output — it's always the last JSON block in stderr
+        const jsonBlocks = pass1Err.match(/\{[^{}]*\}/g);
+        const loudnormBlock = jsonBlocks && jsonBlocks.find(b => b.includes('"input_i"'));
+        if (!loudnormBlock) {
+            console.error('[normalize] Could not find loudnorm JSON in ffmpeg output for', safeFilename);
+            return res.status(500).json({ error: 'Could not parse loudnorm measurement.' });
+        }
         let measured;
-        try { measured = JSON.parse(jsonMatch[0]); } catch { return res.status(500).json({ error: 'Invalid loudnorm JSON.' }); }
+        try { measured = JSON.parse(loudnormBlock); } catch { return res.status(500).json({ error: 'Invalid loudnorm JSON.' }); }
+
+        console.log('[normalize]', safeFilename, 'measured:', JSON.stringify(measured));
+
+        // If already at target loudness (within 0.5 LU), skip — prevents drift
+        const inputI = parseFloat(measured.input_i);
+        if (!isNaN(inputI) && Math.abs(inputI - (-16)) < 0.5) {
+            return res.json({ ok: true, skipped: true, message: 'Already normalized' });
+        }
 
         const tmpPath = filePath + '.norm.tmp.mp3';
         const af = `loudnorm=I=-16:LRA=11:TP=-1.5:measured_I=${measured.input_i}:measured_LRA=${measured.input_lra}:measured_TP=${measured.input_tp}:measured_thresh=${measured.input_thresh}:offset=${measured.target_offset}:linear=true`;
         const pass2 = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', af, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-        pass2.stderr.on('data', () => {});
+        let pass2Err = '';
+        pass2.stderr.on('data', chunk => { pass2Err += chunk.toString(); });
         pass2.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
         pass2.on('close', code2 => {
             if (code2 !== 0) {
+                console.error('[normalize] pass2 failed for', safeFilename, pass2Err.slice(-500));
                 try { fs.unlinkSync(tmpPath); } catch {}
                 return res.status(500).json({ error: 'Normalization failed.' });
             }

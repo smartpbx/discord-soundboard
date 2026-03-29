@@ -2882,11 +2882,16 @@
             const res = await api('/api/sounds/normalize/' + encodeURIComponent(filename), { method: 'POST' });
             if (btn) { btn.disabled = false; btn.textContent = 'Normalize'; }
             if (res && res.ok) {
-                delete waveformCache[filename];
-                fetchSounds();
-                loadSoundPanelWaveform(filename, true);
-                if (playback && playback.filename === filename) loadWaveform(filename, true);
-                showToast('Sound normalized successfully.', 'success');
+                const d = await res.json().catch(() => ({}));
+                if (d.skipped) {
+                    showToast('Already normalized — no change needed.', 'success');
+                } else {
+                    delete waveformCache[filename];
+                    fetchSounds();
+                    loadSoundPanelWaveform(filename, true);
+                    if (playback && playback.filename === filename) loadWaveform(filename, true);
+                    showToast('Sound normalized successfully.', 'success');
+                }
             } else {
                 const d = res ? await res.json().catch(() => ({})) : {};
                 showToast(d.error || 'Failed to normalize sound.', 'error');
