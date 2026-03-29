@@ -744,13 +744,24 @@ class AudioMixer extends Readable {
 
     addTrack(pcmStream, metadata) {
         const id = this.nextTrackId++;
-        const track = { id, stream: pcmStream, buffer: Buffer.alloc(0), ended: false, metadata };
-        pcmStream.on('data', chunk => { track.buffer = Buffer.concat([track.buffer, chunk]); });
+        const track = { id, stream: pcmStream, chunks: [], chunkBytes: 0, ended: false, metadata };
+        pcmStream.on('data', chunk => { track.chunks.push(chunk); track.chunkBytes += chunk.length; });
         pcmStream.on('end', () => { track.ended = true; });
         pcmStream.on('error', () => { track.ended = true; });
         this.tracks.set(id, track);
         if (!this.mixTimer) this._startMixing();
         return id;
+    }
+
+    _consumeFrame(track) {
+        if (track.chunkBytes < this.FRAME_SIZE) return null;
+        // Consolidate chunks into a single buffer and slice a frame
+        const buf = Buffer.concat(track.chunks);
+        const frame = buf.subarray(0, this.FRAME_SIZE);
+        const rest = buf.subarray(this.FRAME_SIZE);
+        track.chunks = rest.length > 0 ? [rest] : [];
+        track.chunkBytes = rest.length;
+        return frame;
     }
 
     removeTrack(id) {
@@ -772,36 +783,44 @@ class AudioMixer extends Readable {
 
     _startMixing() {
         let silenceCount = 0;
-        this.mixTimer = setInterval(() => {
+        this._mixStartTime = process.hrtime.bigint();
+        this._mixFrameCount = 0;
+        const tick = () => {
             if (this.destroyed) return;
             // Clean up finished tracks
             for (const [id, track] of this.tracks) {
-                if (track.ended && track.buffer.length < this.FRAME_SIZE) this.tracks.delete(id);
+                if (track.ended && track.chunkBytes < this.FRAME_SIZE) this.tracks.delete(id);
             }
             if (this.tracks.size === 0) {
                 silenceCount++;
-                if (silenceCount >= 5) { this._stopMixing(); this.push(null); return; }
+                if (silenceCount >= 5) { this.mixTimer = null; this.push(null); return; }
                 this.push(Buffer.alloc(this.FRAME_SIZE));
-                return;
-            }
-            silenceCount = 0;
-            const mixed = Buffer.alloc(this.FRAME_SIZE);
-            for (const [, track] of this.tracks) {
-                if (track.buffer.length >= this.FRAME_SIZE) {
-                    const frame = track.buffer.subarray(0, this.FRAME_SIZE);
-                    track.buffer = track.buffer.subarray(this.FRAME_SIZE);
-                    for (let i = 0; i < this.FRAME_SIZE; i += 2) {
-                        let sum = mixed.readInt16LE(i) + frame.readInt16LE(i);
-                        mixed.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i);
+            } else {
+                silenceCount = 0;
+                const mixed = Buffer.alloc(this.FRAME_SIZE);
+                for (const [, track] of this.tracks) {
+                    const frame = this._consumeFrame(track);
+                    if (frame) {
+                        for (let i = 0; i < this.FRAME_SIZE; i += 2) {
+                            let sum = mixed.readInt16LE(i) + frame.readInt16LE(i);
+                            mixed.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i);
+                        }
                     }
                 }
+                this.push(mixed);
             }
-            this.push(mixed);
-        }, 20);
+            // Schedule next frame with drift compensation
+            this._mixFrameCount++;
+            const elapsed = Number(process.hrtime.bigint() - this._mixStartTime) / 1e6; // ms
+            const nextAt = this._mixFrameCount * 20; // ideal time for next frame
+            const delay = Math.max(0, nextAt - elapsed);
+            this.mixTimer = setTimeout(tick, delay);
+        };
+        this.mixTimer = setTimeout(tick, 20);
     }
 
     _stopMixing() {
-        if (this.mixTimer) { clearInterval(this.mixTimer); this.mixTimer = null; }
+        if (this.mixTimer) { clearTimeout(this.mixTimer); this.mixTimer = null; }
     }
 
     _read() {}
@@ -1168,24 +1187,39 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!path.resolve(filePath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
-    const tmpPath = filePath + '.norm.tmp.mp3';
-    const ff = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'loudnorm=I=-16:LRA=11:TP=-1.5', '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let errBuf = '';
-    ff.stderr.on('data', chunk => { errBuf += chunk.toString(); });
-    ff.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
-    ff.on('close', code => {
-        if (code !== 0) {
-            try { fs.unlinkSync(tmpPath); } catch {}
-            return res.status(500).json({ error: 'Normalization failed.' });
-        }
-        try {
-            fs.renameSync(tmpPath, filePath);
-            const duration = probeDuration(filePath);
-            if (duration != null) setSoundMeta(safeFilename, { duration });
-            res.json({ ok: true });
-        } catch (err2) {
-            res.status(500).json({ error: err2.message || 'Failed to save normalized file' });
-        }
+    // Two-pass loudnorm: first pass measures, second pass applies with measured values.
+    // This prevents volume drift when normalizing repeatedly.
+    const pass1 = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'loudnorm=I=-16:LRA=11:TP=-1.5:print_format=json', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let pass1Err = '';
+    pass1.stderr.on('data', chunk => { pass1Err += chunk.toString(); });
+    pass1.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
+    pass1.on('close', code1 => {
+        if (code1 !== 0) return res.status(500).json({ error: 'Normalization measurement failed.' });
+        // Parse loudnorm JSON output from stderr
+        const jsonMatch = pass1Err.match(/\{[\s\S]*"input_i"[\s\S]*\}/);
+        if (!jsonMatch) return res.status(500).json({ error: 'Could not parse loudnorm measurement.' });
+        let measured;
+        try { measured = JSON.parse(jsonMatch[0]); } catch { return res.status(500).json({ error: 'Invalid loudnorm JSON.' }); }
+
+        const tmpPath = filePath + '.norm.tmp.mp3';
+        const af = `loudnorm=I=-16:LRA=11:TP=-1.5:measured_I=${measured.input_i}:measured_LRA=${measured.input_lra}:measured_TP=${measured.input_tp}:measured_thresh=${measured.input_thresh}:offset=${measured.target_offset}:linear=true`;
+        const pass2 = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', af, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+        pass2.stderr.on('data', () => {});
+        pass2.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
+        pass2.on('close', code2 => {
+            if (code2 !== 0) {
+                try { fs.unlinkSync(tmpPath); } catch {}
+                return res.status(500).json({ error: 'Normalization failed.' });
+            }
+            try {
+                fs.renameSync(tmpPath, filePath);
+                const duration = probeDuration(filePath);
+                if (duration != null) setSoundMeta(safeFilename, { duration });
+                res.json({ ok: true });
+            } catch (err2) {
+                res.status(500).json({ error: err2.message || 'Failed to save normalized file' });
+            }
+        });
     });
 });
 
