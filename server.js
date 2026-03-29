@@ -1207,9 +1207,11 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
 
         console.log('[normalize]', safeFilename, 'measured:', JSON.stringify(measured));
 
-        // If already at target loudness (within 0.5 LU), skip — prevents drift
+        // If already at target loudness (within 2 LU), skip — prevents drift.
+        // Short or low-dynamic-range files often can't reach exactly -16 LUFS
+        // with linear mode, so we use a generous threshold.
         const inputI = parseFloat(measured.input_i);
-        if (!isNaN(inputI) && Math.abs(inputI - (-16)) < 0.5) {
+        if (!isNaN(inputI) && Math.abs(inputI - (-16)) < 2) {
             return res.json({ ok: true, skipped: true, message: 'Already normalized' });
         }
 
