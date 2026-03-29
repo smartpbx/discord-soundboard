@@ -448,7 +448,7 @@
         .top-bar-voice { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; }
         .top-bar-voice .voice-channel-info { font-size: 0.85rem; color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .top-bar-voice .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
-        .sound-panel { margin-top: 1rem; padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+        .sound-panel { padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); grid-column: 1 / -1; }
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
         .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
@@ -2324,6 +2324,11 @@
         }
         function renderSoundsGrid() {
             const grid = document.getElementById('soundsList');
+            // Detach sound panel before overwriting innerHTML so it survives re-render
+            const panel = document.getElementById('soundPanel');
+            const panelParent = panel && panel.parentNode;
+            const panelWasInGrid = panel && panelParent === grid;
+            if (panelWasInGrid) document.body.appendChild(panel);
             const filtered = getFilteredSounds();
             const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
             const isAdmin = isAdminOrSuperadmin();
@@ -2363,6 +2368,27 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             grid.classList.toggle('compact-mode', compactMode);
+            // Re-insert panel into grid after the selected sound
+            if (panel && selectedSound) {
+                const wrap = grid.querySelector(`.sound-item-wrap[data-filename="${CSS.escape(selectedSound)}"]`);
+                if (wrap) {
+                    wrap.insertAdjacentElement('afterend', panel);
+                } else {
+                    grid.appendChild(panel);
+                }
+                // After layout, shift to end of visual row
+                requestAnimationFrame(() => {
+                    const w2 = grid.querySelector(`.sound-item-wrap[data-filename="${CSS.escape(selectedSound)}"]`);
+                    if (!w2) return;
+                    const allWraps = Array.from(grid.querySelectorAll('.sound-item-wrap'));
+                    const rowTop = w2.offsetTop;
+                    let lastInRow = w2;
+                    for (const w of allWraps) { if (Math.abs(w.offsetTop - rowTop) < 5) lastInRow = w; }
+                    if (lastInRow !== w2) lastInRow.insertAdjacentElement('afterend', panel);
+                });
+            } else if (panel && panel.parentNode !== grid) {
+                grid.appendChild(panel);
+            }
             renderFavoritesBar();
             if (mobileView) renderMobileGrid();
             const msg = document.getElementById('userLockedMsg');
@@ -2729,6 +2755,8 @@
             selectedSound = filename;
             renderSoundsGrid();
             openSoundPanel(s || { filename, displayName: filename, duration: null, tags: [] });
+            const panel = document.getElementById('soundPanel');
+            if (panel) requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
         }
 
         let previewAudio = null;
