@@ -350,7 +350,7 @@
         }
         .sounds-card.mobile-active .sounds-card-header { flex-shrink: 0; padding: 0.75rem 1rem; }
         .sounds-card.mobile-active .sounds-filter-row { margin: 0 1rem 0.4rem; flex-shrink: 0; }
-        .sounds-card.mobile-active .sounds-tag-row { margin: 0 1rem 0.4rem; flex-shrink: 0; }
+        .sounds-card.mobile-active .sounds-tag-row-wrap { margin: 0 1rem 0.4rem; flex-shrink: 0; }
         .mobile-grid-wrap { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
         .mobile-grid-area {
             flex: 1; min-height: 0; padding: 0 1rem 1rem;
@@ -420,11 +420,14 @@
         .sound-filter-clear { position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%); width: 1.25rem; height: 1.25rem; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
         .sound-filter-clear:hover { color: var(--text); }
         .sound-filter-clear.visible { display: flex; }
-        .sounds-tag-row { position: relative; max-height: 3.6rem; overflow: hidden; margin-bottom: 0.4rem; transition: max-height 0.2s ease; }
+        .sounds-tag-row-wrap { margin-bottom: 0.4rem; }
+        .sounds-tag-row { max-height: 3.6rem; overflow: hidden; transition: max-height 0.2s ease; }
         .sounds-tag-row.expanded { max-height: 500px; }
         .sounds-tag-row .tag-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
-        .sounds-tag-row .tag-row-toggle { position: absolute; right: 0; bottom: 0; padding: 0.15rem 0.4rem; font-size: 0.7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; z-index: 2; line-height: 1; }
-        .sounds-tag-row .tag-row-toggle:hover { color: var(--text); border-color: var(--accent); }
+        .tag-row-toggle { display: none; margin-top: 0.25rem; padding: 0.1rem 0.5rem; font-size: 0.7rem; background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; line-height: 1.2; }
+        .tag-row-toggle.visible { display: inline-block; }
+        .tag-row-toggle:hover { color: var(--text); border-color: var(--accent); }
+        .sounds-divider { border: none; border-top: 1px solid var(--border); margin: 0.5rem 0; opacity: 0.5; }
         .favorites-section { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; overflow-x: auto; scrollbar-width: none; }
         .favorites-section::-webkit-scrollbar { display: none; }
         .favorites-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; flex-shrink: 0; }
@@ -686,9 +689,13 @@
                 <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
                 <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
             </div>
-            <div class="sounds-tag-row" id="soundsTagRow">
-                <div class="tag-tabs" id="tagTabs"></div>
+            <div class="sounds-tag-row-wrap">
+                <div class="sounds-tag-row" id="soundsTagRow">
+                    <div class="tag-tabs" id="tagTabs"></div>
+                </div>
+                <button type="button" class="tag-row-toggle" id="tagRowToggle" onclick="toggleTagRow()">▾ more</button>
             </div>
+            <hr class="sounds-divider">
             <div class="favorites-section">
                 <span class="favorites-label">Quick play</span>
                 <div class="favorites-bar" id="favoritesBar"></div>
@@ -701,6 +708,7 @@
                     <button type="button" id="mobileNextBtn" onclick="mobilePageNext()" title="Next page">›</button>
                 </div>
             </div>
+            <hr class="sounds-divider">
             <div id="soundsList" class="sound-grid"></div>
             <div class="sound-panel hidden" id="soundPanel">
                 <div class="card-title">Edit sound</div>
@@ -2104,31 +2112,22 @@
 
         function updateTagRowToggle() {
             const row = document.getElementById('soundsTagRow');
-            if (!row) return;
+            const btn = document.getElementById('tagRowToggle');
+            if (!row || !btn) return;
             const tabs = row.querySelector('.tag-tabs');
             if (!tabs) return;
-            const isExpanded = row.classList.contains('expanded');
-            const existing = row.querySelector('.tag-row-toggle');
-            // Check if content overflows the collapsed height (3.6rem ≈ ~58px)
             const overflows = tabs.scrollHeight > 58;
-            if (!overflows) {
-                if (existing) existing.remove();
-                row.classList.remove('expanded');
-                return;
-            }
-            if (!existing) {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'tag-row-toggle';
-                btn.textContent = '▾ more';
-                btn.onclick = () => {
-                    row.classList.toggle('expanded');
-                    btn.textContent = row.classList.contains('expanded') ? '▴ less' : '▾ more';
-                };
-                row.appendChild(btn);
-            } else {
-                existing.textContent = isExpanded ? '▴ less' : '▾ more';
-            }
+            btn.classList.toggle('visible', overflows);
+            if (!overflows) row.classList.remove('expanded');
+            btn.textContent = row.classList.contains('expanded') ? '▴ less' : '▾ more';
+        }
+
+        function toggleTagRow() {
+            const row = document.getElementById('soundsTagRow');
+            const btn = document.getElementById('tagRowToggle');
+            if (!row || !btn) return;
+            row.classList.toggle('expanded');
+            btn.textContent = row.classList.contains('expanded') ? '▴ less' : '▾ more';
         }
 
         function setupTagTabDragDrop(container) {
@@ -2488,14 +2487,15 @@
             }
         }
 
-        async function loadSoundPanelWaveform(filename) {
+        async function loadSoundPanelWaveform(filename, cacheBust) {
             soundPanelWaveformData = null;
             soundPanelWaveformDuration = 0;
             const wrap = document.getElementById('soundPanelWaveformWrap');
             const canvas = document.getElementById('soundPanelWaveform');
             if (!wrap || !canvas) return;
             try {
-                const res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
+                const url = '/api/sounds/audio/' + encodeURIComponent(filename) + (cacheBust ? '?_=' + Date.now() : '');
+                const res = await fetch(url, { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 const buf = await res.arrayBuffer();
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -2810,8 +2810,9 @@
             if (btn) { btn.disabled = false; btn.textContent = 'Normalize'; }
             if (res && res.ok) {
                 fetchSounds();
-                loadSoundPanelWaveform(filename);
-                if (playback && playback.filename === filename) loadWaveform(filename);
+                loadSoundPanelWaveform(filename, true);
+                if (playback && playback.filename === filename) loadWaveform(filename, true);
+                showToast('Sound normalized successfully.', 'success');
             } else {
                 const d = res ? await res.json().catch(() => ({})) : {};
                 showToast(d.error || 'Failed to normalize sound.', 'error');
@@ -2871,7 +2872,7 @@
             renderSoundsGrid();
         }
 
-        async function loadWaveform(filename) {
+        async function loadWaveform(filename, cacheBust) {
             waveformData = null;
             waveformDuration = 0;
             waveformFilename = null;
@@ -2879,7 +2880,8 @@
             document.getElementById('waveformWrap').style.display = 'none';
             if (!filename) return;
             try {
-                const res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
+                const url = '/api/sounds/audio/' + encodeURIComponent(filename) + (cacheBust ? '?_=' + Date.now() : '');
+                const res = await fetch(url, { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 const buf = await res.arrayBuffer();
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();

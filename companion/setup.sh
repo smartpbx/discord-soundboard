@@ -11,11 +11,20 @@ echo ""
 # Check Python
 if ! command -v python3 &>/dev/null; then
     echo "[!] Python 3 not found. Install it:"
-    echo "    Arch/Manjaro: sudo pacman -S python python-pip"
-    echo "    Ubuntu/Debian: sudo apt install python3 python3-pip"
+    echo "    Arch/Manjaro: sudo pacman -S python python-pip tk"
+    echo "    Ubuntu/Debian: sudo apt install python3 python3-pip python3-tk"
     exit 1
 fi
 echo "[+] Python 3 found."
+
+# Check tkinter
+if ! python3 -c "import tkinter" &>/dev/null; then
+    echo "[!] tkinter not found. Install it:"
+    echo "    Arch/Manjaro: sudo pacman -S tk"
+    echo "    Ubuntu/Debian: sudo apt install python3-tk"
+    exit 1
+fi
+echo "[+] tkinter found."
 
 # Install dependencies
 echo "[*] Installing required packages..."
@@ -32,25 +41,6 @@ if ! groups | grep -q '\binput\b'; then
         sudo usermod -aG input "$(whoami)"
         echo "[+] Added to input group. You need to LOG OUT and back in for this to take effect."
     fi
-fi
-
-# Create .env if missing
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-    echo "[+] Config file found (.env)"
-else
-    echo ""
-    echo "[*] First-time setup — let's configure your connection."
-    echo ""
-    read -p "Soundboard URL (e.g. https://soundboard.example.com): " SURL
-    read -p "Companion Token (same as COMPANION_TOKEN in your LXC .env): " STOKEN
-    cat > "$SCRIPT_DIR/.env" <<EOF
-# Soundboard Companion Config
-SOUNDBOARD_URL=$SURL
-COMPANION_TOKEN=$STOKEN
-STOP_KEY=s
-PAUSE_KEY=space
-EOF
-    echo "[+] Config saved to .env"
 fi
 
 echo ""
