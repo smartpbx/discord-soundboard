@@ -392,7 +392,7 @@
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
         .user-locked-msg { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
-        .tag-tabs, .folder-tabs { display: flex; flex-wrap: nowrap; gap: 0.3rem; align-items: center; }
+        .tag-tabs, .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
         .tag-tab, .folder-tab { padding: 0.3rem 0.55rem; border-radius: var(--radius-sm); font-size: 0.8rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
         .tag-tab:hover, .folder-tab:hover { border-color: var(--accent); }
         .tag-tab.active, .folder-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
@@ -420,11 +420,11 @@
         .sound-filter-clear { position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%); width: 1.25rem; height: 1.25rem; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
         .sound-filter-clear:hover { color: var(--text); }
         .sound-filter-clear.visible { display: flex; }
-        .sounds-tag-row { display: flex; align-items: center; gap: 0.3rem; overflow-x: auto; padding-bottom: 0.2rem; margin-bottom: 0.4rem; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-        .sounds-tag-row::-webkit-scrollbar { height: 3px; }
-        .sounds-tag-row::-webkit-scrollbar-track { background: transparent; }
-        .sounds-tag-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-        .sounds-tag-row .tag-tabs { display: flex; flex-wrap: nowrap; gap: 0.3rem; align-items: center; min-width: 0; }
+        .sounds-tag-row { position: relative; max-height: 3.6rem; overflow: hidden; margin-bottom: 0.4rem; transition: max-height 0.2s ease; }
+        .sounds-tag-row.expanded { max-height: 500px; }
+        .sounds-tag-row .tag-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+        .sounds-tag-row .tag-row-toggle { position: absolute; right: 0; bottom: 0; padding: 0.15rem 0.4rem; font-size: 0.7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; z-index: 2; line-height: 1; }
+        .sounds-tag-row .tag-row-toggle:hover { color: var(--text); border-color: var(--accent); }
         .favorites-section { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; overflow-x: auto; scrollbar-width: none; }
         .favorites-section::-webkit-scrollbar { display: none; }
         .favorites-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; flex-shrink: 0; }
@@ -686,7 +686,7 @@
                 <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
                 <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
             </div>
-            <div class="sounds-tag-row">
+            <div class="sounds-tag-row" id="soundsTagRow">
                 <div class="tag-tabs" id="tagTabs"></div>
             </div>
             <div class="favorites-section">
@@ -2099,6 +2099,36 @@
             const mtb = document.getElementById('manageTagsBtn'); if (mtb) mtb.classList.toggle('active', manageTagsMode);
             const ta = document.getElementById('tagsAdmin'); if (ta) ta.classList.toggle('hidden', !showManage);
             if (showManage) setupTagTabDragDrop(container);
+            requestAnimationFrame(() => updateTagRowToggle());
+        }
+
+        function updateTagRowToggle() {
+            const row = document.getElementById('soundsTagRow');
+            if (!row) return;
+            const tabs = row.querySelector('.tag-tabs');
+            if (!tabs) return;
+            const isExpanded = row.classList.contains('expanded');
+            const existing = row.querySelector('.tag-row-toggle');
+            // Check if content overflows the collapsed height (3.6rem ≈ ~58px)
+            const overflows = tabs.scrollHeight > 58;
+            if (!overflows) {
+                if (existing) existing.remove();
+                row.classList.remove('expanded');
+                return;
+            }
+            if (!existing) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'tag-row-toggle';
+                btn.textContent = '▾ more';
+                btn.onclick = () => {
+                    row.classList.toggle('expanded');
+                    btn.textContent = row.classList.contains('expanded') ? '▴ less' : '▾ more';
+                };
+                row.appendChild(btn);
+            } else {
+                existing.textContent = isExpanded ? '▴ less' : '▾ more';
+            }
         }
 
         function setupTagTabDragDrop(container) {

@@ -34,6 +34,7 @@ Features to implement, in rough priority order.
 - [x] **Duplicate sound** – Copy a sound (file + metadata); opens duplicate in edit panel so trim can be set independently
 - [x] **Normalize audio** – Normalize a sound's volume in-place via ffmpeg loudnorm (EBU R128, -16 LUFS); button in sound edit panel
 - [ ] **Per-sound volume** – Volume adjustment per sound for normalization
+- [ ] **Audio piping** – Stream computer audio (select app / exclude Discord) into the bot for admin/superadmin. Requires virtual audio device (PulseAudio virtual sink on Linux, VB-Cable on Windows)
 
 ---
 
