@@ -487,6 +487,15 @@ function probeDuration(filePath) {
         return null;
     }
 }
+function probeDurationAsync(filePath) {
+    return new Promise((resolve) => {
+        const ff = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        ff.stdout.on('data', chunk => { out += chunk.toString(); });
+        ff.on('error', () => resolve(null));
+        ff.on('close', () => { const d = parseFloat(out.trim()); resolve(Number.isFinite(d) && d > 0 ? d : null); });
+    });
+}
 if (!fs.existsSync(SOUNDS_DIR)) {
     fs.mkdirSync(SOUNDS_DIR, { recursive: true });
     console.log('📁 Created sounds directory');
@@ -656,7 +665,19 @@ function updateOwnPassword(username, currentPassword, newPassword) {
 const guestLastPlayByIP = new Map();
 const userLastPlayByUsername = new Map();
 
+const COMPANION_TOKEN = (process.env.COMPANION_TOKEN || '').trim();
+function injectCompanionAuth(req) {
+    if (!COMPANION_TOKEN) return false;
+    const auth = req.headers['authorization'] || '';
+    if (auth === `Bearer ${COMPANION_TOKEN}`) {
+        req.session = req.session || {};
+        req.session.user = { username: 'companion', role: 'admin' };
+        return true;
+    }
+    return false;
+}
 function requireAuth(req, res, next) {
+    if (injectCompanionAuth(req)) return next();
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
     if (req.session.user.role === 'guest') {
         if (!getGuestEnabled() || isIPBlocked(req.session.user.ip || getClientIP(req))) {
@@ -666,8 +687,8 @@ function requireAuth(req, res, next) {
     }
     next();
 }
-
 function requireAdmin(req, res, next) {
+    if (injectCompanionAuth(req)) return next();
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
     if (req.session.user.role !== 'admin' && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
     next();
@@ -1459,7 +1480,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
     const meta = loadSoundsMeta();
     let duration = getDuration(meta, safeFilename);
     if (duration == null) {
-        duration = probeDuration(filePath);
+        duration = await probeDurationAsync(filePath);
         if (duration != null) setSoundMeta(safeFilename, { duration });
     }
     const displayName = getDisplayName(meta, safeFilename);

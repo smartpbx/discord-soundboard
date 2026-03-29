@@ -266,7 +266,7 @@
             align-items: center;
             justify-content: space-between;
         }
-        .sound-btn-label { flex: 1; display: flex; align-items: center; justify-content: center; line-height: 1.2; }
+        .sound-btn-label { flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.2; width: 100%; word-break: break-word; }
         .sound-btn-duration { font-size: 0.7rem; color: var(--text-muted); flex-shrink: 0; }
         .sound-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
         .sound-btn:active:not(:disabled) { transform: scale(0.98); }
@@ -336,7 +336,7 @@
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
-        .sounds-card.mobile-active .sound-filter-wrap { display: none !important; }
+        .sounds-card.mobile-active .sounds-filter-row { display: none !important; }
         .sounds-card.mobile-active .sound-grid,
         .sounds-card.mobile-active .tags-admin,
         .sounds-card.mobile-active .favorites-section { display: none !important; }
@@ -349,8 +349,8 @@
             background: var(--bg); overflow: hidden;
         }
         .sounds-card.mobile-active .sounds-card-header { flex-shrink: 0; padding: 0.75rem 1rem; }
-        .sounds-card.mobile-active .sounds-toolbar { margin: 0 1rem 0.5rem; flex-shrink: 0; justify-content: center; }
-        .sounds-card.mobile-active .sounds-toolbar .tag-tabs { flex: 1; justify-content: center; min-width: 100%; }
+        .sounds-card.mobile-active .sounds-filter-row { margin: 0 1rem 0.4rem; flex-shrink: 0; }
+        .sounds-card.mobile-active .sounds-tag-row { margin: 0 1rem 0.4rem; flex-shrink: 0; }
         .mobile-grid-wrap { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
         .mobile-grid-area {
             flex: 1; min-height: 0; padding: 0 1rem 1rem;
@@ -392,7 +392,7 @@
         .settings-row label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; }
         .settings-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
         .user-locked-msg { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
-        .tag-tabs, .folder-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+        .tag-tabs, .folder-tabs { display: flex; flex-wrap: nowrap; gap: 0.3rem; align-items: center; }
         .tag-tab, .folder-tab { padding: 0.3rem 0.55rem; border-radius: var(--radius-sm); font-size: 0.8rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
         .tag-tab:hover, .folder-tab:hover { border-color: var(--accent); }
         .tag-tab.active, .folder-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
@@ -413,15 +413,21 @@
         .tags-suggestions { position: absolute; top: 100%; left: 0; right: 0; margin-top: 2px; max-height: 160px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 100; }
         .tags-suggestions .tag-suggestion { padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.9rem; }
         .tags-suggestions .tag-suggestion:hover, .tags-suggestions .tag-suggestion.selected { background: var(--surface-hover); }
-        .sounds-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
-        .sounds-toolbar .sound-filter-wrap { position: relative; flex: 0 1 200px; min-width: 120px; max-width: 240px; }
-        .sounds-toolbar .sound-filter-input { width: 100%; box-sizing: border-box; padding: 0.4rem 1.75rem 0.4rem 0.55rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.85rem; }
-        .sounds-toolbar .sound-filter-input::placeholder { color: var(--text-muted); }
-        .sounds-toolbar .sound-filter-input:focus { outline: none; border-color: var(--accent); }
-        .sounds-toolbar .sound-filter-clear { position: absolute; right: 0.35rem; top: 50%; transform: translateY(-50%); width: 1.25rem; height: 1.25rem; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
-        .sounds-toolbar .sound-filter-clear:hover { color: var(--text); background: var(--surface-hover); }
-        .sounds-toolbar .sound-filter-clear.visible { display: flex; }
-        .sounds-toolbar .tag-tabs { flex: 1; min-width: 0; margin: 0; }
+        .sounds-filter-row { position: relative; margin-bottom: 0.4rem; }
+        .sound-filter-input { width: 100%; box-sizing: border-box; padding: 0.45rem 2rem 0.45rem 0.65rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; }
+        .sound-filter-input::placeholder { color: var(--text-muted); }
+        .sound-filter-input:focus { outline: none; border-color: var(--accent); }
+        .sound-filter-clear { position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%); width: 1.25rem; height: 1.25rem; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+        .sound-filter-clear:hover { color: var(--text); }
+        .sound-filter-clear.visible { display: flex; }
+        .sounds-tag-row { display: flex; align-items: center; gap: 0.3rem; overflow-x: auto; padding-bottom: 0.2rem; margin-bottom: 0.4rem; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+        .sounds-tag-row::-webkit-scrollbar { height: 3px; }
+        .sounds-tag-row::-webkit-scrollbar-track { background: transparent; }
+        .sounds-tag-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+        .sounds-tag-row .tag-tabs { display: flex; flex-wrap: nowrap; gap: 0.3rem; align-items: center; min-width: 0; }
+        .favorites-section { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; overflow-x: auto; scrollbar-width: none; }
+        .favorites-section::-webkit-scrollbar { display: none; }
+        .favorites-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; flex-shrink: 0; }
         .top-bar-toggles-stack { display: flex; flex-direction: column; gap: 0.2rem; align-items: stretch; margin-left: 0.5rem; }
         .top-bar-toggles-stack .top-bar-toggle { margin-left: 0; display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; }
         .top-bar-toggle { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; }
@@ -475,8 +481,8 @@
         .online-pill.role-guest { color: var(--text-muted); }
 
         /* Now-playing highlight on sound buttons */
-        .sound-btn.is-playing { border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.3); }
-        .mobile-grid-btn.is-playing { border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.3); }
+        .sound-btn.is-playing { border-color: var(--accent) !important; border-width: 2px !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.35), inset 0 0 0 1px rgba(124,58,237,0.15); background: rgba(124,58,237,0.1) !important; }
+        .mobile-grid-btn.is-playing { border-color: var(--accent) !important; border-width: 3px !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.35); background: rgba(124,58,237,0.1) !important; }
 
         /* Toast notifications */
         #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; max-width: 320px; }
@@ -676,11 +682,11 @@
             <div class="tags-admin admin-only hidden" id="tagsAdmin">
                 <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Drag to reorder. Click ✕ to delete, 👁 to hide (hidden tags don't show as buttons but remain searchable).</p>
             </div>
-            <div class="sounds-toolbar">
-                <div class="sound-filter-wrap">
-                    <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
-                    <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
-                </div>
+            <div class="sounds-filter-row">
+                <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
+                <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
+            </div>
+            <div class="sounds-tag-row">
                 <div class="tag-tabs" id="tagTabs"></div>
             </div>
             <div class="favorites-section">
@@ -2774,6 +2780,8 @@
             if (btn) { btn.disabled = false; btn.textContent = 'Normalize'; }
             if (res && res.ok) {
                 fetchSounds();
+                loadSoundPanelWaveform(filename);
+                if (playback && playback.filename === filename) loadWaveform(filename);
             } else {
                 const d = res ? await res.json().catch(() => ({})) : {};
                 showToast(d.error || 'Failed to normalize sound.', 'error');
@@ -2830,6 +2838,7 @@
             const newItem = { filename, displayName: playback.displayName || filename, playedBy: (user && user.username) || null, playedAt: Date.now() };
             serverRecentlyPlayed = [newItem, ...serverRecentlyPlayed.filter(x => x.filename !== filename)].slice(0, 5);
             renderRecentlyPlayed();
+            renderSoundsGrid();
         }
 
         async function loadWaveform(filename) {
