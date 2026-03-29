@@ -7,6 +7,7 @@ const path = require('path');
 const sodium = require('libsodium-wrappers');
 
 function startApp() {
+const { Readable } = require('stream');
 const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
@@ -340,6 +341,9 @@ function setSoundMeta(filename, updates) {
         if (updates.endTime === null) delete next.endTime;
         else if (typeof updates.endTime === 'number' && updates.endTime >= 0) next.endTime = updates.endTime;
     }
+    if (updates.stopOthers !== undefined) {
+        next.stopOthers = !!updates.stopOthers;
+    }
     meta[filename] = next;
     saveSoundsMeta(meta);
 }
@@ -361,6 +365,11 @@ function getSoundVolume(meta, filename) {
     const m = meta[filename];
     if (m && typeof m === 'object' && typeof m.volume === 'number') return Math.max(0, Math.min(2, m.volume));
     return null;
+}
+
+function getSoundStopOthers(meta, filename) {
+    const m = meta[filename];
+    return !!(m && typeof m === 'object' && m.stopOthers);
 }
 
 function getSoundStartTime(meta, filename) {
@@ -720,6 +729,93 @@ const player = createAudioPlayer({
 let currentConnection = null;
 let currentVolume = 0.5;
 let playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+let multiPlayEnabled = false;
+
+// --- PCM Mixer for multi-play ---
+class AudioMixer extends Readable {
+    constructor() {
+        super();
+        this.tracks = new Map();
+        this.nextTrackId = 1;
+        this.mixTimer = null;
+        this.destroyed = false;
+        this.FRAME_SIZE = 3840; // 20ms of s16le stereo 48kHz (960 samples × 2ch × 2 bytes)
+    }
+
+    addTrack(pcmStream, metadata) {
+        const id = this.nextTrackId++;
+        const track = { id, stream: pcmStream, buffer: Buffer.alloc(0), ended: false, metadata };
+        pcmStream.on('data', chunk => { track.buffer = Buffer.concat([track.buffer, chunk]); });
+        pcmStream.on('end', () => { track.ended = true; });
+        pcmStream.on('error', () => { track.ended = true; });
+        this.tracks.set(id, track);
+        if (!this.mixTimer) this._startMixing();
+        return id;
+    }
+
+    removeTrack(id) {
+        const track = this.tracks.get(id);
+        if (track) {
+            if (track.stream && !track.stream.destroyed) track.stream.destroy();
+            this.tracks.delete(id);
+        }
+    }
+
+    removeAllTracks() {
+        for (const [, track] of this.tracks) {
+            if (track.stream && !track.stream.destroyed) track.stream.destroy();
+        }
+        this.tracks.clear();
+    }
+
+    getActiveTrackCount() { return this.tracks.size; }
+
+    _startMixing() {
+        let silenceCount = 0;
+        this.mixTimer = setInterval(() => {
+            if (this.destroyed) return;
+            // Clean up finished tracks
+            for (const [id, track] of this.tracks) {
+                if (track.ended && track.buffer.length < this.FRAME_SIZE) this.tracks.delete(id);
+            }
+            if (this.tracks.size === 0) {
+                silenceCount++;
+                if (silenceCount >= 5) { this._stopMixing(); this.push(null); return; }
+                this.push(Buffer.alloc(this.FRAME_SIZE));
+                return;
+            }
+            silenceCount = 0;
+            const mixed = Buffer.alloc(this.FRAME_SIZE);
+            for (const [, track] of this.tracks) {
+                if (track.buffer.length >= this.FRAME_SIZE) {
+                    const frame = track.buffer.subarray(0, this.FRAME_SIZE);
+                    track.buffer = track.buffer.subarray(this.FRAME_SIZE);
+                    for (let i = 0; i < this.FRAME_SIZE; i += 2) {
+                        let sum = mixed.readInt16LE(i) + frame.readInt16LE(i);
+                        mixed.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i);
+                    }
+                }
+            }
+            this.push(mixed);
+        }, 20);
+    }
+
+    _stopMixing() {
+        if (this.mixTimer) { clearInterval(this.mixTimer); this.mixTimer = null; }
+    }
+
+    _read() {}
+
+    _destroy(err, callback) {
+        this.destroyed = true;
+        this._stopMixing();
+        this.removeAllTracks();
+        callback(err);
+    }
+}
+
+let activeMixer = null;
+let activeTracks = new Map(); // trackId -> { filename, displayName, startTime, startTimeOffset, duration, startedBy, volume }
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
@@ -830,6 +926,7 @@ let lastChannelId = null; // Persisted for auto-join on restart
     const state = loadServerState();
     if (Number.isFinite(state.volume)) currentVolume = Math.max(0, Math.min(1, state.volume));
     if (typeof state.lastChannelId === 'string' && state.lastChannelId) lastChannelId = state.lastChannelId;
+    if (typeof state.multiPlay === 'boolean') multiPlayEnabled = state.multiPlay;
 })();
 
 // Catch and log audio errors so the bot doesn't crash silently
@@ -838,18 +935,24 @@ player.on('error', error => {
     console.error(`❌ Audio Player Error: ${error.message} (resource: ${meta})`);
     console.log('[DIAG] player.error', error.message, 'resource:', meta);
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+    if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+    activeTracks.clear();
 });
 
 player.on('stateChange', (oldState, newState) => {
     console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
     if (newState.status === AudioPlayerStatus.Idle) {
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+        if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
     }
 });
 
 function leaveVoiceChannel() {
     if (activeGuildId) {
         player.stop();
+        if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
         const connection = getVoiceConnection(activeGuildId);
         if (connection) connection.destroy();
         activeGuildId = null;
@@ -921,6 +1024,7 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             volume: getSoundVolume(meta, filename),
             startTime: getSoundStartTime(meta, filename),
             endTime: getSoundEndTime(meta, filename),
+            stopOthers: getSoundStopOthers(meta, filename),
         }));
         const tagOrder = getTagOrder(meta);
         const hidden = getHiddenTags(meta);
@@ -947,6 +1051,13 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
     if (!resolved.startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).send('Not found');
     const ext = path.extname(safeFilename).toLowerCase();
     const mime = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' }[ext] || 'application/octet-stream';
+    // Use file mtime for caching — ensures browser refetches after normalize
+    const stat = fs.statSync(filePath);
+    const etag = `"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
     const start = typeof req.query.start === 'string' ? parseFloat(req.query.start) : null;
     const end = typeof req.query.end === 'string' ? parseFloat(req.query.end) : null;
     const needsTrim = (start != null && start > 0) || (end != null && end > 0);
@@ -997,7 +1108,7 @@ app.delete('/api/sounds/:filename', requireSuperadmin, (req, res) => {
 });
 
 app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
-    const { filename, displayName, tags, color, volume, startTime, endTime } = req.body;
+    const { filename, displayName, tags, color, volume, startTime, endTime, stopOthers } = req.body;
     const safeFilename = filename && path.basename(filename);
     if (!safeFilename) return res.status(400).send('Filename required');
     const filePath = path.join(SOUNDS_DIR, safeFilename);
@@ -1009,9 +1120,10 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     if (volume !== undefined) updates.volume = typeof volume === 'number' ? Math.max(0, Math.min(2, volume)) : undefined;
     if (startTime !== undefined) updates.startTime = (startTime === null || startTime === '') ? null : (typeof startTime === 'number' && startTime >= 0 ? startTime : undefined);
     if (endTime !== undefined) updates.endTime = (endTime === null || endTime === '') ? null : (typeof endTime === 'number' && endTime >= 0 ? endTime : undefined);
+    if (stopOthers !== undefined) updates.stopOthers = !!stopOthers;
     setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename), stopOthers: getSoundStopOthers(meta, safeFilename) });
 });
 
 app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
@@ -1541,14 +1653,34 @@ app.post('/api/play', requireAuth, async (req, res) => {
     const currentStatus = player.state.status;
     const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
     const startedByRole = playbackState.startedBy?.role;
-    if (isSomeonePlaying && (startedByRole === 'admin' || startedByRole === 'superadmin') && (role === 'user' || isGuest)) {
-        return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
+
+    // In single-play mode, enforce override rules
+    if (!multiPlayEnabled && isSomeonePlaying) {
+        if ((startedByRole === 'admin' || startedByRole === 'superadmin') && (role === 'user' || isGuest)) {
+            return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
+        }
+        if (startedByRole === 'superadmin' && role === 'admin') {
+            return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
+        }
     }
-    if (isSomeonePlaying && startedByRole === 'superadmin' && role === 'admin') {
-        return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
+    // In multi-play mode, users/guests still can't play while a higher role is playing
+    if (multiPlayEnabled && isSomeonePlaying) {
+        // Check highest role among active tracks
+        let highestActiveRole = startedByRole;
+        for (const [, t] of activeTracks) {
+            if (t.startedBy?.role === 'superadmin') { highestActiveRole = 'superadmin'; break; }
+            if (t.startedBy?.role === 'admin' && highestActiveRole !== 'superadmin') highestActiveRole = 'admin';
+        }
+        if ((highestActiveRole === 'admin' || highestActiveRole === 'superadmin') && (role === 'user' || isGuest)) {
+            return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
+        }
+        if (highestActiveRole === 'superadmin' && role === 'admin') {
+            return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
+        }
     }
 
     const metaVolume = getSoundVolume(meta, safeFilename);
+    const soundStopOthers = getSoundStopOthers(meta, safeFilename);
     let startTime = typeof req.body.startTime === 'number' && req.body.startTime >= 0 ? req.body.startTime : (metaStart != null ? metaStart : 0);
     const maxEnd = metaEnd != null ? metaEnd : (duration != null ? duration : 999999);
     if (startTime >= maxEnd) return res.status(400).json({ error: 'Start position is past the end of the trimmed sound.' });
@@ -1558,36 +1690,13 @@ app.post('/api/play', requireAuth, async (req, res) => {
     const effectiveVolume = Math.max(0, Math.min(2, currentVolume * volMult));
 
     try {
-        let stream;
-        const needsFfmpeg = startTime > 0 || playDuration != null;
-        if (needsFfmpeg) {
-            const args = ['-nostdin'];
-            if (startTime > 0) args.push('-ss', String(startTime));
-            args.push('-i', filePath);
-            if (playDuration != null && playDuration > 0) args.push('-t', String(playDuration));
-            args.push('-f', 'mp3', '-');
-            const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-            stream = ff.stdout;
-            let errBuf = '';
-            ff.stderr.on('data', (chunk) => { errBuf += chunk.toString(); });
-            ff.on('error', (err) => { console.error('ffmpeg spawn error', err); console.log('[DIAG] ffmpeg.error', String(err)); });
-            ff.on('close', (code) => { if (code !== 0 && code !== null) { console.error('ffmpeg exit', code, errBuf.slice(-500)); console.log('[DIAG] ffmpeg.close code=', code, 'file=', safeFilename); } });
-        } else {
-            stream = fs.createReadStream(filePath);
-        }
-        const resource = createAudioResource(stream, {
-            inputType: StreamType.Arbitrary,
-            inlineVolume: true,
-            metadata: { filename: safeFilename, displayName },
-        });
-        resource.volume.setVolume(effectiveVolume);
+        // Ensure voice connection is ready
         const conn = getVoiceConnection(activeGuildId);
         const connStatus = conn?.state?.status ?? 'no-connection';
-        console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'playerStatusBefore=', player.state.status, 'voiceConnectionStatus=', connStatus);
+        console.log('[DIAG] play.start filename=', safeFilename, 'effectiveVolume=', effectiveVolume, 'multiPlay=', multiPlayEnabled, 'voiceConnectionStatus=', connStatus);
         if (conn && connStatus !== 'ready') {
             try {
                 await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
-                console.log('[DIAG] voice ready, proceeding with play');
             } catch (err) {
                 console.error('[DIAG] voice connection never reached ready:', err.message);
                 return res.status(503).json({
@@ -1595,26 +1704,104 @@ app.post('/api/play', requireAuth, async (req, res) => {
                 });
             }
         }
-        player.play(resource);
+
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
+
+        if (multiPlayEnabled) {
+            // --- Multi-play mode: use PCM mixer ---
+            // Build ffmpeg args to produce raw PCM s16le 48kHz stereo
+            const ffArgs = ['-nostdin'];
+            if (startTime > 0) ffArgs.push('-ss', String(startTime));
+            ffArgs.push('-i', filePath);
+            if (playDuration != null && playDuration > 0) ffArgs.push('-t', String(playDuration));
+            ffArgs.push('-f', 's16le', '-ar', '48000', '-ac', '2', '-af', `volume=${volMult}`, '-');
+            const ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('ffmpeg multi-play error', err));
+
+            // If this sound has stopOthers, clear everything first
+            if (soundStopOthers || !isSomeonePlaying) {
+                // Stop existing mixer if any
+                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                activeTracks.clear();
+                player.stop();
+            }
+
+            // Create mixer if needed
+            if (!activeMixer || activeMixer.destroyed) {
+                activeMixer = new AudioMixer();
+                const resource = createAudioResource(activeMixer, {
+                    inputType: StreamType.Raw,
+                    inlineVolume: true,
+                });
+                resource.volume.setVolume(currentVolume);
+                player.play(resource);
+            }
+
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName });
+            activeTracks.set(trackId, {
+                filename: safeFilename,
+                displayName,
+                startTime: Date.now(),
+                startTimeOffset: startTime,
+                duration: playDuration != null ? playDuration : duration,
+                startedBy,
+            });
+
+            // Update primary playback state to latest track
+            playbackState = {
+                status: 'playing',
+                filename: safeFilename,
+                displayName,
+                startTime: Date.now(),
+                startTimeOffset: startTime,
+                duration: playDuration != null ? playDuration : duration,
+                startedBy,
+            };
+        } else {
+            // --- Single-play mode: existing behavior ---
+            let stream;
+            const needsFfmpeg = startTime > 0 || playDuration != null;
+            if (needsFfmpeg) {
+                const args = ['-nostdin'];
+                if (startTime > 0) args.push('-ss', String(startTime));
+                args.push('-i', filePath);
+                if (playDuration != null && playDuration > 0) args.push('-t', String(playDuration));
+                args.push('-f', 'mp3', '-');
+                const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+                stream = ff.stdout;
+                ff.stderr.on('data', () => {});
+                ff.on('error', (err) => console.error('ffmpeg spawn error', err));
+            } else {
+                stream = fs.createReadStream(filePath);
+            }
+            const resource = createAudioResource(stream, {
+                inputType: StreamType.Arbitrary,
+                inlineVolume: true,
+                metadata: { filename: safeFilename, displayName },
+            });
+            resource.volume.setVolume(effectiveVolume);
+            player.play(resource);
+            playbackState = {
+                status: 'playing',
+                filename: safeFilename,
+                displayName,
+                startTime: Date.now(),
+                startTimeOffset: startTime,
+                duration: playDuration != null ? playDuration : duration,
+                startedBy,
+            };
+        }
+
         if (isGuest) {
             guestLastPlayByIP.set(getClientIP(req), Date.now());
             appendGuestHistory(getClientIP(req), safeFilename, displayName);
         } else if (role === 'user') {
             userLastPlayByUsername.set(req.session.user.username, Date.now());
         }
-        playbackState = {
-            status: 'playing',
-            filename: safeFilename,
-            displayName,
-            startTime: Date.now(),
-            startTimeOffset: startTime,
-            duration: playDuration != null ? playDuration : duration,
-            startedBy,
-        };
         addToRecentlyPlayedServer(safeFilename, displayName, startedBy?.username ?? null, Date.now());
         const playDurationRes = playDuration != null ? playDuration : duration;
-        res.json({ ok: true, duration: playDurationRes, displayName, startTimeOffset: startTime, startedBy });
+        res.json({ ok: true, duration: playDurationRes, displayName, startTimeOffset: startTime, startedBy, multiPlay: multiPlayEnabled });
     } catch (err) {
         console.error('Play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play audio' });
@@ -1655,6 +1842,27 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     }
     state.recentlyPlayed = getRecentlyPlayedFromState();
     state.volume = currentVolume;
+    state.multiPlay = multiPlayEnabled;
+    // Include all active tracks for multi-play
+    if (multiPlayEnabled && activeTracks.size > 0) {
+        const now = Date.now();
+        state.tracks = [];
+        for (const [id, t] of activeTracks) {
+            const offset = t.startTimeOffset || 0;
+            const elapsed = (now - (t.startTime || now)) / 1000;
+            const maxPos = (t.duration != null && t.duration > 0) ? offset + t.duration : 999999;
+            state.tracks.push({
+                id,
+                filename: t.filename,
+                displayName: t.displayName,
+                startTime: t.startTime,
+                startTimeOffset: t.startTimeOffset,
+                duration: t.duration,
+                currentTime: Math.max(0, Math.min(maxPos, offset + elapsed)),
+                startedBy: t.startedBy,
+            });
+        }
+    }
     res.json(state);
 });
 
@@ -1665,6 +1873,8 @@ app.post('/api/stop', requireAdmin, (req, res) => {
         return res.status(403).json({ error: 'Only superadmin can stop superadmin playback.' });
     }
     player.stop();
+    if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+    activeTracks.clear();
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
     res.json({ ok: true });
 });
@@ -1729,6 +1939,20 @@ app.post('/api/volume', requireAdmin, (req, res) => {
 });
 
 app.get('/api/volume', requireAuth, (req, res) => res.json({ volume: currentVolume }));
+
+app.get('/api/settings/multi-play', requireAuth, (req, res) => res.json({ multiPlay: multiPlayEnabled }));
+app.post('/api/settings/multi-play', requireAdmin, (req, res) => {
+    multiPlayEnabled = !!req.body.enabled;
+    saveServerState({ multiPlay: multiPlayEnabled });
+    // If disabling multi-play and there are active mixed tracks, stop them
+    if (!multiPlayEnabled && activeMixer && activeTracks.size > 0) {
+        player.stop();
+        if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
+        playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
+    }
+    res.json({ ok: true, multiPlay: multiPlayEnabled });
+});
 
 // --- Presence / online users ---
 const PRESENCE_TIMEOUT_MS = 45 * 1000;

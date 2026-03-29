@@ -273,7 +273,6 @@
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
-        .sound-item.favorited .sound-item-actions { opacity: 1; pointer-events: auto; }
         .sound-preview, .sound-edit, .sound-fav {
             width: 24px; height: 24px; padding: 0;
             border: none; background: var(--surface);
@@ -420,14 +419,20 @@
         .sound-filter-clear { position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%); width: 1.25rem; height: 1.25rem; padding: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1rem; line-height: 1; display: none; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
         .sound-filter-clear:hover { color: var(--text); }
         .sound-filter-clear.visible { display: flex; }
-        .sounds-tag-row-wrap { margin-bottom: 0.4rem; }
-        .sounds-tag-row { max-height: 3.6rem; overflow: hidden; transition: max-height 0.2s ease; }
-        .sounds-tag-row.expanded { max-height: 500px; }
+        .sounds-tag-row-wrap { position: relative; margin-bottom: 0.4rem; }
+        .sounds-tag-row { max-height: 3.6rem; overflow: hidden; transition: max-height 0.2s ease; padding-right: 3.5rem; }
+        .sounds-tag-row.expanded { max-height: 500px; padding-right: 0; }
         .sounds-tag-row .tag-tabs { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
-        .tag-row-toggle { display: none; margin-top: 0.25rem; padding: 0.1rem 0.5rem; font-size: 0.7rem; background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; line-height: 1.2; }
+        .tag-row-toggle { display: none; position: absolute; right: 0; top: 0; padding: 0.3rem 0.5rem; font-size: 0.7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; line-height: 1.2; z-index: 2; }
         .tag-row-toggle.visible { display: inline-block; }
         .tag-row-toggle:hover { color: var(--text); border-color: var(--accent); }
         .sounds-divider { border: none; border-top: 1px solid var(--border); margin: 0.5rem 0; opacity: 0.5; }
+        .multi-track-display { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.5rem 0; }
+        .multi-track-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.5rem; background: var(--surface-hover); border-radius: var(--radius-sm); font-size: 0.8rem; }
+        .multi-track-name { flex: 1; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .multi-track-time { color: var(--text-muted); font-size: 0.75rem; flex-shrink: 0; }
+        .multi-track-bar { flex: 2; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+        .multi-track-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.5s linear; }
         .favorites-section { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; overflow-x: auto; scrollbar-width: none; }
         .favorites-section::-webkit-scrollbar { display: none; }
         .favorites-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; flex-shrink: 0; }
@@ -625,6 +630,7 @@
                 <canvas id="waveformCanvas" width="600" height="48"></canvas>
             </div>
             <div class="progress-time" id="progressTime">0:00 / 0:00</div>
+            <div class="multi-track-display hidden" id="multiTrackDisplay"></div>
             <div class="player-buttons">
                 <button type="button" class="btn btn-ghost btn-icon" id="playPauseBtn" onclick="togglePlayPause()" title="Play / Pause" disabled>▶</button>
                 <button type="button" class="btn btn-ghost btn-icon" id="stopBtn" onclick="stopPlayback()" title="Stop">⏹</button>
@@ -721,6 +727,13 @@
                         <input type="range" id="soundPanelVolume" min="0" max="2" step="0.05" value="1" title="Per-sound volume (100% = normal, up to 200% to boost)">
                         <span id="soundPanelVolumeLabel" style="min-width:3rem;font-size:0.85rem;">100%</span>
                     </div>
+                </div>
+                <div class="row" id="soundPanelStopOthersRow" style="display:none;">
+                    <label>Multi-play</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;">
+                        <input type="checkbox" id="soundPanelStopOthers">
+                        <span>Stop all other sounds before playing</span>
+                    </label>
                 </div>
                 <div class="row">
                     <label>Trim</label>
@@ -842,6 +855,14 @@
                             <input type="number" id="userMaxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxUploadBytes(this.value)">
                         </label>
                     </div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Playback</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="multiPlayToggle" onchange="setMultiPlay(this.checked)">
+                        <span>Allow multiple sounds to play at once</span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">When enabled, playing a new sound won't stop the current one. Use per-sound "Stop others" in the edit panel to override.</p>
                 </div>
             </div>
 
@@ -978,6 +999,8 @@
             const el = document.getElementById('shortcutsOverlay');
             if (el) el.classList.add('hidden');
         }
+        let multiPlayActive = false;
+        let activePlayingFilenames = new Set();
         let compactMode = false;
         let mobileView = false;
         let mobilePageIndex = 0;
@@ -1206,10 +1229,14 @@
         }
 
         const UNTAGGED_FILTER = '__untagged__';
+        const FAVORITES_FILTER = '__favorites__';
         function getFilteredSounds() {
             const list = soundsList || [];
             let filtered;
-            if (selectedTag === UNTAGGED_FILTER) {
+            if (selectedTag === FAVORITES_FILTER) {
+                const favs = getFavorites();
+                filtered = list.filter(s => favs.includes(s.filename));
+            } else if (selectedTag === UNTAGGED_FILTER) {
                 filtered = list.filter(s => !(s.tags || []).length);
             } else if (selectedTag != null) {
                 filtered = list.filter(s => (s.tags || []).includes(selectedTag));
@@ -1280,7 +1307,7 @@
                 const fn = (s.filename || '').replace(/"/g, '&quot;');
                 const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
                 const colorBar = color ? '<span class="mobile-grid-color" style="background:' + color + '"></span>' : '';
-                const playing = playback.filename === s.filename && playback.status !== 'idle' ? ' is-playing' : '';
+                const playing = (activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : '';
                 return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + playing + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
             }).join('');
             if (pageEl) pageEl.textContent = isPaged ? `${mobilePageIndex + 1} / ${totalPages}` : '—';
@@ -1752,6 +1779,14 @@
             await fetchSettings();
         }
 
+        async function setMultiPlay(enabled) {
+            const res = await api('/api/settings/multi-play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+            if (res && res.ok) {
+                multiPlayActive = enabled;
+                showToast(enabled ? 'Multi-play enabled' : 'Multi-play disabled', 'success');
+            }
+        }
+
         async function fetchGuestHistory() {
             const res = await api('/api/guest/history');
             if (!res || !res.ok) return;
@@ -2077,7 +2112,7 @@
             tagsList = d.tags || [];
             hiddenTags = d.hidden || [];
             const prefs = loadPrefs();
-            if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
+            if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || prefs.lastTag === FAVORITES_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
             renderTagTabs();
         }
 
@@ -2089,6 +2124,9 @@
             const visibleTags = showManage ? (tagsList || []) : (tagsList || []).filter(t => !hiddenTags.includes(t));
             let html = '<button type="button" class="tag-tab' + (selectedTag === null ? ' active' : '') + '" data-tag="" onclick="selectTag(null)">All</button>';
             html += '<button type="button" class="tag-tab' + (selectedTag === UNTAGGED_FILTER ? ' active' : '') + '" data-tag="' + UNTAGGED_FILTER + '" onclick="selectTag(\'' + UNTAGGED_FILTER + '\')" title="Sounds with no tag">No tag</button>';
+            if (getFavorites().length > 0) {
+                html += '<button type="button" class="tag-tab' + (selectedTag === FAVORITES_FILTER ? ' active' : '') + '" data-tag="' + FAVORITES_FILTER + '" onclick="selectTag(\'' + FAVORITES_FILTER + '\')" title="Your favorited sounds">Favorites</button>';
+            }
             visibleTags.forEach(t => {
                 const active = selectedTag === t;
                 const isHidden = hiddenTags.includes(t);
@@ -2241,7 +2279,7 @@
                 if (Array.isArray(data.tags)) tagsList = data.tags;
                 if (Array.isArray(data.hidden)) hiddenTags = data.hidden;
                 const prefs = loadPrefs();
-                if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
+                if (prefs.lastTag != null && (prefs.lastTag === UNTAGGED_FILTER || prefs.lastTag === FAVORITES_FILTER || tagsList.includes(prefs.lastTag))) selectedTag = prefs.lastTag;
                 renderTagTabs();
             }
             renderSoundsGrid();
@@ -2311,7 +2349,7 @@
                     <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
                         ${colorDot}
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${playback.filename === s.filename && playback.status !== 'idle' ? ' is-playing' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${(activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -2473,6 +2511,11 @@
             }
             if (customEl) customEl.value = color || '#7c3aed';
             panel.dataset.soundColor = color || '';
+            // Stop-others checkbox (only visible when multi-play is enabled)
+            const stopOthersRow = document.getElementById('soundPanelStopOthersRow');
+            const stopOthersEl = document.getElementById('soundPanelStopOthers');
+            if (stopOthersRow) stopOthersRow.style.display = multiPlayActive ? '' : 'none';
+            if (stopOthersEl) stopOthersEl.checked = !!(s && s.stopOthers);
             panel.classList.remove('hidden');
             setupTagsAutocomplete(tagsEl);
             if (s && s.filename) loadSoundPanelWaveform(s.filename);
@@ -2753,10 +2796,12 @@
             const volume = volEl ? parseFloat(volEl.value) : 1;
             const startTime = soundPanelStartTime > 0 ? soundPanelStartTime : null;
             const endTime = soundPanelEndTime != null && soundPanelEndTime < soundPanelWaveformDuration ? soundPanelEndTime : null;
+            const stopOthersEl = document.getElementById('soundPanelStopOthers');
+            const stopOthers = stopOthersEl ? stopOthersEl.checked : false;
             const res = await api('/api/sounds/metadata', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, displayName, tags, color: color || null, volume: Number.isFinite(volume) ? volume : 1, startTime, endTime }),
+                body: JSON.stringify({ filename, displayName, tags, color: color || null, volume: Number.isFinite(volume) ? volume : 1, startTime, endTime, stopOthers }),
             });
             if (res && res.ok) { fetchSounds(); nameEl.dataset.filename = filename; closeSoundPanel(); }
         }
@@ -2809,6 +2854,7 @@
             const res = await api('/api/sounds/normalize/' + encodeURIComponent(filename), { method: 'POST' });
             if (btn) { btn.disabled = false; btn.textContent = 'Normalize'; }
             if (res && res.ok) {
+                delete waveformCache[filename];
                 fetchSounds();
                 loadSoundPanelWaveform(filename, true);
                 if (playback && playback.filename === filename) loadWaveform(filename, true);
@@ -3092,6 +3138,27 @@
             if (stopBtn) { stopBtn.disabled = disabled; stopBtn.title = adminCantStop ? 'Only superadmin can stop superadmin playback' : 'Stop'; }
         }
 
+        function renderMultiTrackDisplay(tracks, status) {
+            const el = document.getElementById('multiTrackDisplay');
+            if (!el || !tracks || tracks.length <= 1) { hideMultiTrackDisplay(); return; }
+            const esc = (x) => (x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+            el.innerHTML = tracks.map(t => {
+                const pct = (t.duration && t.duration > 0) ? Math.min(100, ((t.currentTime || 0) - (t.startTimeOffset || 0)) / t.duration * 100) : 0;
+                const elapsed = (t.duration && t.duration > 0) ? Math.max(0, (t.currentTime || 0) - (t.startTimeOffset || 0)) : 0;
+                return `<div class="multi-track-item">
+                    <span class="multi-track-name">${esc(t.displayName || t.filename)}</span>
+                    <div class="multi-track-bar"><div class="multi-track-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+                    <span class="multi-track-time">${formatTime(elapsed)} / ${t.duration ? formatTime(t.duration) : '—'}</span>
+                </div>`;
+            }).join('');
+            el.classList.remove('hidden');
+        }
+
+        function hideMultiTrackDisplay() {
+            const el = document.getElementById('multiTrackDisplay');
+            if (el) { el.classList.add('hidden'); el.innerHTML = ''; }
+        }
+
         let lastNowPlayingHtml = '';
         function updateNowPlaying() {
             const card = document.getElementById('playerCard');
@@ -3211,6 +3278,21 @@
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
+                // Track multi-play state
+                if (state.multiPlay !== undefined) multiPlayActive = state.multiPlay;
+                const mpToggle = document.getElementById('multiPlayToggle');
+                if (mpToggle && mpToggle.checked !== multiPlayActive) mpToggle.checked = multiPlayActive;
+                // Track all active playing filenames for is-playing indicators
+                activePlayingFilenames.clear();
+                if (state.tracks && Array.isArray(state.tracks) && state.tracks.length > 0) {
+                    state.tracks.forEach(t => activePlayingFilenames.add(t.filename));
+                    renderMultiTrackDisplay(state.tracks, state.status);
+                } else {
+                    if (state.status === 'playing' || state.status === 'paused') {
+                        if (state.filename) activePlayingFilenames.add(state.filename);
+                    }
+                    hideMultiTrackDisplay();
+                }
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 if (state.volume !== undefined && Number.isFinite(state.volume) && isAdminOrSuperadmin()) {
