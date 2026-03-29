@@ -1207,12 +1207,20 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
 
         console.log('[normalize]', safeFilename, 'measured:', JSON.stringify(measured));
 
+        const inputI = parseFloat(measured.input_i);
+
         // If already at target loudness (within 2 LU), skip — prevents drift.
         // Short or low-dynamic-range files often can't reach exactly -16 LUFS
         // with linear mode, so we use a generous threshold.
-        const inputI = parseFloat(measured.input_i);
         if (!isNaN(inputI) && Math.abs(inputI - (-16)) < 2) {
             return res.json({ ok: true, skipped: true, message: 'Already normalized' });
+        }
+
+        // Reject files that are abnormally quiet — likely already damaged by
+        // repeated normalization. User should re-upload the original.
+        if (!isNaN(inputI) && inputI < -30) {
+            console.warn('[normalize] Refusing to normalize extremely quiet file:', safeFilename, 'at', inputI, 'LUFS');
+            return res.status(400).json({ error: 'This file is abnormally quiet (' + inputI.toFixed(1) + ' LUFS). It may have been damaged by repeated normalization. Please re-upload the original file.' });
         }
 
         const tmpPath = filePath + '.norm.tmp.mp3';
