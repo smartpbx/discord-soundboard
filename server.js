@@ -1187,51 +1187,34 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!path.resolve(filePath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
-    // Two-pass loudnorm: first pass measures, second pass applies with measured values.
-    // This prevents volume drift when normalizing repeatedly.
-    const pass1 = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'loudnorm=I=-16:LRA=11:TP=-1.5:print_format=json', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let pass1Err = '';
-    pass1.stderr.on('data', chunk => { pass1Err += chunk.toString(); });
-    pass1.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
-    pass1.on('close', code1 => {
-        if (code1 !== 0) return res.status(500).json({ error: 'Normalization measurement failed.' });
-        // Parse loudnorm JSON output — it's always the last JSON block in stderr
-        const jsonBlocks = pass1Err.match(/\{[^{}]*\}/g);
-        const loudnormBlock = jsonBlocks && jsonBlocks.find(b => b.includes('"input_i"'));
-        if (!loudnormBlock) {
-            console.error('[normalize] Could not find loudnorm JSON in ffmpeg output for', safeFilename);
-            return res.status(500).json({ error: 'Could not parse loudnorm measurement.' });
-        }
-        let measured;
-        try { measured = JSON.parse(loudnormBlock); } catch { return res.status(500).json({ error: 'Invalid loudnorm JSON.' }); }
+    // Peak-based normalization using volumedetect.
+    // Measures peak volume, then applies gain to bring peak to -1.0 dB.
+    // This is deterministic and idempotent — unlike loudnorm which breaks on short files.
+    const measure = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let measureErr = '';
+    measure.stderr.on('data', chunk => { measureErr += chunk.toString(); });
+    measure.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
+    measure.on('close', code => {
+        if (code !== 0) return res.status(500).json({ error: 'Volume measurement failed.' });
 
-        console.log('[normalize]', safeFilename, 'measured:', JSON.stringify(measured));
+        const maxMatch = measureErr.match(/max_volume:\s*([-\d.]+)\s*dB/);
+        if (!maxMatch) return res.status(500).json({ error: 'Could not parse volume measurement.' });
 
-        const inputI = parseFloat(measured.input_i);
+        const maxVolume = parseFloat(maxMatch[1]);
+        const gain = -1.0 - maxVolume; // bring peak to -1.0 dB
+        console.log('[normalize]', safeFilename, 'max_volume:', maxVolume, 'dB, gain:', gain.toFixed(1), 'dB');
 
-        // If already at target loudness (within 2 LU), skip — prevents drift.
-        // Short or low-dynamic-range files often can't reach exactly -16 LUFS
-        // with linear mode, so we use a generous threshold.
-        if (!isNaN(inputI) && Math.abs(inputI - (-16)) < 2) {
+        // If peak is already close to -1.0 dB (within 0.5 dB), skip
+        if (Math.abs(gain) < 0.5) {
             return res.json({ ok: true, skipped: true, message: 'Already normalized' });
         }
 
-        // Reject files that are abnormally quiet — likely already damaged by
-        // repeated normalization. User should re-upload the original.
-        if (!isNaN(inputI) && inputI < -30) {
-            console.warn('[normalize] Refusing to normalize extremely quiet file:', safeFilename, 'at', inputI, 'LUFS');
-            return res.status(400).json({ error: 'This file is abnormally quiet (' + inputI.toFixed(1) + ' LUFS). It may have been damaged by repeated normalization. Please re-upload the original file.' });
-        }
-
         const tmpPath = filePath + '.norm.tmp.mp3';
-        const af = `loudnorm=I=-16:LRA=11:TP=-1.5:measured_I=${measured.input_i}:measured_LRA=${measured.input_lra}:measured_TP=${measured.input_tp}:measured_thresh=${measured.input_thresh}:offset=${measured.target_offset}:linear=true`;
-        const pass2 = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', af, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-        let pass2Err = '';
-        pass2.stderr.on('data', chunk => { pass2Err += chunk.toString(); });
-        pass2.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
-        pass2.on('close', code2 => {
+        const pass = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', `volume=${gain}dB`, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+        pass.stderr.on('data', () => {});
+        pass.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
+        pass.on('close', code2 => {
             if (code2 !== 0) {
-                console.error('[normalize] pass2 failed for', safeFilename, pass2Err.slice(-500));
                 try { fs.unlinkSync(tmpPath); } catch {}
                 return res.status(500).json({ error: 'Normalization failed.' });
             }
