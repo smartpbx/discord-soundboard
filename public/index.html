@@ -3535,7 +3535,10 @@
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
             document.addEventListener('keydown', (e) => {
                 const tag = document.activeElement && document.activeElement.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable)) return;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable)) {
+                    if (e.key === 'Escape') { e.preventDefault(); document.activeElement.blur(); }
+                    return;
+                }
                 if (e.key >= '1' && e.key <= '9') {
                     const fav = getFavorites()[parseInt(e.key, 10) - 1];
                     if (fav) { e.preventDefault(); playSound(fav); }
@@ -3549,6 +3552,10 @@
                     if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
                     const panel = document.getElementById('soundPanel');
                     if (panel && !panel.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
+                } else if (e.key === '/') {
+                    e.preventDefault();
+                    const sfi = document.getElementById('soundFilterInput');
+                    if (sfi) sfi.focus();
                 } else if (e.key === '?') {
                     e.preventDefault();
                     openShortcuts();
@@ -3565,7 +3572,8 @@
             <div class="shortcut-row"><span>Play favorites</span><span class="shortcut-keys"><kbd class="kbd">1</kbd> – <kbd class="kbd">9</kbd></span></div>
             <div class="shortcut-row"><span>Play / Pause current sound</span><span class="shortcut-keys"><kbd class="kbd">Space</kbd></span></div>
             <div class="shortcut-row"><span>Stop playback</span><span class="shortcut-keys"><kbd class="kbd">S</kbd></span></div>
-            <div class="shortcut-row"><span>Close panel</span><span class="shortcut-keys"><kbd class="kbd">Esc</kbd></span></div>
+            <div class="shortcut-row"><span>Focus filter</span><span class="shortcut-keys"><kbd class="kbd">/</kbd></span></div>
+            <div class="shortcut-row"><span>Close panel / unfocus</span><span class="shortcut-keys"><kbd class="kbd">Esc</kbd></span></div>
             <div class="shortcut-row"><span>Show this reference</span><span class="shortcut-keys"><kbd class="kbd">?</kbd></span></div>
         </div>
     </div>
