@@ -3536,7 +3536,7 @@
             document.addEventListener('keydown', (e) => {
                 const tag = document.activeElement && document.activeElement.tagName;
                 if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable)) {
-                    if (e.key === 'Escape') { e.preventDefault(); document.activeElement.blur(); }
+                    if (e.key === 'Escape') { e.preventDefault(); clearSoundFilter(); document.activeElement.blur(); }
                     return;
                 }
                 if (e.key >= '1' && e.key <= '9') {
