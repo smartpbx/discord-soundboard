@@ -448,7 +448,9 @@
         .top-bar-voice { display: inline-flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; }
         .top-bar-voice .voice-channel-info { font-size: 0.85rem; color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .top-bar-voice .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
-        .sound-panel { padding: 1rem; background: var(--surface-hover); border-radius: var(--radius-sm); border: 1px solid var(--border); grid-column: 1 / -1; }
+        .sound-panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .sound-panel-overlay.hidden { display: none !important; }
+        .sound-panel { padding: 1.5rem; background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); max-width: 500px; width: 100%; box-shadow: var(--shadow); max-height: 90vh; overflow-y: auto; }
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
         .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
@@ -716,7 +718,8 @@
             </div>
             <hr class="sounds-divider">
             <div id="soundsList" class="sound-grid"></div>
-            <div class="sound-panel hidden" id="soundPanel">
+            <div class="sound-panel-overlay hidden" id="soundPanelOverlay" onclick="if(event.target===this)closeSoundPanel()">
+            <div class="sound-panel" id="soundPanel">
                 <div class="card-title">Edit sound</div>
                 <div class="row"><label>Name</label><input type="text" id="soundPanelName" placeholder="Display name"></div>
                 <div class="row"><label>Tags</label><div class="tags-input-wrap"><input type="text" id="soundPanelTags" placeholder="Add tags (comma or space separated)" class="tags-input" autocomplete="off"><div id="soundPanelTagsSuggestions" class="tags-suggestions hidden"></div></div></div>
@@ -770,6 +773,7 @@
                     <button type="button" class="btn btn-ghost admin-only hidden" id="soundPanelNormalizeBtn" onclick="normalizeSoundPanel()" title="Normalize volume using loudnorm (modifies the file)">Normalize</button>
                     <button type="button" class="btn btn-danger superadmin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
                 </div>
+            </div>
             </div>
             <div class="user-locked-msg hidden" id="userLockedMsg">Playback is locked by an admin.</div>
         </div>
@@ -2324,11 +2328,6 @@
         }
         function renderSoundsGrid() {
             const grid = document.getElementById('soundsList');
-            // Detach sound panel before overwriting innerHTML so it survives re-render
-            const panel = document.getElementById('soundPanel');
-            const panelParent = panel && panel.parentNode;
-            const panelWasInGrid = panel && panelParent === grid;
-            if (panelWasInGrid) document.body.appendChild(panel);
             const filtered = getFilteredSounds();
             const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
             const isAdmin = isAdminOrSuperadmin();
@@ -2368,27 +2367,6 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             grid.classList.toggle('compact-mode', compactMode);
-            // Re-insert panel into grid after the selected sound
-            if (panel && selectedSound) {
-                const wrap = grid.querySelector(`.sound-item-wrap[data-filename="${CSS.escape(selectedSound)}"]`);
-                if (wrap) {
-                    wrap.insertAdjacentElement('afterend', panel);
-                } else {
-                    grid.appendChild(panel);
-                }
-                // After layout, shift to end of visual row
-                requestAnimationFrame(() => {
-                    const w2 = grid.querySelector(`.sound-item-wrap[data-filename="${CSS.escape(selectedSound)}"]`);
-                    if (!w2) return;
-                    const allWraps = Array.from(grid.querySelectorAll('.sound-item-wrap'));
-                    const rowTop = w2.offsetTop;
-                    let lastInRow = w2;
-                    for (const w of allWraps) { if (Math.abs(w.offsetTop - rowTop) < 5) lastInRow = w; }
-                    if (lastInRow !== w2) lastInRow.insertAdjacentElement('afterend', panel);
-                });
-            } else if (panel && panel.parentNode !== grid) {
-                grid.appendChild(panel);
-            }
             renderFavoritesBar();
             if (mobileView) renderMobileGrid();
             const msg = document.getElementById('userLockedMsg');
@@ -2542,7 +2520,8 @@
             const stopOthersEl = document.getElementById('soundPanelStopOthers');
             if (stopOthersRow) stopOthersRow.style.display = multiPlayActive ? '' : 'none';
             if (stopOthersEl) stopOthersEl.checked = !!(s && s.stopOthers);
-            panel.classList.remove('hidden');
+            const overlay = document.getElementById('soundPanelOverlay');
+            if (overlay) overlay.classList.remove('hidden');
             setupTagsAutocomplete(tagsEl);
             if (s && s.filename) loadSoundPanelWaveform(s.filename);
             const volInput = document.getElementById('soundPanelVolume');
@@ -2755,8 +2734,6 @@
             selectedSound = filename;
             renderSoundsGrid();
             openSoundPanel(s || { filename, displayName: filename, duration: null, tags: [] });
-            const panel = document.getElementById('soundPanel');
-            if (panel) requestAnimationFrame(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
         }
 
         let previewAudio = null;
@@ -2802,7 +2779,7 @@
                 if (btn) btn.textContent = '▶ Preview';
             }
             selectedSound = null;
-            const sp = document.getElementById('soundPanel'); if (sp) sp.classList.add('hidden');
+            const overlay = document.getElementById('soundPanelOverlay'); if (overlay) overlay.classList.add('hidden');
             renderSoundsGrid();
         }
 
@@ -3550,8 +3527,8 @@
                 } else if (e.key === 'Escape') {
                     const overlay = document.getElementById('shortcutsOverlay');
                     if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
-                    const panel = document.getElementById('soundPanel');
-                    if (panel && !panel.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
+                    const panelOverlay = document.getElementById('soundPanelOverlay');
+                    if (panelOverlay && !panelOverlay.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
                 } else if (e.key === '/') {
                     e.preventDefault();
                     const sfi = document.getElementById('soundFilterInput');
