@@ -4726,8 +4726,17 @@
                     ? '<button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Replace</button>'
                       + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>'
                     : '<span style="color:var(--text-muted)">--</span>';
+                let sourceLine = '';
+                if (isCb && v.source_kind) {
+                    const range = (v.source_start != null && v.source_end != null) ? (' ' + v.source_start.toFixed(1) + 's–' + v.source_end.toFixed(1) + 's') : '';
+                    if (v.source_kind === 'youtube' && v.source_url) {
+                        sourceLine = '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"><a href="' + esc(v.source_url) + '" target="_blank" rel="noopener" style="color:var(--text-muted)">YouTube' + esc(range) + '</a></div>';
+                    } else if (v.source_kind === 'upload') {
+                        sourceLine = '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">' + esc((v.source_filename || 'upload') + range) + '</div>';
+                    }
+                }
                 return '<tr style="' + (disabled ? 'opacity:0.5' : '') + '">'
-                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + sourceLine + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
@@ -4754,6 +4763,10 @@
         let _voiceModalSource = 'youtube';
         let _voiceModalToken = null;
         let _voiceModalSourceRef = null;
+        let _voiceModalLastUrl = '';
+        let _voiceModalLastFilename = '';
+        let _voiceModalLastStart = 0;
+        let _voiceModalLastEnd = 0;
 
         function setVoiceModalStatus(text, kind) {
             const el = document.getElementById('voiceModalStatus');
@@ -4775,6 +4788,10 @@
             _voiceModalMode = mode;
             _voiceModalToken = null;
             _voiceModalSourceRef = null;
+            _voiceModalLastUrl = '';
+            _voiceModalLastFilename = '';
+            _voiceModalLastStart = 0;
+            _voiceModalLastEnd = 0;
             document.getElementById('voiceModalTitle').textContent = mode === 'replace' ? ('Replace reference: ' + (name || voiceId)) : 'Add Chatterbox voice';
             const idInput = document.getElementById('voiceModalId');
             const nameInput = document.getElementById('voiceModalName');
@@ -4856,6 +4873,16 @@
                 if (!res.ok) { setVoiceModalStatus(data.error || ('Error: ' + res.status), 'error'); return; }
                 _voiceModalToken = data.token;
                 if (data.sourceRef) _voiceModalSourceRef = data.sourceRef;
+                _voiceModalLastStart = startSec;
+                _voiceModalLastEnd = endSec;
+                if (_voiceModalSource === 'youtube') {
+                    _voiceModalLastUrl = document.getElementById('voiceModalUrl').value.trim();
+                    _voiceModalLastFilename = '';
+                } else {
+                    _voiceModalLastUrl = '';
+                    const f = document.getElementById('voiceModalFile').files[0];
+                    if (f && !_voiceModalLastFilename) _voiceModalLastFilename = f.name;
+                }
                 const audio = document.getElementById('voiceModalAudio');
                 audio.src = data.previewUrl + '?t=' + Date.now();
                 audio.style.display = 'block';
@@ -4882,9 +4909,12 @@
             btn.disabled = true;
             setVoiceModalStatus('Saving…');
             try {
+                const source = _voiceModalSource === 'youtube'
+                    ? { kind: 'youtube', url: _voiceModalLastUrl, start: _voiceModalLastStart, end: _voiceModalLastEnd }
+                    : { kind: 'upload', filename: _voiceModalLastFilename, start: _voiceModalLastStart, end: _voiceModalLastEnd };
                 const res = await api('/api/superadmin/tts/voice', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ voiceId, name, group, gender, skipRvc, token: _voiceModalToken })
+                    body: JSON.stringify({ voiceId, name, group, gender, skipRvc, token: _voiceModalToken, source })
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) { setVoiceModalStatus(data.error || ('Save failed: ' + res.status), 'error'); btn.disabled = false; return; }

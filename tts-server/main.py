@@ -48,6 +48,12 @@ class VoiceInfo(BaseModel):
     gender: str
     language: str
     group: str
+    source_kind: Optional[str] = None
+    source_url: Optional[str] = None
+    source_filename: Optional[str] = None
+    source_start: Optional[float] = None
+    source_end: Optional[float] = None
+    updated_at: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +256,22 @@ async def upload_chatterbox_voice(
         "group": str(meta.get("group", "Celebrity")).strip()[:40] or "Celebrity",
         "skip_rvc": bool(meta.get("skip_rvc", False)),
     }
+    # Optional source provenance: how this reference clip was produced.
+    src_kind = meta.get("source_kind")
+    if src_kind in ("youtube", "upload"):
+        clean_meta["source_kind"] = src_kind
+        if src_kind == "youtube" and isinstance(meta.get("source_url"), str):
+            clean_meta["source_url"] = meta["source_url"][:500]
+        if src_kind == "upload" and isinstance(meta.get("source_filename"), str):
+            clean_meta["source_filename"] = meta["source_filename"][:200]
+        for key in ("source_start", "source_end"):
+            try:
+                v = float(meta.get(key))
+                if v >= 0:
+                    clean_meta[key] = round(v, 2)
+            except (TypeError, ValueError):
+                pass
+    clean_meta["updated_at"] = int(time.time())
 
     audio_bytes = await reference.read()
     if len(audio_bytes) < 1024:

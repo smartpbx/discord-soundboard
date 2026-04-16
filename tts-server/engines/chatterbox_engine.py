@@ -73,7 +73,7 @@ def _scan_voices():
             except Exception:
                 pass
 
-        voices.append({
+        voice = {
             "id": f"cb_{entry}",
             "name": meta.get("name", entry),
             "engine": "chatterbox",
@@ -83,7 +83,11 @@ def _scan_voices():
             "_ref_path": ref_path,
             "_dir": entry,
             "_skip_rvc": meta.get("skip_rvc", False),
-        })
+        }
+        for key in ("source_kind", "source_url", "source_filename", "source_start", "source_end", "updated_at"):
+            if key in meta:
+                voice[key] = meta[key]
+        voices.append(voice)
 
     return voices
 

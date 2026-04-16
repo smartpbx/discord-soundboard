@@ -3044,7 +3044,7 @@ app.get('/api/superadmin/tts/preview/:token', requireSuperadmin, (req, res) => {
 });
 
 app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
-    const { voiceId, name, group, gender, skipRvc, token } = req.body || {};
+    const { voiceId, name, group, gender, skipRvc, token, source } = req.body || {};
     const dirId = ttsVoiceAdmin.normalizeVoiceId(voiceId);
     if (!dirId) return res.status(400).json({ error: 'Voice id must be lowercase letters, digits, or underscores (e.g. rfk_jr).' });
     const previewPath = ttsVoiceAdmin.getPreviewPath(token);
@@ -3055,6 +3055,7 @@ app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
             adminToken: TTS_ADMIN_TOKEN,
             voiceId: dirId,
             name, group, gender, skipRvc,
+            source: source && typeof source === 'object' ? source : null,
             previewPath,
         });
         ttsVoiceAdmin.deletePreview(token);
