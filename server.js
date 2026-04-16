@@ -2094,15 +2094,18 @@ app.get('/api/online', requireAuth, (req, res) => {
 async function ttsFetch(urlPath, opts = {}) {
     if (!TTS_API_URL) return null;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), opts.timeout || 30000);
+    const timeoutMs = opts.timeout || 30000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
         const res = await fetch(`${TTS_API_URL}${urlPath}`, { ...opts, signal: controller.signal });
         return res;
     } catch (e) {
-        if (e.name === 'AbortError') return { ok: false, status: 504, statusText: 'TTS service timeout' };
+        if (e.name === 'AbortError') {
+            return { ok: false, status: 504, statusText: 'TTS service timeout', text: async () => 'Request timed out', arrayBuffer: async () => new ArrayBuffer(0) };
+        }
         return null;
     } finally {
-        clearTimeout(timeout);
+        clearTimeout(timer);
     }
 }
 
@@ -2211,7 +2214,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: trimmed, voice_id: voiceId }),
-            timeout: 30000,
+            timeout: 120000,
         });
     } catch (e) {
         console.error('[TTS] fetch error:', e);

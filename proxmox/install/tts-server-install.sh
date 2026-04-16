@@ -72,7 +72,7 @@ User=root
 WorkingDirectory=${TTS_DIR}
 EnvironmentFile=${TTS_DIR}/.env
 ExecStart=${TTS_DIR}/.venv/bin/python main.py
-Restart=unless-stopped
+Restart=on-failure
 RestartSec=5
 
 [Install]
