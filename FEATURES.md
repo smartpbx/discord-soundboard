@@ -33,7 +33,7 @@ The TTS system has its own multi-phase plan tracked in a dedicated GitHub issue.
 - [ ] **Phase 8 — TTS clip caching:** SHA-256 of (text, voiceId, exaggeration, speed) → cached WAV; skip GPU work for repeated phrases.
 - [ ] **Phase 9 — OpenVoice integration:** Add OpenVoice as either a tone-color converter (post-process on Kokoro/Chatterbox output, like RVC) or a full engine with explicit emotion presets. Decide after Phase 6 lands and we know what's still missing.
 
-See GitHub issue **#5** for the full plan and tracking.
+See GitHub issue **#6** for the full plan and tracking.
 
 ---
 
