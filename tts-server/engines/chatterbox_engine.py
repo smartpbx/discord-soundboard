@@ -82,6 +82,7 @@ def _scan_voices():
             "group": meta.get("group", "Celebrity"),
             "_ref_path": ref_path,
             "_dir": entry,
+            "_skip_rvc": meta.get("skip_rvc", False),
         })
 
     return voices
@@ -103,6 +104,14 @@ def get_voices():
 def get_voice_ids():
     """Return set of valid Chatterbox voice IDs."""
     return {v["id"] for v in get_voices()}
+
+
+def should_skip_rvc(voice_id: str) -> bool:
+    """Check if a voice has RVC refinement disabled (e.g. cartoon voices)."""
+    for v in get_voices():
+        if v["id"] == voice_id:
+            return v.get("_skip_rvc", False)
+    return False
 
 
 def get_ref_path(voice_id: str) -> str:

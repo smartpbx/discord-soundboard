@@ -105,9 +105,10 @@ def synthesize(req: SynthesizeRequest):
         log.info("Chatterbox done in %.2fs, %d bytes", t_tts, len(wav_bytes))
 
         # Optional RVC refinement: check if matching RVC model exists
-        # cb_trump -> rvc_trump
+        # cb_trump -> rvc_trump (skip for voices that sound worse with RVC, e.g. cartoons)
         rvc_model_id = voice_id.replace("cb_", "rvc_", 1)
-        if req.use_rvc and rvc_model_id in rvc_ids:
+        skip_rvc = chatterbox_engine.should_skip_rvc(voice_id)
+        if req.use_rvc and not skip_rvc and rvc_model_id in rvc_ids:
             t1 = time.time()
             try:
                 wav_bytes = rvc_engine.convert(wav_bytes, rvc_model_id)
