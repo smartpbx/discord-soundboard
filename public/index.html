@@ -4562,7 +4562,11 @@
                 const btn = document.getElementById('ttsToggleBtn');
                 if (btn) btn.classList.toggle('hidden', !(data.available && data.enabled));
                 if (data.voices && data.voices.length) {
-                    ttsVoices = data.voices;
+                    // Superadmin gets the full voice list plus disabledVoiceIds; filter
+                    // disabled voices out of the TTS card dropdown so the toggle in the
+                    // admin tab actually affects what's pickable here.
+                    const disabledIds = new Set(data.disabledVoiceIds || []);
+                    ttsVoices = data.voices.filter(v => !disabledIds.has(v.id));
                     window.ttsVoices = ttsVoices;
                     populateTtsVoices();
                     // Re-render recent TTS so voice labels are accurate once voices are loaded.
@@ -4802,6 +4806,7 @@
             else if (!_ttsAdminDisabled.includes(voiceId)) { _ttsAdminDisabled.push(voiceId); }
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsDisabledVoices: _ttsAdminDisabled }) });
             fetchTtsVoicesAdmin();
+            fetchTtsStatus();
         }
 
         async function toggleTtsVoiceRvc(voiceId, rvcOn) {
