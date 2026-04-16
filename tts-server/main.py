@@ -1,5 +1,18 @@
 """TTS Service -- FastAPI app exposing Kokoro + RVC for the Discord soundboard."""
 
+# Monkey-patch fairseq dataclass bug BEFORE any imports that might trigger it.
+# fairseq 0.12.2 uses mutable class defaults in dataclass fields which Python 3.11+ rejects.
+import dataclasses as _dc
+_orig_field = _dc.field
+def _patched_field(*args, **kwargs):
+    if 'default' in kwargs:
+        d = kwargs['default']
+        if isinstance(d, type):
+            kwargs['default_factory'] = d
+            del kwargs['default']
+    return _orig_field(*args, **kwargs)
+_dc.field = _patched_field
+
 import os
 import time
 import logging
