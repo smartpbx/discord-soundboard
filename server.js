@@ -241,6 +241,36 @@ function setTtsCooldownSec(role, sec) {
     saveGuestData(d);
 }
 
+// --- TTS voice management (stored in guest.json) ---
+function getTtsDisabledVoices() {
+    const d = loadGuestData();
+    return Array.isArray(d.ttsDisabledVoices) ? d.ttsDisabledVoices : [];
+}
+function setTtsDisabledVoices(ids) {
+    const d = loadGuestData();
+    d.ttsDisabledVoices = Array.isArray(ids) ? ids.filter(v => typeof v === 'string') : [];
+    saveGuestData(d);
+}
+function getTtsVoiceRvcOverrides() {
+    const d = loadGuestData();
+    return typeof d.ttsVoiceRvcOverrides === 'object' && d.ttsVoiceRvcOverrides !== null ? d.ttsVoiceRvcOverrides : {};
+}
+function setTtsVoiceRvcOverrides(obj) {
+    const d = loadGuestData();
+    d.ttsVoiceRvcOverrides = typeof obj === 'object' && obj !== null ? obj : {};
+    saveGuestData(d);
+}
+function getTtsMaxQueueSize() {
+    const d = loadGuestData();
+    const n = Number(d.ttsMaxQueueSize);
+    return Number.isFinite(n) && n >= 1 ? n : 10;
+}
+function setTtsMaxQueueSize(n) {
+    const d = loadGuestData();
+    d.ttsMaxQueueSize = Math.max(1, Math.min(50, Number(n) || 10));
+    saveGuestData(d);
+}
+
 function loadServerState() {
     try {
         const raw = fs.readFileSync(SERVER_STATE_PATH, 'utf8');
@@ -715,6 +745,11 @@ const TTS_API_URL = (process.env.TTS_API_URL || '').replace(/\/+$/, '');
 // { wavBuffer: Buffer, text: string, voiceId: string, timestamp: number }
 const ttsLastBuffer = new Map();
 
+// --- TTS Queue ---
+const ttsQueue = [];
+let ttsQueueIdCounter = 0;
+let ttsIsPlaying = false;
+
 const COMPANION_TOKEN = (process.env.COMPANION_TOKEN || '').trim();
 function injectCompanionAuth(req) {
     if (!COMPANION_TOKEN) return false;
@@ -1002,11 +1037,69 @@ player.on('error', error => {
 player.on('stateChange', (oldState, newState) => {
     console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
     if (newState.status === AudioPlayerStatus.Idle) {
+        const wasTts = playbackState.tts === true;
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
+        if (wasTts) ttsIsPlaying = false;
+        processTtsQueue();
     }
 });
+
+function playTtsBuffer(item) {
+    const { wavBuffer, displayName, startedBy, voiceId, ttsVolume } = item;
+    ttsIsPlaying = true;
+    try {
+        if (multiPlayEnabled) {
+            const soundStopOthers = false;
+            const currentStatus = player.state.status;
+            const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
+            if (soundStopOthers || !isSomeonePlaying) {
+                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                activeTracks.clear();
+                player.stop();
+            }
+            if (!activeMixer || activeMixer.destroyed) {
+                activeMixer = new AudioMixer();
+                const resource = createAudioResource(activeMixer, { inputType: StreamType.Raw, inlineVolume: true });
+                resource.volume.setVolume(currentVolume);
+                player.play(resource);
+            }
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-af', `volume=${ttsVolume}`, '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
+            ff.on('close', () => { ttsIsPlaying = false; processTtsQueue(); });
+            Readable.from(wavBuffer).pipe(ff.stdin);
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName });
+            activeTracks.set(trackId, { filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy });
+            playbackState = { status: 'playing', filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
+        } else {
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[TTS] ffmpeg error', err));
+            Readable.from(wavBuffer).pipe(ff.stdin);
+            const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'tts', displayName } });
+            resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume * ttsVolume)));
+            player.play(resource);
+            playbackState = { status: 'playing', filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
+        }
+    } catch (err) {
+        console.error('[TTS Queue] play error:', err);
+        ttsIsPlaying = false;
+        processTtsQueue();
+    }
+}
+
+function processTtsQueue() {
+    if (ttsIsPlaying || ttsQueue.length === 0) return;
+    // Don't start TTS if a non-TTS sound is currently playing
+    const playerStatus = player.state.status;
+    if ((playerStatus === AudioPlayerStatus.Playing || playerStatus === AudioPlayerStatus.Buffering) && !playbackState.tts) return;
+    const item = ttsQueue.shift();
+    console.log('[TTS Queue] playing next item, %d remaining', ttsQueue.length);
+    addToRecentlyPlayedServer('tts', item.displayName, item.startedBy?.username ?? null, Date.now());
+    playTtsBuffer(item);
+}
 
 function leaveVoiceChannel() {
     if (activeGuildId) {
@@ -1369,6 +1462,9 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.ttsAvailable = !!TTS_API_URL;
         out.ttsMaxTextLength = { guest: getTtsMaxTextLength('guest'), user: getTtsMaxTextLength('user'), admin: getTtsMaxTextLength('admin'), superadmin: getTtsMaxTextLength('superadmin') };
         out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
+        out.ttsDisabledVoices = getTtsDisabledVoices();
+        out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides();
+        out.ttsMaxQueueSize = getTtsMaxQueueSize();
     }
     // TTS availability for all roles
     out.ttsEnabled = getTtsEnabled();
@@ -1439,6 +1535,11 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
             }
             out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
         }
+        // Voice management
+        const { ttsDisabledVoices, ttsVoiceRvcOverrides, ttsMaxQueueSize } = req.body;
+        if (Array.isArray(ttsDisabledVoices)) { setTtsDisabledVoices(ttsDisabledVoices); out.ttsDisabledVoices = getTtsDisabledVoices(); }
+        if (ttsVoiceRvcOverrides && typeof ttsVoiceRvcOverrides === 'object' && !Array.isArray(ttsVoiceRvcOverrides)) { setTtsVoiceRvcOverrides(ttsVoiceRvcOverrides); out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides(); }
+        if (typeof ttsMaxQueueSize === 'number') { setTtsMaxQueueSize(ttsMaxQueueSize); out.ttsMaxQueueSize = getTtsMaxQueueSize(); }
     }
     res.json(Object.keys(out).length ? out : { ok: true });
 });
@@ -1951,6 +2052,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.recentlyPlayed = getRecentlyPlayedFromState();
     state.volume = currentVolume;
     state.multiPlay = multiPlayEnabled;
+    state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
     // Include all active tracks for multi-play
     if (multiPlayEnabled && activeTracks.size > 0) {
         const now = Date.now();
@@ -1983,6 +2085,8 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     player.stop();
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
+    ttsQueue.length = 0;
+    ttsIsPlaying = false;
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
     res.json({ ok: true });
 });
@@ -2119,8 +2223,15 @@ app.get('/api/tts/status', requireAuth, async (req, res) => {
     try {
         const r = await ttsFetch('/voices', { timeout: 5000 });
         if (!r || !r.ok) return res.json({ available: false, enabled, voices: [] });
-        const voices = await r.json();
-        res.json({ available: true, enabled, voices });
+        const allVoices = await r.json();
+        const disabled = getTtsDisabledVoices();
+        const role = req.session.user.role;
+        if (role === 'superadmin') {
+            res.json({ available: true, enabled, voices: allVoices, disabledVoiceIds: disabled, rvcOverrides: getTtsVoiceRvcOverrides() });
+        } else {
+            const voices = allVoices.filter(v => !disabled.includes(v.id));
+            res.json({ available: true, enabled, voices });
+        }
     } catch {
         res.json({ available: false, enabled, voices: [] });
     }
@@ -2131,7 +2242,10 @@ app.get('/api/tts/voices', requireAuth, async (req, res) => {
     try {
         const r = await ttsFetch('/voices', { timeout: 5000 });
         if (!r || !r.ok) return res.json([]);
-        res.json(await r.json());
+        const allVoices = await r.json();
+        const disabled = getTtsDisabledVoices();
+        const role = req.session.user.role;
+        res.json(role === 'superadmin' ? allVoices : allVoices.filter(v => !disabled.includes(v.id)));
     } catch {
         res.json([]);
     }
@@ -2146,6 +2260,9 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     // Check TTS availability
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
     if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+
+    // Check if voice is disabled
+    if (getTtsDisabledVoices().includes(voiceId)) return res.status(403).json({ error: 'This voice is currently disabled.' });
 
     const role = req.session.user.role;
     const isGuest = role === 'guest';
@@ -2216,7 +2333,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         ttsRes = await ttsFetch('/synthesize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: trimmed, voice_id: voiceId }),
+            body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true }),
             timeout: 120000,
         });
     } catch (e) {
@@ -2244,56 +2361,26 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     const startedBy = { username: req.session.user.username, role };
     const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
 
-    try {
-        if (multiPlayEnabled) {
-            // Multi-play: WAV → ffmpeg PCM → mixer
-            const soundStopOthers = false;
-            const currentStatus = player.state.status;
-            const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
-
-            if (soundStopOthers || !isSomeonePlaying) {
-                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
-                activeTracks.clear();
-                player.stop();
-            }
-            if (!activeMixer || activeMixer.destroyed) {
-                activeMixer = new AudioMixer();
-                const resource = createAudioResource(activeMixer, { inputType: StreamType.Raw, inlineVolume: true });
-                resource.volume.setVolume(currentVolume);
-                player.play(resource);
-            }
-            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-af', `volume=${ttsVolume}`, '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
-            ff.stderr.on('data', () => {});
-            ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
-            Readable.from(wavBuffer).pipe(ff.stdin);
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName: ttsDisplayName });
-            activeTracks.set(trackId, { filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy });
-            playbackState = { status: 'playing', filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
-        } else {
-            // Single-play: WAV → ffmpeg → createAudioResource
-            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
-            ff.stderr.on('data', () => {});
-            ff.on('error', (err) => console.error('[TTS] ffmpeg error', err));
-            Readable.from(wavBuffer).pipe(ff.stdin);
-            const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'tts', displayName: ttsDisplayName } });
-            resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume * ttsVolume)));
-            player.play(resource);
-            playbackState = { status: 'playing', filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
-        }
-
-        // Update cooldown
-        if (isGuest) {
-            ttsLastPlayByIP.set(getClientIP(req), Date.now());
-        } else if (role === 'user') {
-            ttsLastPlayByUsername.set(req.session.user.username, Date.now());
-        }
-
-        addToRecentlyPlayedServer('tts', ttsDisplayName, startedBy?.username ?? null, Date.now());
-        res.json({ ok: true, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
-    } catch (err) {
-        console.error('[TTS] play error:', err);
-        res.status(500).json({ error: err.message || 'Failed to play TTS audio' });
+    // Check queue size
+    if (ttsQueue.length >= getTtsMaxQueueSize()) {
+        return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()}). Wait for current clips to finish.` });
     }
+
+    // Enqueue and process
+    const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: trimmed, voiceId, ttsVolume, displayName: ttsDisplayName, startedBy, username: req.session.user.username };
+    ttsQueue.push(queueItem);
+    const queuePosition = ttsQueue.length;
+    console.log('[TTS Queue] enqueued #%d, position %d, voice=%s', queueItem.id, queuePosition, voiceId);
+
+    // Update cooldown
+    if (isGuest) {
+        ttsLastPlayByIP.set(getClientIP(req), Date.now());
+    } else if (role === 'user') {
+        ttsLastPlayByUsername.set(req.session.user.username, Date.now());
+    }
+
+    processTtsQueue();
+    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
 });
 
 // Save last TTS clip as a permanent sound file
@@ -2356,6 +2443,12 @@ app.post('/api/tts/save', requireAuth, async (req, res) => {
 
     console.log('[TTS Save] saved %s (%s bytes, %.1fs) by %s', finalName, fs.statSync(targetPath).size, duration || 0, username);
     res.json({ ok: true, filename: finalName, displayName: meta.displayName, duration });
+});
+
+app.post('/api/tts/queue/clear', requireAdmin, (req, res) => {
+    ttsQueue.length = 0;
+    console.log('[TTS Queue] cleared by %s', req.session.user.username);
+    res.json({ ok: true });
 });
 
 const token = (process.env.DISCORD_TOKEN || '').trim();

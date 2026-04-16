@@ -717,6 +717,10 @@
                 <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
+            <div class="hidden" id="ttsQueueInfo" style="display:none;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem;">
+                <span id="ttsQueueText"></span>
+                <button type="button" class="btn btn-ghost btn-sm hidden" id="ttsQueueClearBtn" onclick="clearTtsQueue()" style="padding:0.15rem 0.4rem;font-size:0.75rem;">Clear Queue</button>
+            </div>
         </div>
         <div class="card sounds-card">
             <div class="sounds-card-header">
@@ -836,6 +840,7 @@
                 <button type="button" class="superadmin-tab" data-panel="guests" onclick="switchSuperadminTab('guests')">Guests</button>
                 <button type="button" class="superadmin-tab" data-panel="users" onclick="switchSuperadminTab('users')">Users<span class="tab-badge hidden" id="superadminTabUsersBadge">0</span></button>
                 <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation<span class="tab-badge hidden" id="superadminTabModerationBadge">0</span></button>
+                <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
             </div>
 
             <div id="superadminPanelAccess" class="superadmin-panel active">
@@ -938,6 +943,12 @@
                             <input type="number" id="ttsCooldownSecAdminInput" min="0" max="300" value="5" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsCooldownSecSetting('admin', this.value)">
                         </label>
                     </div>
+                    <div class="row" style="gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Max queue size:</span>
+                            <input type="number" id="ttsMaxQueueSizeInput" min="1" max="50" value="10" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxQueueSizeSetting(this.value)">
+                        </label>
+                    </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</p>
                 </div>
             </div>
@@ -994,6 +1005,26 @@
                         </table>
                     </div>
                     <div id="pendingUploadsEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No pending uploads</div>
+                </div>
+            </div>
+
+            <div id="superadminPanelTtsVoices" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Voice Management</div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Enable or disable voices. Toggle RVC refinement for Chatterbox voices.</p>
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Voice</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Engine</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Group</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;">Enabled</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;">RVC</th>
+                            </tr></thead>
+                            <tbody id="ttsVoicesBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="ttsVoicesEmpty" class="pending-empty hidden" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No voices available</div>
                 </div>
             </div>
         </div>
@@ -1456,6 +1487,7 @@
         function switchSuperadminTab(panelId) {
             document.querySelectorAll('.superadmin-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panelId));
             document.querySelectorAll('.superadmin-panel').forEach(p => p.classList.toggle('active', p.id === 'superadminPanel' + panelId.charAt(0).toUpperCase() + panelId.slice(1)));
+            if (panelId === 'ttsVoices') fetchTtsVoicesAdmin();
         }
 
         function openChangePasswordModal(forced) {
@@ -1732,6 +1764,7 @@
                     const u = document.getElementById('ttsCooldownSecUserInput'); if (u && d.ttsCooldownSec.user !== undefined) u.value = d.ttsCooldownSec.user;
                     const a = document.getElementById('ttsCooldownSecAdminInput'); if (a && d.ttsCooldownSec.admin !== undefined) a.value = d.ttsCooldownSec.admin;
                 }
+                if (d.ttsMaxQueueSize !== undefined) { const q = document.getElementById('ttsMaxQueueSizeInput'); if (q) q.value = d.ttsMaxQueueSize; }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -1889,6 +1922,11 @@
         async function setTtsCooldownSecSetting(role, val) {
             const obj = {}; obj[role] = Number(val);
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsCooldownSec: obj }) });
+        }
+        async function setTtsMaxQueueSizeSetting(val) {
+            const n = parseInt(val, 10);
+            if (!Number.isFinite(n) || n < 1) return;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsMaxQueueSize: n }) });
         }
 
         async function fetchGuestHistory() {
@@ -3414,6 +3452,24 @@
                 }
                 playback.tts = !!state.tts;
                 playback.ttsVoice = state.ttsVoice || null;
+                // TTS queue display
+                if (state.ttsQueue) {
+                    const qEl = document.getElementById('ttsQueueInfo');
+                    const qTxt = document.getElementById('ttsQueueText');
+                    const qClear = document.getElementById('ttsQueueClearBtn');
+                    if (qEl && qTxt) {
+                        if (state.ttsQueue.length > 0 || state.ttsQueue.playing) {
+                            qEl.style.display = 'flex';
+                            const parts = [];
+                            if (state.ttsQueue.playing) parts.push('TTS playing');
+                            if (state.ttsQueue.length > 0) parts.push(state.ttsQueue.length + ' queued');
+                            qTxt.textContent = parts.join(' \u2022 ');
+                            if (qClear) qClear.classList.toggle('hidden', !isAdminOrSuperadmin());
+                        } else {
+                            qEl.style.display = 'none';
+                        }
+                    }
+                }
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 if (state.volume !== undefined && Number.isFinite(state.volume) && isAdminOrSuperadmin()) {
@@ -3693,7 +3749,11 @@
                         setTtsStatus(`Wait ${data.cooldownRemaining}s before using TTS again.`, true);
                     }
                 } else {
-                    setTtsStatus('');
+                    if (data.queuePosition && data.queuePosition > 1) {
+                        setTtsStatus('Queued (#' + data.queuePosition + ')');
+                    } else {
+                        setTtsStatus('');
+                    }
                 }
             } catch (e) {
                 setTtsStatus('TTS request failed.', true);
@@ -3701,6 +3761,11 @@
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
             }
+        }
+
+        async function clearTtsQueue() {
+            const r = await api('/api/tts/queue/clear', { method: 'POST' });
+            if (r && r.ok && typeof showToast === 'function') showToast('TTS queue cleared');
         }
 
         async function saveTtsAsSound() {
@@ -3745,6 +3810,48 @@
             if (btn && settings) {
                 btn.classList.toggle('hidden', !(settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
             }
+        }
+
+        // --- TTS Voice Management (superadmin) ---
+        let _ttsAdminDisabled = [];
+        let _ttsAdminRvcOverrides = {};
+
+        async function fetchTtsVoicesAdmin() {
+            const res = await api('/api/tts/status');
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            const voices = data.voices || [];
+            _ttsAdminDisabled = data.disabledVoiceIds || [];
+            _ttsAdminRvcOverrides = data.rvcOverrides || {};
+            const tbody = document.getElementById('ttsVoicesBody');
+            const empty = document.getElementById('ttsVoicesEmpty');
+            if (!tbody) return;
+            if (voices.length === 0) { tbody.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return; }
+            if (empty) empty.classList.add('hidden');
+            tbody.innerHTML = voices.map(v => {
+                const disabled = _ttsAdminDisabled.includes(v.id);
+                const isCb = v.engine === 'chatterbox';
+                const rvcOn = isCb ? (_ttsAdminRvcOverrides[v.id] ?? true) : false;
+                return '<tr style="' + (disabled ? 'opacity:0.5' : '') + '">'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem">' + (isCb ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)">--</span>') + '</td>'
+                    + '</tr>';
+            }).join('');
+        }
+
+        async function toggleTtsVoiceEnabled(voiceId, enabled) {
+            if (enabled) { _ttsAdminDisabled = _ttsAdminDisabled.filter(id => id !== voiceId); }
+            else if (!_ttsAdminDisabled.includes(voiceId)) { _ttsAdminDisabled.push(voiceId); }
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsDisabledVoices: _ttsAdminDisabled }) });
+            fetchTtsVoicesAdmin();
+        }
+
+        async function toggleTtsVoiceRvc(voiceId, rvcOn) {
+            _ttsAdminRvcOverrides[voiceId] = rvcOn;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsVoiceRvcOverrides: _ttsAdminRvcOverrides }) });
         }
 
         async function uploadSound(file) {
