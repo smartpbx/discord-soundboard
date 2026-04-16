@@ -1,19 +1,8 @@
 #!/usr/bin/env bash
-# TTS Server - Proxmox LXC install script (GPU-enabled)
-# Creates a container with NVIDIA GPU passthrough, installs the TTS service.
-#
-# Prerequisites:
-#   - NVIDIA driver installed on the Proxmox host
-#   - /dev/nvidia* devices available on the host
+# TTS Server - Proxmox LXC install script with automatic GPU detection
+# Creates a container, detects and passes through GPU devices, installs the TTS service.
 #
 # Usage: ./install-tts-server.sh [install|update]
-# GPU passthrough: After install, add to /etc/pve/lxc/<CTID>.conf:
-#   lxc.cgroup2.devices.allow: c 195:* rwm
-#   lxc.cgroup2.devices.allow: c 509:* rwm
-#   lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
-#   lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
-#   lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
-#   lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
 
 set -e
 
@@ -29,6 +18,13 @@ IP="${IP:-}"
 GIT_URL="${GIT_URL:-https://github.com/smartpbx/discord-soundboard.git}"
 APP_DIR="/opt/discord-soundboard"
 TEMPLATE_DEBIAN="${TEMPLATE_DEBIAN:-}"
+
+# --- Colors ---
+BL="\e[36m"; GN="\e[32m"; RD="\e[31m"; YW="\e[33m"; CL="\e[0m"
+msg_info() { echo -e " ${BL}[i]${CL} $1"; }
+msg_ok()   { echo -e " ${GN}[+]${CL} $1"; }
+msg_warn() { echo -e " ${YW}[!]${CL} $1"; }
+msg_err()  { echo -e " ${RD}[x]${CL} $1"; }
 
 # --- Help ---
 usage() {
@@ -58,19 +54,127 @@ get_next_ctid() {
         fi
         id=$((id + 1))
     done
-    echo "Could not find free container ID" >&2
+    msg_err "Could not find free container ID"
     return 1
+}
+
+# --- GPU Detection (runs on Proxmox host) ---
+detect_gpu() {
+    GPU_TYPE=""
+    GPU_DEVICES=()
+
+    local pci_info
+    pci_info=$(lspci -nn 2>/dev/null | grep -E "VGA|Display|3D" || true)
+
+    if [[ -z "$pci_info" ]]; then
+        msg_warn "No GPU detected via lspci"
+        return
+    fi
+
+    # NVIDIA - vendor ID [10de]
+    if grep -q "\[10de:" <<<"$pci_info"; then
+        GPU_TYPE="nvidia"
+        for d in /dev/nvidia{0,1,2,3,4,5,6,7} /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/nvidia-uvm-tools; do
+            [[ -c "$d" ]] && GPU_DEVICES+=("$d")
+        done
+        if [[ -d /dev/nvidia-caps ]]; then
+            for d in /dev/nvidia-caps/*; do
+                [[ -c "$d" ]] && GPU_DEVICES+=("$d")
+            done
+        fi
+    # Intel iGPU - vendor ID [8086]
+    elif grep -q "\[8086:" <<<"$pci_info"; then
+        GPU_TYPE="intel"
+        for d in /dev/dri/renderD* /dev/dri/card*; do
+            [[ -e "$d" ]] && GPU_DEVICES+=("$d")
+        done
+    # AMD - vendor IDs [1002] or [1022]
+    elif grep -qE "\[1002:|\[1022:" <<<"$pci_info"; then
+        GPU_TYPE="amd"
+        for d in /dev/dri/renderD* /dev/dri/card*; do
+            [[ -e "$d" ]] && GPU_DEVICES+=("$d")
+        done
+    fi
+}
+
+# --- Configure GPU passthrough in LXC config ---
+configure_gpu_passthrough() {
+    local lxc_config="/etc/pve/lxc/${CTID}.conf"
+
+    if [[ ${#GPU_DEVICES[@]} -eq 0 ]]; then
+        msg_warn "No GPU devices to pass through"
+        return
+    fi
+
+    msg_info "Configuring ${GPU_TYPE^^} GPU passthrough (${#GPU_DEVICES[@]} devices)..."
+
+    # Stop container to modify config
+    local was_running=false
+    if pct status "${CTID}" 2>/dev/null | grep -q running; then
+        was_running=true
+        pct stop "${CTID}" 2>/dev/null || true
+        sleep 2
+    fi
+
+    # Remove any existing dev lines to avoid duplicates
+    sed -i '/^dev[0-9]*:/d' "$lxc_config"
+
+    # Add device entries using Proxmox dev syntax
+    local idx=0
+    for dev in "${GPU_DEVICES[@]}"; do
+        echo "dev${idx}: ${dev}" >> "$lxc_config"
+        idx=$((idx + 1))
+    done
+
+    # Start container back up
+    if $was_running || true; then
+        pct start "${CTID}"
+        for i in $(seq 1 30); do
+            pct exec "${CTID}" -- true 2>/dev/null && break
+            sleep 2
+        done
+    fi
+
+    msg_ok "GPU passthrough configured (${#GPU_DEVICES[@]} devices passed through)"
+}
+
+# --- Setup auto-login (no password required for pct enter) ---
+setup_autologin() {
+    msg_info "Configuring auto-login..."
+    pct exec "${CTID}" -- bash -c '
+        GETTY_OVERRIDE="/etc/systemd/system/container-getty@1.service.d/override.conf"
+        mkdir -p "$(dirname "$GETTY_OVERRIDE")"
+        cat > "$GETTY_OVERRIDE" <<AEOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud tty%I 115200,38400,9600 \$TERM
+AEOF
+        systemctl daemon-reload
+        systemctl restart "container-getty@1.service" 2>/dev/null || true
+    '
+    msg_ok "Auto-login configured (pct enter ${CTID} drops to root shell)"
+}
+
+# --- Set container description/notes ---
+set_description() {
+    local desc="<div align='center'>
+<h3>TTS Server (Kokoro)</h3>
+<p>Text-to-Speech service for Discord Soundboard</p>
+<p>API: http://\${CONTAINER_IP}:8880</p>
+<p>GPU: ${GPU_TYPE:-none}</p>
+</div>"
+    pct set "${CTID}" --description "$desc" 2>/dev/null || true
 }
 
 # --- Update ---
 do_update() {
     if [[ -z "${CTID:-}" ]]; then
-        echo "For update, set CTID (e.g. CTID=201 $0 update)"
+        msg_err "For update, set CTID (e.g. CTID=201 $0 update)"
         exit 1
     fi
-    echo "[*] Updating TTS server in CT ${CTID}..."
+    msg_info "Updating TTS server in CT ${CTID}..."
     pct exec "${CTID}" -- bash -c "cd ${APP_DIR} && git pull && ${APP_DIR}/tts-server/.venv/bin/pip install -r ${APP_DIR}/tts-server/requirements.txt && systemctl restart tts-server"
-    echo "[+] TTS update done. Models were not changed."
+    msg_ok "TTS update done. Models were not changed."
 }
 
 if [[ "${1:-}" == "update" ]]; then
@@ -79,23 +183,41 @@ if [[ "${1:-}" == "update" ]]; then
 fi
 
 # --- Install ---
-echo "[*] TTS Server - Proxmox LXC installer (GPU-enabled)"
+echo ""
+echo -e "${BL}╔══════════════════════════════════════════╗${CL}"
+echo -e "${BL}║   TTS Server - Proxmox LXC Installer     ║${CL}"
+echo -e "${BL}╚══════════════════════════════════════════╝${CL}"
+echo ""
+
+# Detect GPU on host
+msg_info "Detecting GPU on host..."
+detect_gpu
+if [[ -n "$GPU_TYPE" ]]; then
+    msg_ok "Detected ${GPU_TYPE^^} GPU (${#GPU_DEVICES[@]} devices: ${GPU_DEVICES[*]})"
+else
+    msg_warn "No GPU detected. TTS will run on CPU (slower but functional)."
+    echo "    To use GPU, ensure NVIDIA/Intel/AMD drivers are installed on the host."
+    echo ""
+    read -p "    Continue without GPU? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || exit 0
+fi
 
 # Resolve CTID
 if [[ -n "${CTID:-}" ]]; then
-    echo "[*] Using container ID: ${CTID}"
+    msg_info "Using container ID: ${CTID}"
 else
     for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
         conf_hostname=$(pct config "$id" 2>/dev/null | grep '^hostname:' | sed 's/.*: *//;s/^ *//;s/ *$//')
         if [[ "$conf_hostname" == "${HOSTNAME}" ]]; then
             CTID="$id"
-            echo "[*] Found existing container with hostname ${HOSTNAME}: ${CTID}"
+            msg_info "Found existing container with hostname ${HOSTNAME}: ${CTID} (resuming)"
             break
         fi
     done
     if [[ -z "${CTID:-}" ]]; then
         CTID=$(get_next_ctid)
-        echo "[*] Using next free container ID: ${CTID}"
+        msg_info "Using next free container ID: ${CTID}"
     fi
 fi
 
@@ -110,15 +232,15 @@ if [[ -z "${TEMPLATE_DEBIAN}" ]]; then
         fi
     done
     if [[ -z "${TEMPLATE_DEBIAN}" ]]; then
-        echo "No Debian/Ubuntu template found. Download one from the Proxmox UI."
+        msg_err "No Debian/Ubuntu template found. Download one from the Proxmox UI."
         exit 1
     fi
 fi
-echo "[*] Using template: ${TEMPLATE_DEBIAN}"
+msg_info "Using template: ${TEMPLATE_DEBIAN}"
 
 # Create CT if not exists
 if ! pct status "${CTID}" &>/dev/null; then
-    echo "[*] Creating LXC ${CTID}..."
+    msg_info "Creating LXC ${CTID} (${HOSTNAME})..."
     NET="name=eth0,bridge=${BRIDGE}"
     if [[ -n "${IP}" ]]; then
         NET="${NET},ip=${IP}"
@@ -134,31 +256,27 @@ if ! pct status "${CTID}" &>/dev/null; then
     else
         NS_FOR_CT="--nameserver 8.8.8.8"
     fi
-    # NOTE: GPU LXC needs privileged mode for device passthrough
     pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
         --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=1 ${NS_FOR_CT} --onboot 1
 
-    ROOT_PASSWORD="${ROOT_PASSWORD:-$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)}"
-    echo "[*] Starting container..."
+    msg_info "Starting container..."
     pct start "${CTID}"
 
-    echo "[*] Waiting for container to boot..."
+    msg_info "Waiting for container to boot..."
     for i in $(seq 1 30); do
         if pct exec "${CTID}" -- true 2>/dev/null; then break; fi
         sleep 2
     done
     if ! pct exec "${CTID}" -- true 2>/dev/null; then
-        echo "[!] Container did not become ready. Check: pct status ${CTID}"
+        msg_err "Container did not become ready. Check: pct status ${CTID}"
         exit 1
     fi
-    echo "[*] Setting root password..."
-    pct exec "${CTID}" -- bash -c "echo 'root:${ROOT_PASSWORD}' | chpasswd"
-    echo "[+] Container ${CTID} is running. Root password: ${ROOT_PASSWORD}"
+    msg_ok "Container ${CTID} is running"
 fi
 
 # Container must be running
 if ! pct status "${CTID}" | grep -q running; then
-    echo "[*] Starting CT ${CTID}..."
+    msg_info "Starting CT ${CTID}..."
     pct start "${CTID}"
     for i in $(seq 1 20); do
         pct exec "${CTID}" -- true 2>/dev/null && break
@@ -166,8 +284,16 @@ if ! pct status "${CTID}" | grep -q running; then
     done
 fi
 
+# Configure GPU passthrough (auto-detect already ran above)
+if [[ -n "$GPU_TYPE" && ${#GPU_DEVICES[@]} -gt 0 ]]; then
+    configure_gpu_passthrough
+fi
+
+# Setup auto-login
+setup_autologin
+
 # Wait for network
-echo "[*] Waiting for container network..."
+msg_info "Waiting for container network..."
 ip_in_ct=""
 for i in $(seq 1 25); do
     ip_in_ct=$(pct exec "${CTID}" -- ip -4 addr show dev eth0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1)
@@ -175,13 +301,13 @@ for i in $(seq 1 25); do
     sleep 1
 done
 if [[ -z "$ip_in_ct" ]]; then
-    echo "[!] No IP on eth0 after 25s."
+    msg_err "No IP on eth0 after 25s."
     exit 1
 fi
-echo "[*] Container network ready (${ip_in_ct})"
+msg_ok "Container network ready (${ip_in_ct})"
 
 # Ensure DNS
-echo "[*] Ensuring container DNS..."
+msg_info "Ensuring container DNS..."
 HOST_NS=$(grep "^nameserver" /etc/resolv.conf 2>/dev/null | head -2 | awk '{print $2}' | tr '\n' ' ')
 if [[ -z "$HOST_NS" ]]; then HOST_NS="8.8.8.8 1.1.1.1"; fi
 pct exec "${CTID}" -- bash -c 'if ! grep -q "^nameserver" /etc/resolv.conf 2>/dev/null; then
@@ -191,34 +317,34 @@ sleep 5
 if ! pct exec "${CTID}" -- getent hosts deb.debian.org &>/dev/null; then
   sleep 5
   if ! pct exec "${CTID}" -- getent hosts deb.debian.org &>/dev/null; then
-    echo "[!] Container cannot resolve DNS."
+    msg_err "Container cannot resolve DNS."
     exit 1
   fi
 fi
 
 # Run container-side install script
 INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/smartpbx/discord-soundboard/main/proxmox/install/tts-server-install.sh}"
-echo "[*] Running install inside container..."
-pct exec "${CTID}" -- bash -c "apt-get update -qq && apt-get install -y curl ca-certificates && curl -fsSL '${INSTALL_SCRIPT_URL}' | env APP_DIR='${APP_DIR}' GIT_URL='${GIT_URL}' bash -s"
+msg_info "Running install inside container..."
+pct exec "${CTID}" -- bash -c "apt-get update -qq && apt-get install -y curl ca-certificates && curl -fsSL '${INSTALL_SCRIPT_URL}' | env APP_DIR='${APP_DIR}' GIT_URL='${GIT_URL}' GPU_TYPE='${GPU_TYPE}' bash -s"
+
+# Set container description in Proxmox UI
+CONTAINER_IP=$(pct exec "${CTID}" -- hostname -I 2>/dev/null | awk '{print $1}' || true)
+set_description
 
 # Show access info
-CONTAINER_IP=$(pct exec "${CTID}" -- hostname -I 2>/dev/null | awk '{print $1}' || true)
 echo ""
-echo "[+] Done. TTS server is running in CT ${CTID}."
-echo "    API:     http://${CONTAINER_IP:-<container-ip>}:8880"
-echo "    Health:  curl http://${CONTAINER_IP:-<container-ip>}:8880/health"
-echo "    Logs:    pct exec ${CTID} -- journalctl -u tts-server -f"
-echo "    Update:  CTID=${CTID} $0 update   (or inside CT: update)"
+echo -e "${GN}══════════════════════════════════════════${CL}"
+echo -e "${GN}  TTS Server installed successfully!${CL}"
+echo -e "${GN}══════════════════════════════════════════${CL}"
 echo ""
-echo "[!] GPU passthrough: Add the following to /etc/pve/lxc/${CTID}.conf and restart:"
-echo "    lxc.cgroup2.devices.allow: c 195:* rwm"
-echo "    lxc.cgroup2.devices.allow: c 509:* rwm"
-echo "    lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file"
-echo "    lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file"
-echo "    lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file"
-echo "    lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file"
+echo "    Container:  CT ${CTID} (${HOSTNAME})"
+echo "    API:        http://${CONTAINER_IP:-<container-ip>}:8880"
+echo "    Health:     curl http://${CONTAINER_IP:-<container-ip>}:8880/health"
+echo "    GPU:        ${GPU_TYPE:-none} (${#GPU_DEVICES[@]} devices)"
+echo "    Logs:       pct exec ${CTID} -- journalctl -u tts-server -f"
+echo "    Console:    pct enter ${CTID}  (auto-login, no password)"
+echo "    Update:     CTID=${CTID} $0 update   (or inside CT: update)"
 echo ""
-echo "[!] Then set TTS_API_URL=http://${CONTAINER_IP:-<container-ip>}:8880 in your soundboard .env"
-if [[ -n "${ROOT_PASSWORD:-}" ]]; then
-    echo "    Root:    pct enter ${CTID}  (password: ${ROOT_PASSWORD})"
-fi
+echo -e "${YW}  Next step: Add to your soundboard .env:${CL}"
+echo "    TTS_API_URL=http://${CONTAINER_IP:-<container-ip>}:8880"
+echo ""
