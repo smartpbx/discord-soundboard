@@ -2297,7 +2297,9 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
 });
 
 // Save last TTS clip as a permanent sound file
-app.post('/api/tts/save', requireAdmin, async (req, res) => {
+app.post('/api/tts/save', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot save TTS clips.' });
     const username = req.session.user.username;
     const cached = ttsLastBuffer.get(username);
     if (!cached || !cached.wavBuffer) return res.status(404).json({ error: 'No TTS clip to save. Speak something first.' });

@@ -3298,7 +3298,7 @@
                 // Show while TTS is active, or if TTS was the last thing played (idle now)
                 if (playback.tts && playback.status !== 'idle') lastTtsPlayed = true;
                 else if (playback.status !== 'idle' && !playback.tts) lastTtsPlayed = false;
-                const showSave = lastTtsPlayed && isAdminOrSuperadmin();
+                const showSave = lastTtsPlayed && user && user.role !== 'guest';
                 saveBtn.classList.toggle('hidden', !showSave);
             }
         }
@@ -3704,7 +3704,7 @@
         }
 
         async function saveTtsAsSound() {
-            if (!isAdminOrSuperadmin()) return;
+            if (!user || user.role === 'guest') return;
             const name = prompt('Save TTS clip as sound.\nEnter a name:', '');
             if (name === null) return; // cancelled
             const displayName = name.trim() || undefined;
