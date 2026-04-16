@@ -33,10 +33,10 @@ fi
 # --- Pre-configured voices ---
 declare -A PRESETS_NAME PRESETS_PTH PRESETS_INDEX PRESETS_GENDER PRESETS_GROUP
 
-# --- Politicians ---
+# --- Politicians (best quality sources with high epoch counts) ---
 PRESETS_NAME[trump]="Donald Trump"
-PRESETS_PTH[trump]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/trump.pth"
-PRESETS_INDEX[trump]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/trump.index"
+PRESETS_PTH[trump]="https://huggingface.co/0x3e9/Trump_RVC/resolve/main/trump.zip"
+PRESETS_INDEX[trump]=""
 PRESETS_GENDER[trump]="male"
 PRESETS_GROUP[trump]="Celebrity"
 
@@ -47,8 +47,8 @@ PRESETS_GENDER[biden]="male"
 PRESETS_GROUP[biden]="Celebrity"
 
 PRESETS_NAME[obama]="Barack Obama"
-PRESETS_PTH[obama]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/obama.pth"
-PRESETS_INDEX[obama]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/obama.index"
+PRESETS_PTH[obama]="https://huggingface.co/0x3e9/Obama_RVC/resolve/main/obama.zip"
+PRESETS_INDEX[obama]=""
 PRESETS_GENDER[obama]="male"
 PRESETS_GROUP[obama]="Celebrity"
 
@@ -59,6 +59,24 @@ PRESETS_GENDER[elon]="male"
 PRESETS_GROUP[elon]="Celebrity"
 
 # --- Actors ---
+PRESETS_NAME[freeman]="Morgan Freeman"
+PRESETS_PTH[freeman]="https://huggingface.co/Supanovah/MorganFreeman/resolve/main/MorganFreeman_e440_s4840.zip"
+PRESETS_INDEX[freeman]=""
+PRESETS_GENDER[freeman]="male"
+PRESETS_GROUP[freeman]="Celebrity"
+
+PRESETS_NAME[arnold]="Arnold Schwarzenegger"
+PRESETS_PTH[arnold]="https://huggingface.co/yraziel/Schwarzenegger/resolve/main/Schwarzenegger_e300_s27600.zip"
+PRESETS_INDEX[arnold]=""
+PRESETS_GENDER[arnold]="male"
+PRESETS_GROUP[arnold]="Celebrity"
+
+PRESETS_NAME[snoop]="Snoop Dogg"
+PRESETS_PTH[snoop]="https://huggingface.co/Supanovah/SnoopDogg/resolve/main/snoop.zip"
+PRESETS_INDEX[snoop]=""
+PRESETS_GENDER[snoop]="male"
+PRESETS_GROUP[snoop]="Celebrity"
+
 PRESETS_NAME[jack_black]="Jack Black"
 PRESETS_PTH[jack_black]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/jack_black.pth"
 PRESETS_INDEX[jack_black]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/jack_black.index"
