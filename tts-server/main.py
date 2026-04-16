@@ -1,9 +1,5 @@
 """TTS Service -- FastAPI app exposing Kokoro + RVC for the Discord soundboard."""
 
-# NOTE: fairseq 0.12.2 has mutable dataclass defaults that break on Python 3.11+.
-# The fix is applied by tts-server/scripts/fix-fairseq.sh which patches the
-# installed fairseq source directly. Run it after installing/updating fairseq.
-
 import os
 import time
 import logging
