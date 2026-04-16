@@ -13,6 +13,7 @@ const multer = require('multer');
 const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const statsDb = require('./lib/stats-db');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -910,7 +911,22 @@ class AudioMixer extends Readable {
 }
 
 let activeMixer = null;
-let activeTracks = new Map(); // trackId -> { filename, displayName, startTime, startTimeOffset, duration, startedBy, volume }
+let activeTracks = new Map(); // trackId -> { filename, displayName, startTime, startTimeOffset, duration, startedBy, volume, playId }
+let currentSinglePlayId = null; // DB row id for the in-flight single-play track (null in multi-play mode)
+
+function finalizeAllOpenPlays(stoppedEarly) {
+    const opts = typeof stoppedEarly === 'boolean' ? { stoppedEarly } : {};
+    if (currentSinglePlayId != null) {
+        statsDb.recordPlayEnd(currentSinglePlayId, opts);
+        currentSinglePlayId = null;
+    }
+    for (const t of activeTracks.values()) {
+        if (t && t.playId != null) {
+            statsDb.recordPlayEnd(t.playId, opts);
+            t.playId = null;
+        }
+    }
+}
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
@@ -1029,6 +1045,7 @@ player.on('error', error => {
     const meta = error.resource?.metadata ?? 'unknown';
     console.error(`❌ Audio Player Error: ${error.message} (resource: ${meta})`);
     console.log('[DIAG] player.error', error.message, 'resource:', meta);
+    finalizeAllOpenPlays(true);
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
@@ -1038,6 +1055,7 @@ player.on('stateChange', (oldState, newState) => {
     console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
     if (newState.status === AudioPlayerStatus.Idle) {
         const wasTts = playbackState.tts === true;
+        finalizeAllOpenPlays();
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
@@ -1915,6 +1933,16 @@ app.post('/api/play', requireAuth, async (req, res) => {
         }
 
         const startedBy = { username: req.session.user.username, role: req.session.user.role };
+        const effectivePlayDuration = playDuration != null ? playDuration : duration;
+        const plannedDurationMs = effectivePlayDuration != null ? Math.round(effectivePlayDuration * 1000) : null;
+        const newPlayId = statsDb.recordPlayStart({
+            filename: safeFilename,
+            displayName,
+            userId: isGuest ? null : req.session.user.username,
+            userRole: role,
+            guestIp: isGuest ? getClientIP(req) : null,
+            plannedDurationMs,
+        });
 
         if (multiPlayEnabled) {
             // --- Multi-play mode: use PCM mixer ---
@@ -1930,7 +1958,8 @@ app.post('/api/play', requireAuth, async (req, res) => {
 
             // If this sound has stopOthers, clear everything first
             if (soundStopOthers || !isSomeonePlaying) {
-                // Stop existing mixer if any
+                // Stop existing mixer if any — finalize any open plays as stopped-early first
+                finalizeAllOpenPlays(true);
                 if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
                 activeTracks.clear();
                 player.stop();
@@ -1953,8 +1982,19 @@ app.post('/api/play', requireAuth, async (req, res) => {
                 displayName,
                 startTime: Date.now(),
                 startTimeOffset: startTime,
-                duration: playDuration != null ? playDuration : duration,
+                duration: effectivePlayDuration,
                 startedBy,
+                playId: newPlayId,
+            });
+            ff.on('close', () => {
+                const track = activeTracks.get(trackId);
+                if (track && track.playId != null) {
+                    const elapsedMs = Date.now() - track.startTime;
+                    const plannedMs = track.duration != null ? track.duration * 1000 : null;
+                    const stoppedEarly = plannedMs != null && elapsedMs < plannedMs - 250;
+                    statsDb.recordPlayEnd(track.playId, { stoppedEarly });
+                    track.playId = null;
+                }
             });
 
             // Update primary playback state to latest track
@@ -1964,11 +2004,16 @@ app.post('/api/play', requireAuth, async (req, res) => {
                 displayName,
                 startTime: Date.now(),
                 startTimeOffset: startTime,
-                duration: playDuration != null ? playDuration : duration,
+                duration: effectivePlayDuration,
                 startedBy,
             };
         } else {
             // --- Single-play mode: existing behavior ---
+            // A new single-play preempts whatever was playing — finalize the prior row.
+            if (currentSinglePlayId != null) {
+                statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+                currentSinglePlayId = null;
+            }
             let stream;
             const needsFfmpeg = startTime > 0 || playDuration != null;
             if (needsFfmpeg) {
@@ -1991,13 +2036,14 @@ app.post('/api/play', requireAuth, async (req, res) => {
             });
             resource.volume.setVolume(effectiveVolume);
             player.play(resource);
+            currentSinglePlayId = newPlayId;
             playbackState = {
                 status: 'playing',
                 filename: safeFilename,
                 displayName,
                 startTime: Date.now(),
                 startTimeOffset: startTime,
-                duration: playDuration != null ? playDuration : duration,
+                duration: effectivePlayDuration,
                 startedBy,
             };
         }
@@ -2074,6 +2120,26 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         }
     }
     res.json(state);
+});
+
+// Play-count map keyed by filename — safe for all authenticated users (drives heatmap, badges).
+app.get('/api/stats/play-counts', requireAuth, (req, res) => {
+    res.json(statsDb.getPlayCounts());
+});
+
+// Paginated audit list — admin+ only.
+app.get('/api/stats/plays', requireAdmin, (req, res) => {
+    const toInt = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    const from = toInt(req.query.from);
+    const to = toInt(req.query.to);
+    const user = req.query.user ? String(req.query.user) : null;
+    const sound = req.query.sound ? String(req.query.sound) : null;
+    const limit = toInt(req.query.limit) ?? 100;
+    const offset = toInt(req.query.offset) ?? 0;
+    res.json(statsDb.listPlays({ from, to, user, sound, limit, offset }));
 });
 
 app.post('/api/stop', requireAdmin, (req, res) => {
