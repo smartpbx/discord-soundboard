@@ -33,9 +33,10 @@ fi
 # --- Pre-configured voices ---
 declare -A PRESETS_NAME PRESETS_PTH PRESETS_INDEX PRESETS_GENDER PRESETS_GROUP
 
+# --- Politicians ---
 PRESETS_NAME[trump]="Donald Trump"
-PRESETS_PTH[trump]="https://huggingface.co/binant/Donald_Trump__RVC_v2_/resolve/main/model.pth"
-PRESETS_INDEX[trump]="https://huggingface.co/binant/Donald_Trump__RVC_v2_/resolve/main/model.index"
+PRESETS_PTH[trump]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/trump.pth"
+PRESETS_INDEX[trump]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/trump.index"
 PRESETS_GENDER[trump]="male"
 PRESETS_GROUP[trump]="Celebrity"
 
@@ -44,6 +45,62 @@ PRESETS_PTH[biden]="https://huggingface.co/0x3e9/Biden_RVC/resolve/main/biden.zi
 PRESETS_INDEX[biden]=""
 PRESETS_GENDER[biden]="male"
 PRESETS_GROUP[biden]="Celebrity"
+
+PRESETS_NAME[obama]="Barack Obama"
+PRESETS_PTH[obama]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/obama.pth"
+PRESETS_INDEX[obama]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/obama.index"
+PRESETS_GENDER[obama]="male"
+PRESETS_GROUP[obama]="Celebrity"
+
+PRESETS_NAME[elon]="Elon Musk"
+PRESETS_PTH[elon]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/elon_musk.pth"
+PRESETS_INDEX[elon]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/elon_musk.index"
+PRESETS_GENDER[elon]="male"
+PRESETS_GROUP[elon]="Celebrity"
+
+# --- Actors ---
+PRESETS_NAME[jack_black]="Jack Black"
+PRESETS_PTH[jack_black]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/jack_black.pth"
+PRESETS_INDEX[jack_black]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/jack_black.index"
+PRESETS_GENDER[jack_black]="male"
+PRESETS_GROUP[jack_black]="Celebrity"
+
+PRESETS_NAME[emma_watson]="Emma Watson"
+PRESETS_PTH[emma_watson]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/emma_watson_230.pth"
+PRESETS_INDEX[emma_watson]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/emma_watson_230.index"
+PRESETS_GENDER[emma_watson]="female"
+PRESETS_GROUP[emma_watson]="Celebrity"
+
+# --- Cartoon / Fictional ---
+PRESETS_NAME[homer]="Homer Simpson"
+PRESETS_PTH[homer]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/homer_simpson.pth"
+PRESETS_INDEX[homer]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/homer_simpson.index"
+PRESETS_GENDER[homer]="male"
+PRESETS_GROUP[homer]="Cartoon"
+
+PRESETS_NAME[rick]="Rick Sanchez"
+PRESETS_PTH[rick]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/rick_sanchez.pth"
+PRESETS_INDEX[rick]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/rick_sanchez.index"
+PRESETS_GENDER[rick]="male"
+PRESETS_GROUP[rick]="Cartoon"
+
+PRESETS_NAME[patrick]="Patrick Star"
+PRESETS_PTH[patrick]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/patrick_star.pth"
+PRESETS_INDEX[patrick]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/patrick_star.index"
+PRESETS_GENDER[patrick]="male"
+PRESETS_GROUP[patrick]="Cartoon"
+
+PRESETS_NAME[stewie]="Stewie Griffin"
+PRESETS_PTH[stewie]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/stewie_griffin.pth"
+PRESETS_INDEX[stewie]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/stewie_griffin.index"
+PRESETS_GENDER[stewie]="male"
+PRESETS_GROUP[stewie]="Cartoon"
+
+PRESETS_NAME[batman]="Batman"
+PRESETS_PTH[batman]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/batman.pth"
+PRESETS_INDEX[batman]="https://huggingface.co/liamhvn/voice-models/resolve/main/rvc/batman.index"
+PRESETS_GENDER[batman]="male"
+PRESETS_GROUP[batman]="Cartoon"
 
 # --- Parse args ---
 ID="${1:-}"
