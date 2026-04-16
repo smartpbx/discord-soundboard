@@ -711,6 +711,9 @@ const userLastPlayByUsername = new Map();
 const ttsLastPlayByIP = new Map();
 const ttsLastPlayByUsername = new Map();
 const TTS_API_URL = (process.env.TTS_API_URL || '').replace(/\/+$/, '');
+// Cache last TTS WAV buffer per username so it can be saved as a sound
+// { wavBuffer: Buffer, text: string, voiceId: string, timestamp: number }
+const ttsLastBuffer = new Map();
 
 const COMPANION_TOKEN = (process.env.COMPANION_TOKEN || '').trim();
 function injectCompanionAuth(req) {
@@ -2235,6 +2238,9 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         return res.status(502).json({ error: 'Failed to read TTS audio' });
     }
 
+    // Cache for "save as sound" feature
+    ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
+
     const startedBy = { username: req.session.user.username, role };
     const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
 
@@ -2288,6 +2294,66 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         console.error('[TTS] play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play TTS audio' });
     }
+});
+
+// Save last TTS clip as a permanent sound file
+app.post('/api/tts/save', requireAdmin, async (req, res) => {
+    const username = req.session.user.username;
+    const cached = ttsLastBuffer.get(username);
+    if (!cached || !cached.wavBuffer) return res.status(404).json({ error: 'No TTS clip to save. Speak something first.' });
+
+    // Reject if the cached clip is too old (10 minutes)
+    if (Date.now() - cached.timestamp > 10 * 60 * 1000) {
+        ttsLastBuffer.delete(username);
+        return res.status(410).json({ error: 'TTS clip expired. Speak again first.' });
+    }
+
+    const { displayName, tags } = req.body || {};
+
+    // Generate filename from display name or text
+    const baseName = (displayName || cached.text || 'tts').trim();
+    let safeName = baseName.replace(/[^a-zA-Z0-9._\- ]/g, '_').replace(/\s+/g, '_').substring(0, 80);
+    if (!safeName) safeName = 'tts_clip';
+    safeName += '.mp3';
+
+    // Avoid overwriting existing files
+    const targetDir = path.join(__dirname, 'sounds');
+    let finalName = safeName;
+    let counter = 1;
+    while (fs.existsSync(path.join(targetDir, finalName))) {
+        finalName = safeName.replace('.mp3', `_${counter}.mp3`);
+        counter++;
+    }
+    const targetPath = path.join(targetDir, finalName);
+
+    // Convert WAV to MP3 via ffmpeg
+    try {
+        await new Promise((resolve, reject) => {
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-b:a', '192k', '-y', targetPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+            let stderr = '';
+            ff.stderr.on('data', chunk => { stderr += chunk.toString(); });
+            ff.on('error', reject);
+            ff.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-200)}`)));
+            Readable.from(cached.wavBuffer).pipe(ff.stdin);
+        });
+    } catch (e) {
+        console.error('[TTS Save] ffmpeg error:', e);
+        return res.status(500).json({ error: 'Failed to convert audio' });
+    }
+
+    // Probe duration and save metadata
+    const duration = probeDuration(targetPath);
+    const meta = { displayName: displayName || cached.text.substring(0, 80) };
+    if (duration != null) meta.duration = duration;
+    if (tags && Array.isArray(tags)) meta.tags = tags;
+    else meta.tags = ['TTS'];
+    setSoundMeta(finalName, meta);
+
+    // Clear the cached buffer
+    ttsLastBuffer.delete(username);
+
+    console.log('[TTS Save] saved %s (%s bytes, %.1fs) by %s', finalName, fs.statSync(targetPath).size, duration || 0, username);
+    res.json({ ok: true, filename: finalName, displayName: meta.displayName, duration });
 });
 
 const token = (process.env.DISCORD_TOKEN || '').trim();

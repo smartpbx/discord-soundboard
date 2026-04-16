@@ -660,6 +660,7 @@
             <div class="player-buttons">
                 <button type="button" class="btn btn-ghost btn-icon" id="playPauseBtn" onclick="togglePlayPause()" title="Play / Pause" disabled>▶</button>
                 <button type="button" class="btn btn-ghost btn-icon" id="stopBtn" onclick="stopPlayback()" title="Stop">⏹</button>
+                <button type="button" class="btn btn-ghost btn-icon hidden" id="ttsSaveBtn" onclick="saveTtsAsSound()" title="Save TTS clip as sound">💾</button>
                 <button type="button" class="btn btn-ghost btn-icon player-recent-toggle" id="recentToggleBtn" onclick="toggleRecentPlayed()" title="Recently played">▼</button>
             </div>
             <div class="player-recent hidden" id="playerRecent">
@@ -1028,7 +1029,8 @@
         let userMaxDuration = 7;
         let userCooldownSec = 0;
         let userLastPlayTime = 0;
-        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
+        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null, tts: false, ttsVoice: null };
+        let lastTtsPlayed = false;
         let playbackLockedBy = null;
         let playbackSuperadminOnly = false;
         let guestLastPlayTime = 0;
@@ -3290,6 +3292,15 @@
                     card.classList.remove('player-idle');
                 }
             }
+            // Show save button when TTS is/was playing (admin+ only)
+            const saveBtn = document.getElementById('ttsSaveBtn');
+            if (saveBtn) {
+                // Show while TTS is active, or if TTS was the last thing played (idle now)
+                if (playback.tts && playback.status !== 'idle') lastTtsPlayed = true;
+                else if (playback.status !== 'idle' && !playback.tts) lastTtsPlayed = false;
+                const showSave = lastTtsPlayed && isAdminOrSuperadmin();
+                saveBtn.classList.toggle('hidden', !showSave);
+            }
         }
 
         function formatTime(s) {
@@ -3401,6 +3412,8 @@
                     }
                     hideMultiTrackDisplay();
                 }
+                playback.tts = !!state.tts;
+                playback.ttsVoice = state.ttsVoice || null;
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 if (state.volume !== undefined && Number.isFinite(state.volume) && isAdminOrSuperadmin()) {
@@ -3687,6 +3700,38 @@
             } finally {
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
+            }
+        }
+
+        async function saveTtsAsSound() {
+            if (!isAdminOrSuperadmin()) return;
+            const name = prompt('Save TTS clip as sound.\nEnter a name:', '');
+            if (name === null) return; // cancelled
+            const displayName = name.trim() || undefined;
+
+            const saveBtn = document.getElementById('ttsSaveBtn');
+            if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '...'; }
+
+            try {
+                const r = await api('/api/tts/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ displayName, tags: ['TTS'] }),
+                });
+                if (!r) return;
+                const data = await r.json();
+                if (r.ok) {
+                    lastTtsPlayed = false;
+                    if (saveBtn) saveBtn.classList.add('hidden');
+                    fetchSounds();
+                    if (typeof showToast === 'function') showToast('TTS clip saved as "' + (data.displayName || data.filename) + '"');
+                } else {
+                    if (typeof showToast === 'function') showToast(data.error || 'Failed to save', true);
+                }
+            } catch {
+                if (typeof showToast === 'function') showToast('Failed to save TTS clip', true);
+            } finally {
+                if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '\uD83D\uDCBE'; }
             }
         }
 

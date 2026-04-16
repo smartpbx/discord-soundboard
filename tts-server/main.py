@@ -1,4 +1,4 @@
-"""TTS Service -- FastAPI app exposing Kokoro + Chatterbox + RVC for the Discord soundboard."""
+"""TTS Service -- FastAPI app exposing Kokoro + Chatterbox + RVC + GPT-SoVITS for the Discord soundboard."""
 
 import os
 import time
@@ -18,7 +18,7 @@ app = FastAPI(title="TTS Service", version="2.0.0")
 # Engine loading (lazy -- first request triggers model load)
 # ---------------------------------------------------------------------------
 
-from engines import kokoro_engine, rvc_engine, chatterbox_engine  # noqa: E402
+from engines import kokoro_engine, rvc_engine, chatterbox_engine, gptsovits_engine  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,8 @@ def health():
         engines.append("chatterbox")
     if rvc_engine.get_voices():
         engines.append("rvc")
+    if gptsovits_engine.get_voices():
+        engines.append("gptsovits")
     return {"status": "ok", "engines": engines}
 
 
@@ -71,6 +73,7 @@ def voices():
     for rv in rvc_engine.get_voices():
         if rv["id"].replace("rvc_", "") not in cb_base_ids:
             all_voices.append(rv)
+    all_voices.extend(gptsovits_engine.get_voices())
     return all_voices
 
 
@@ -86,6 +89,7 @@ def synthesize(req: SynthesizeRequest):
     cb_ids = chatterbox_engine.get_voice_ids()
     rvc_ids = rvc_engine.get_rvc_model_ids()
     kokoro_ids = kokoro_engine.get_voice_ids()
+    gsv_ids = gptsovits_engine.get_voice_ids()
 
     # -----------------------------------------------------------------------
     # Route 1: Chatterbox celebrity voice (cb_trump, cb_obama, etc.)
@@ -147,7 +151,23 @@ def synthesize(req: SynthesizeRequest):
         log.info("RVC done in %.2fs, %d bytes", t_rvc, len(wav_bytes))
 
     # -----------------------------------------------------------------------
-    # Route 3: Plain Kokoro voice (af_heart, am_adam, etc.)
+    # Route 3: GPT-SoVITS voice (gsv_*, external API server)
+    # -----------------------------------------------------------------------
+    elif voice_id in gsv_ids:
+        log.info("synthesize [gptsovits] voice=%s text_len=%d text_preview=%.60s",
+                 voice_id, len(text), text)
+
+        try:
+            wav_bytes = gptsovits_engine.synthesize(text, voice_id)
+        except Exception as e:
+            log.error("GPT-SoVITS synthesis failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"GPT-SoVITS synthesis failed: {e}")
+
+        t_tts = time.time() - t0
+        log.info("GPT-SoVITS done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
+    # -----------------------------------------------------------------------
+    # Route 4: Plain Kokoro voice (af_heart, am_adam, etc.)
     # -----------------------------------------------------------------------
     elif voice_id in kokoro_ids:
         log.info("synthesize [kokoro] voice=%s text_len=%d text_preview=%.60s",
