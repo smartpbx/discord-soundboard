@@ -1365,6 +1365,28 @@
             if (sec < 86400) return Math.floor(sec / 3600) + ' hr ago';
             return Math.floor(sec / 86400) + ' day' + (sec >= 172800 ? 's' : '') + ' ago';
         }
+        // Cached peaks are high-resolution so that a trimmed slice still has
+        // enough bars to render densely. Both consumers (main player + recent
+        // list) downsample at draw time.
+        const WAVEFORM_CACHE_PEAKS = 600;
+        function resamplePeaks(peaks, targetCount) {
+            if (!peaks || peaks.length <= targetCount) return peaks || [];
+            const groupSize = peaks.length / targetCount;
+            const out = [];
+            for (let i = 0; i < targetCount; i++) {
+                const start = Math.floor(i * groupSize);
+                const end = Math.min(peaks.length, Math.floor((i + 1) * groupSize));
+                let mn = 0, mx = 0;
+                for (let j = start; j < end; j++) {
+                    const p = peaks[j];
+                    if (p.min < mn) mn = p.min;
+                    if (p.max > mx) mx = p.max;
+                }
+                out.push({ min: mn, max: mx });
+            }
+            return out;
+        }
+
         async function loadWaveformForRecent(filename) {
             if (waveformCache[filename]) return;
             try {
@@ -1375,8 +1397,8 @@
                 var decoded = await ctx.decodeAudioData(buf);
                 var ch = decoded.getChannelData(0);
                 var duration = decoded.duration;
-                var bars = 60;
-                var step = Math.floor(ch.length / bars);
+                var bars = WAVEFORM_CACHE_PEAKS;
+                var step = Math.max(1, Math.floor(ch.length / bars));
                 var peaks = [];
                 for (var i = 0; i < bars; i++) {
                     var min = 0, max = 0;
@@ -1397,10 +1419,11 @@
             var w = canvas.width = rect.width || 200;
             var h = canvas.height = rect.height || 48;
             var ctx = canvas.getContext('2d');
-            var barCount = peaks.length;
+            var displayPeaks = resamplePeaks(peaks, 60);
+            var barCount = displayPeaks.length;
             var barW = Math.max(1, (w / barCount) - 0.5);
             ctx.clearRect(0, 0, w, h);
-            peaks.forEach(function(peak, i) {
+            displayPeaks.forEach(function(peak, i) {
                 var x = (i / barCount) * w;
                 var center = h / 2;
                 var halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.45));
@@ -3642,6 +3665,17 @@
             document.getElementById('waveformPlaceholder').style.display = 'block';
             document.getElementById('waveformWrap').style.display = 'none';
             if (!filename) return;
+            // Reuse the high-resolution cache if loadWaveformForRecent populated it first.
+            if (!cacheBust && waveformCache[filename] && waveformCache[filename].peaks && waveformCache[filename].peaks.length >= 400) {
+                waveformData = waveformCache[filename].peaks;
+                waveformDuration = waveformCache[filename].duration;
+                waveformFilename = filename;
+                document.getElementById('waveformPlaceholder').style.display = 'none';
+                document.getElementById('waveformWrap').style.display = 'block';
+                const total = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
+                drawWaveform(Math.min(getCurrentPlaybackTime(), total), total);
+                return;
+            }
             try {
                 const url = '/api/sounds/audio/' + encodeURIComponent(filename) + (cacheBust ? '?_=' + Date.now() : '');
                 const res = await fetch(url, { credentials: CREDENTIALS });
@@ -3651,8 +3685,8 @@
                 const decoded = await ctx.decodeAudioData(buf);
                 const ch = decoded.getChannelData(0);
                 const duration = decoded.duration;
-                const bars = 120;
-                const step = Math.floor(ch.length / bars);
+                const bars = WAVEFORM_CACHE_PEAKS;
+                const step = Math.max(1, Math.floor(ch.length / bars));
                 const peaks = [];
                 for (let i = 0; i < bars; i++) {
                     let min = 0, max = 0;
@@ -3680,37 +3714,57 @@
             const canvas = document.getElementById('waveformCanvas');
             const wrap = document.getElementById('waveformWrap');
             if (!wrap || wrap.style.display === 'none' || !waveformData || !waveformData.length) return;
-            const w = wrap.clientWidth || 600;
-            const h = 48;
-            canvas.width = w;
-            canvas.height = h;
+            const dpr = window.devicePixelRatio || 1;
+            const cssW = wrap.clientWidth || 600;
+            const cssH = 48;
+            const w = Math.floor(cssW * dpr);
+            const h = Math.floor(cssH * dpr);
+            if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+            canvas.style.width = cssW + 'px';
+            canvas.style.height = cssH + 'px';
             const ctx = canvas.getContext('2d');
             const barCount = waveformData.length;
             const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
             const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
             const isTrimmed = trimStart > 0 || (trimDuration < waveformDuration - 0.01);
-            let barsToDraw = waveformData;
+            let slicedPeaks = waveformData;
             if (isTrimmed && waveformDuration > 0) {
                 const startBar = Math.max(0, Math.floor((trimStart / waveformDuration) * barCount));
                 const endBar = Math.min(barCount, Math.ceil(((trimStart + trimDuration) / waveformDuration) * barCount));
-                barsToDraw = waveformData.slice(startBar, endBar);
+                slicedPeaks = waveformData.slice(startBar, endBar);
+                // If the slice is sparse (short trim of a long file), up-sample by
+                // repeating each peak so bars stay narrow. If it's still dense,
+                // downsample to the target visible count.
+                const targetBars = Math.max(60, Math.min(200, Math.floor(cssW / 5)));
+                if (slicedPeaks.length < targetBars && slicedPeaks.length > 0) {
+                    const expanded = new Array(targetBars);
+                    for (let i = 0; i < targetBars; i++) {
+                        expanded[i] = slicedPeaks[Math.floor(i * slicedPeaks.length / targetBars)];
+                    }
+                    slicedPeaks = expanded;
+                } else if (slicedPeaks.length > targetBars * 1.5) {
+                    slicedPeaks = resamplePeaks(slicedPeaks, targetBars);
+                }
+            } else if (slicedPeaks.length > 240) {
+                slicedPeaks = resamplePeaks(slicedPeaks, Math.max(120, Math.min(240, Math.floor(cssW / 5))));
             }
-            const drawBarCount = barsToDraw.length;
-            const barW = drawBarCount > 0 ? Math.max(1, (w / drawBarCount) - 1) : 0;
+            const drawBarCount = slicedPeaks.length;
+            const barW = drawBarCount > 0 ? Math.max(1, Math.floor(w / drawBarCount) - Math.ceil(dpr)) : 0;
             const total = totalDuration != null && totalDuration > 0 ? totalDuration : trimDuration;
             const progress = total > 0 ? (isTrimmed && trimDuration > 0 ? Math.min(1, Math.max(0, (currentTime - trimStart) / trimDuration)) : Math.min(1, currentTime / total)) : 0;
             const playheadX = progress * w;
             ctx.clearRect(0, 0, w, h);
-            barsToDraw.forEach((peak, i) => {
+            for (let i = 0; i < drawBarCount; i++) {
+                const peak = slicedPeaks[i];
                 const x = (i / drawBarCount) * w;
                 const center = h / 2;
-                const halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.4));
+                const halfH = Math.max(dpr, (Math.abs(peak.max - peak.min) / 2) * (h * 0.4));
                 const isPast = x + barW < playheadX;
                 ctx.fillStyle = isPast ? 'rgba(124, 58, 237, 0.6)' : 'rgba(42, 42, 50, 0.8)';
                 ctx.fillRect(x, center - halfH, barW, halfH * 2);
-            });
+            }
             ctx.fillStyle = 'rgba(255,255,255,0.9)';
-            ctx.fillRect(Math.floor(playheadX), 0, 2, h);
+            ctx.fillRect(Math.max(0, playheadX - dpr), 0, Math.max(2, Math.ceil(2 * dpr)), h);
         }
 
         let lastServerCurrentTimeReceivedAt = 0;
@@ -3755,6 +3809,28 @@
             }
             if (playback.status === 'paused') return pausedAt;
             return 0;
+        }
+
+        // Smooth playhead: a requestAnimationFrame loop that redraws the main
+        // waveform ~60fps during active playback. The 250ms tickWaveform
+        // interval still handles progress text + cooldown side-effects.
+        let waveformRafId = null;
+        function startWaveformRaf() {
+            if (waveformRafId != null) return;
+            const loop = () => {
+                waveformRafId = requestAnimationFrame(loop);
+                const isActive = playback.status === 'playing' || playback.status === 'paused';
+                if (!isActive || !waveformData || waveformDuration <= 0) return;
+                const current = getCurrentPlaybackTime();
+                const total = playback.duration != null ? playback.duration : waveformDuration;
+                const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+                const maxPos = trimStart > 0 && playback.duration != null ? trimStart + playback.duration : 999999;
+                drawWaveform(Math.min(current, maxPos), total);
+            };
+            waveformRafId = requestAnimationFrame(loop);
+        }
+        function stopWaveformRaf() {
+            if (waveformRafId != null) { cancelAnimationFrame(waveformRafId); waveformRafId = null; }
         }
 
         let lastProgressTimeStr = '';
@@ -4495,6 +4571,7 @@
             startSoundsPolling();
             startPresencePolling();
             setInterval(tickWaveform, 250);
+            startWaveformRaf();
             fetchChannels();
             fetchSounds();
             updateNowPlaying();
