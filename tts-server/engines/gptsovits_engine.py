@@ -129,17 +129,13 @@ def synthesize(text: str, voice_id: str) -> bytes:
     # Switch models if this voice specifies custom weights
     _set_model(voice)
 
-    # Read reference audio as raw bytes for multipart upload
-    with open(voice["_ref_path"], "rb") as f:
-        ref_audio = f.read()
-
-    # GPT-SoVITS v2 API: POST with reference audio, ref text, and target text
+    # GPT-SoVITS v2 API: POST with reference audio path, ref text, and target text
     payload = {
-        "refer_wav_path": voice["_ref_path"],
+        "ref_audio_path": voice["_ref_path"],
         "prompt_text": voice["_ref_text"],
-        "prompt_language": voice.get("language", "en"),
+        "prompt_lang": voice.get("language", "en"),
         "text": text,
-        "text_language": voice.get("language", "en"),
+        "text_lang": voice.get("language", "en"),
     }
 
     try:
