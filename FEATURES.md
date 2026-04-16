@@ -1,150 +1,203 @@
-# Discord Soundboard – Feature Roadmap
+# Discord Soundboard – Features & Roadmap
 
-Features to implement, in rough priority order. Completed items move to the bottom.
-
----
-
-## Authentication
-
-- [ ] **Discord OAuth login** – Users who are part of the Discord server can log in with their Discord account. Permissions are based on their server role (e.g. server admin → admin, custom role → user). Replaces or complements the current username/password auth.
+A self-hosted Discord soundboard with a web UI, multi-user roles, an SQLite-backed stats system, and a separate GPU TTS service. This document is a complete inventory of what the app does today, plus what's planned. Anything checked is shipped.
 
 ---
 
-## Sounds
+## Auth & sessions
 
-- [ ] **Playback queue** – Queue sounds instead of replacing; play next when current ends
-- [ ] **Sound button icons** – Icons, emojis, or custom images on each sound button
-- [ ] **Per-sound volume** – Saved per-sound multiplier applied at playback time
-- [ ] **Audio piping** – Stream computer audio (select app / exclude Discord) into the bot for admin/superadmin. Requires virtual audio device (PulseAudio virtual sink on Linux, VB-Cable on Windows)
-
----
-
-## Text-to-Speech roadmap
-
-The TTS system has its own multi-phase plan tracked in a dedicated GitHub issue. Quick status:
-
-- **Phase 1 — Kokoro (done):** 20 built-in generic voices, ultra-fast, CPU OK.
-- **Phase 2 — Chatterbox + RVC (done):** voice-cloned celebrity/character voices with optional RVC refinement on GPU.
-- **Phase 3 — GPT-SoVITS (done):** experimental third engine, used for one Trump test voice.
-- **Phase 4 — Save TTS as sound + recents (done):** floppy-disk button on Now Playing, per-user TTS history.
-- **Phase 5 — Superadmin Voice Management UI (done 2026-04-16):** add/replace/delete Chatterbox voices from the web UI via YouTube URL or audio upload, with in-browser preview and source provenance stored in `metadata.json`.
-- **Phase 6 — Expression slider (done 2026-04-16):** Chatterbox `exaggeration` 0.25–2.0 slider in the TTS card, hidden for non-Chatterbox voices.
-- [ ] **Phase 7 — Speed control:** `atempo` ffmpeg post-process slider (0.8×–1.5×, pitch-preserving). Works on every engine.
-- [ ] **Phase 8 — TTS clip caching:** SHA-256 of (text, voiceId, exaggeration, speed) → cached WAV; skip GPU work for repeated phrases.
-- [ ] **Phase 9 — OpenVoice integration:** Add OpenVoice as either a tone-color converter (post-process on Kokoro/Chatterbox output, like RVC) or a full engine with explicit emotion presets. Decide after Phase 6 lands and we know what's still missing.
-
-See GitHub issue **#6** for the full plan and tracking.
+- [x] Username + password login (`/api/login`, `/api/logout`, cookie sessions via express-session)
+- [x] Self-registration with optional moderation queue (`/api/register` → `data/pending-users.json`)
+- [x] Password change for any signed-in user (`/api/me/password`, min 6 chars, force-change flag)
+- [x] Four-tier role model: `superadmin` / `admin` / `user` / `guest`
+- [x] Users defined inline via `USERS=username:password:role,...` env var, or via `data/users.json` for self-registered/approved accounts
+- [x] Heartbeat endpoint to keep sessions alive (`/api/heartbeat`)
+- [x] Settings endpoint exposes role-appropriate config to the frontend (`/api/settings`)
+- [ ] Discord OAuth login — server-role to app-role mapping. Replaces or complements password auth.
 
 ---
 
-## TTS quality-of-life
+## Sound library
 
-- [ ] **Pronunciation overrides** – admin-defined phonetic map ("Jira" → "Jee-ruh"). M
-- [ ] **Voice presets** – save voice + speed + volume + exaggeration combo. M
-- [ ] **Live character counter on TTS input, red when over limit.** S
-- [ ] **Auto-preview on voice select** – test phrase plays locally. S
-- [ ] **Queue preview** – who is about to speak what. S
-
----
-
-## Everyday UX / QoL
-
-- [ ] **Right-click context menu** on sound buttons (assign favorite, edit, duplicate, copy name, delete). M
-- [ ] **Copy sound name to clipboard** icon on hover. S
-- [ ] **Drag-to-reorder without toggling reorder mode** + hover affordance. S
-- [ ] **Search result highlighting** – bold matched substring. S
-- [ ] **Preview volume slider** independent of send-to-Discord volume. S
-- [ ] **Instant-favorite hint** – show next open 1–9 slot in context menu. S
-
-## Power-user / Organization
-
-- [ ] **Bulk upload from folder** – drop folder, auto-name from filenames. M
-- [ ] **Folder / collection view** – nest sounds, reorder, hide, export per folder. L
-- [ ] **Sound aliases** – alt search terms (`laugh_1` also triggers on `lol`). M
-- [ ] **Merge tags** – rename tag, bulk-reapply. S
-- [ ] **Duplicate-upload detection** – warn on same stem/size/duration. M
-- [ ] **Batch normalize** – multi-select + queue. M
-- [ ] **Search by duration range** – "sounds 2–5s". M
-- [ ] **Sound-sharing deep links** – `?sound=filename` jumps/opens edit. S
-- [ ] **Export / import sound library** – JSON backup of all metadata. M
-
-## Admin / Superadmin
-
-- [ ] **Admin action log** – approvals, deletes, settings changes. L
-- [ ] **Archive-on-delete** – move to backup dir instead of wipe. S
-- [ ] **Moderation queue filters** – by uploader, date, size, duration. M
-
-## Audio / Effects
-
-- [ ] **Per-sound fade in/out** – extend trim handles with 0.5–2s fade. M
-- [ ] **Playback speed** 0.8×–1.5× (pitch-preserving). M
-- [ ] **Crossfade** between sequential sounds (multi-play mode). L
-- [ ] **TTS ducking** – auto-lower music when TTS speaks. L
-- [ ] **EQ presets** – bass boost / treble cut toggle. L
-
-## Mobile / Touch
-
-- [ ] **Swipe left/right** on sound for quick actions. M
-- [ ] **Double-tap to favorite.** S
-- [ ] **Bottom-sheet edit panel** on mobile (vs. center modal). M
-
-## Accessibility
-
-- [ ] **`aria-label`** on play/preview/edit/favorite/delete buttons. S
-- [ ] **Full keyboard-only** nav of hamburger + options menus. M
-- [ ] **Explicit high-contrast theme** beyond dark/light. M
-
-## Observability / Stats
-
-- [ ] **Play-count badge** on sound buttons. S
-- [ ] **Last-played label** ("5h ago") on buttons. S
-- [ ] **Personal stats** – "427 plays, 15h total" in profile. S
+- [x] Upload from drag-and-drop or file picker (`POST /api/upload`, multipart)
+- [x] Per-role upload limits: max bytes, max duration; oversized rejected client-side before POST
+- [x] Optional auto-normalize on upload (ffmpeg loudnorm EBU R128 / -16 LUFS)
+- [x] Tags: per-sound array, drag-reorder, hide/unhide, rename, delete
+- [x] Edit panel: rename, trim (start/end), color, per-sound volume multiplier, `stopOthers` flag, normalize, duplicate, delete (superadmin)
+- [x] Drag-and-drop reorder for the sound grid
+- [x] Search + tag filter (client-side)
+- [x] Favorites bar — up to 10 slots, mapped to keys 0–9, drag-reorder
+- [x] Keyboard shortcuts: 1–9 favorites, Space play/pause, S stop, ? cheatsheet, Escape close panels
+- [x] Download the original file from the edit modal
+- [ ] Sound button icons (emoji or custom image)
+- [ ] Playback queue (queue instead of replace)
+- [ ] Bulk upload from folder
+- [ ] Folder/collection view above tags
+- [ ] Sound aliases (alt search terms)
+- [ ] Merge tags
+- [ ] Duplicate-upload detection
+- [ ] Search by duration range
 
 ---
 
-## Completed
+## Playback to Discord
 
-- [x] Keyboard shortcuts (1–9 favorites, Space play/pause, S stop, Escape close)
-- [x] Sound preview (play locally before sending to Discord)
-- [x] Remember preferences (last channel, folder, filter, volume; persists across restarts)
-- [x] Theme toggle (dark/light)
-- [x] Compact view
-- [x] Mobile view (responsive layout, pagination)
-- [x] Recently played (last 5, waveform background, who played, when)
-- [x] Favorites (up to 9, mapped to keys 1–9)
-- [x] Pending uploads badge on Superadmin tab
-- [x] Duplicate sound (file + metadata; opens duplicate in edit panel)
-- [x] Normalize audio (in-place via ffmpeg loudnorm, EBU R128 -16 LUFS)
-- [x] Multi-user roles (superadmin, admin, user)
-- [x] Guest access with IP tracking
-- [x] Sound reordering (drag-and-drop)
-- [x] User/guest uploads with moderation queue
-- [x] Playback hierarchy (users/guests can't override admin/superadmin)
-- [x] Waveform display for remote viewers (guests)
-- [x] Pause/resume with correct position
-- [x] Admin can pause/stop their own, other admins', users', and guests' playback
-- [x] Auto-normalize on upload + sound-pane play-count heatmap
-- [x] Real-time waveform overlay during preview
-- [x] Activity heatmap + sound play audit log + admin action log foundation
-- [x] Bulk approve pending signups
-- [x] Per-IP guest cooldown overrides
-- [x] Bulk IP block/unblock from paste
-- [x] Soft-ban users (disable flag)
+- [x] Play with optional trim (`POST /api/play`)
+- [x] Pause / resume / stop with correct restored position
+- [x] Volume: global slider plus per-sound multiplier (0–2×)
+- [x] Multi-track mode: simultaneous playback with audio mixing (`multiPlayEnabled` flag)
+- [x] `stopOthers` flag forces interruption of other tracks
+- [x] Lock states: superadmin-only mode, admin-locked mode (per-role override hierarchy)
+- [x] Real-time waveform overlay during local browser preview
+- [x] Static waveform display + scrub for guests/remote viewers
+- [x] Recently-played sidebar (last 5, with waveform thumbnail, who played, when)
+- [ ] Per-sound fade in/out
+- [ ] Playback speed 0.8×–1.5× (pitch-preserving)
+- [ ] Crossfade between sequential sounds in multi-play mode
+- [ ] EQ presets
 
-### How to update data mount on older installs
-For an existing container, to add the data mount:
-- Stop the container: `pct stop 200` (replace 200 with your CTID)
-- Create the host directory: `mkdir -p /var/lib/discord-soundboard-data/200`
-- Copy existing data (if you have any):
-   ```
-   pct start 200
-   pct exec 200 -- sh -c 'tar czf - -C /opt/discord-soundboard data 2>/dev/null' | tar xzf - -C /var/lib/discord-soundboard-data/200 --strip-components=1
-   pct stop 200
-   ```
-- Add the mount – append this line to `/etc/pve/lxc/200.conf`:
-   ```
-   mp0: /var/lib/discord-soundboard-data/200,mp=/opt/discord-soundboard/data
-   ```
-- Start the container: `pct start 200`
+---
 
-After this, volume, channel, guest settings, and pending uploads will persist across updates and restarts.
+## Discord bot
+
+- [x] discord.js + @discordjs/voice; libsodium-wrappers loaded before voice connection
+- [x] Voice intent set (`Guilds`, `GuildVoiceStates`); no message intent
+- [x] Bot joins voice channels via the web UI (no slash commands)
+- [x] Diagnostic logging on voice/player state changes (see `DIAGNOSTICS.md`)
+
+---
+
+## Guest mode
+
+- [x] Toggleable public access (`/api/guest/start`)
+- [x] Per-role limits: max clip duration, cooldown seconds, upload bytes/seconds
+- [x] IP tracking with full play history (`data/guest.json`)
+- [x] IP blocklist with single + bulk add/remove from clipboard paste
+- [x] Per-IP cooldown overrides (e.g. 0 for known/trusted IPs)
+- [x] Guest uploads optionally route to moderation queue
+
+---
+
+## Moderation queue
+
+- [x] Pending uploads view: approve (move to `sounds/`) or reject (delete from `sounds/pending/`)
+- [x] Per-pending audio preview (`/api/superadmin/pending-uploads/audio/:filename`)
+- [x] Pending signup view: approve with role selection, bulk-approve, reject
+- [x] Pending count badge on the Superadmin tab
+
+---
+
+## Stats & activity
+
+SQLite at `data/stats.db` (`lib/stats-db.js`):
+
+| Table | Columns |
+|---|---|
+| `plays` | `id, sound_filename, display_name, user_id, user_role, guest_ip, started_at, ended_at, planned_duration_ms, actual_duration_ms, stopped_early` |
+| `admin_actions` | `id, actor, actor_role, action, target, details, at` |
+| `tts_recents` | `id, owner, text, voice_id, voice_label, display_name, wav_path, created_at` |
+
+- [x] Activity heatmap (last 90 days) on Superadmin → Activity tab
+- [x] Sound play audit log with filters (user, sound, date range), CSV export (`/api/stats/plays.csv`)
+- [x] Plays-per-day series (`/api/stats/plays-per-day`)
+- [x] Per-sound play-count heatmap overlay on the sound grid (toggle)
+- [x] Admin actions log (approvals, deletes, settings changes)
+- [ ] Per-user personal stats ("427 plays, 15h total")
+- [ ] Last-played label on sound buttons ("5h ago")
+- [ ] Play-count badge on sound buttons (always-on, not just heatmap mode)
+
+---
+
+## Text-to-Speech
+
+Engines on the GPU container:
+
+- [x] **Kokoro** — 20 generic voices, ultra-fast, CPU-OK
+- [x] **Chatterbox** — zero-shot voice cloning from a 5–10s reference clip; 14 celebrity/character voices
+- [x] **RVC** — post-process voice conversion for 14 voices (Chatterbox output → RVC refinement); auto-skipped for cartoon voices
+- [x] **GPT-SoVITS** — separate FastAPI process on port 9880 (one experimental Trump voice)
+
+Web features:
+
+- [x] TTS card with text input, voice dropdown (grouped), volume slider, expression slider
+- [x] Per-role text-length limits and cooldowns
+- [x] TTS queue (sequential playback, configurable max)
+- [x] Save TTS as permanent sound (floppy-disk button)
+- [x] Per-user TTS recents sidebar (replay, delete, save-as-sound)
+- [x] **Superadmin Voice Management UI** — add/replace/delete Chatterbox voices via YouTube URL or audio file upload, in-browser preview, source URL/timestamps persisted in `metadata.json`
+- [x] **Chatterbox expression slider** — emotion intensity 0.25–2.0, hidden for non-Chatterbox voices
+
+Planned (full plan in GH issue **#6**):
+
+- [ ] **Phase 7** — Speed control (`atempo` ffmpeg post-process, every engine)
+- [ ] **Phase 8** — TTS clip caching (skip GPU work on repeat phrases)
+- [ ] **Phase 8b** — Voice presets (saved voice + speed + volume + exaggeration combos)
+- [ ] **Phase 9** — OpenVoice integration (likely as tone-color converter alongside RVC, possibly as full engine #5)
+- [ ] **Phase 10** — Automated GPT-SoVITS fine-tuning per voice (yt-dlp → diarization → Whisper → train → auto-deploy). The current quality cap on celebrity voices is here; fine-tuned SoVITS is the path to "indistinguishable from source" output.
+
+TTS QoL not yet shipped:
+- [ ] Pronunciation overrides (admin phonetic map)
+- [ ] Voice presets
+- [ ] Live character counter (red over limit)
+- [ ] Auto-preview on voice select (test phrase plays locally)
+- [ ] Queue preview ("who's about to speak what")
+
+---
+
+## Companion app
+
+`companion/hotkeys.py` — Python tkinter GUI, cross-platform:
+
+- [x] System-wide hotkey binding via `keyboard` library (works while soundboard is in background)
+- [x] Stop and pause/resume actions; configurable keys
+- [x] Bearer-token auth to a separate `/companion/*` route surface
+- [x] Connection settings persisted to `companion/config.json`; defaults from `.env`
+
+---
+
+## Operations
+
+- [x] Backup script (`scripts/backup.sh`) — tarballs `.env`, `sounds/`, `data/`
+- [x] Restore script (`scripts/restore.sh`) — stops service, untars, restarts
+- [x] Update script (`scripts/update.sh`) — `git pull`, `npm install`, refresh yt-dlp, restart service
+- [x] Login banner / MOTD installer (`scripts/install-motd.sh`)
+- [x] Proxmox LXC install scripts for both containers (`proxmox/install/`)
+- [x] Docker / docker-compose paths (CPU + optional NVIDIA GPU TTS)
+- [x] Health endpoints: TTS server has `/health`; soundboard does not yet
+- [ ] `/health` on soundboard for orchestrator probes
+- [ ] Atomic JSON writes (write-temp + rename) — current writes are not concurrency-safe (see #1)
+- [ ] Persist TTS queue across restarts
+- [ ] ffmpeg child cleanup on client abort
+- [ ] Structured logging (pino), restart policies, request/error counters
+
+---
+
+## Security & hardening
+
+Open items tracked in GH issue **#1**:
+- [ ] Cookie `secure: false` is hardcoded — needs env-driven flip
+- [ ] Weak default session secret — should refuse to boot without a real one
+- [ ] Rate limiting on `/api/login`, `/api/register`, `/api/guest/start`, `/companion/*`
+- [ ] CSRF middleware on state-changing POSTs
+- [ ] In-memory password hashing for `USERS`-defined accounts
+- [ ] Unify `esc()` (currently re-defined ~8 times in `public/index.html`)
+- [ ] `cors` package declared but unused — wire up or remove
+- [ ] Tests (none today)
+
+---
+
+## Settings & accessibility
+
+- [x] Theme toggle (dark/light, persisted to localStorage)
+- [x] Compact view (smaller buttons, more on screen)
+- [x] Mobile responsive layout with pagination
+- [x] Per-user preferences (channel, folder, filter, volume) persisted to localStorage + server `state.json`
+- [ ] `aria-label`s on all action buttons
+- [ ] Full keyboard-only nav of menus
+- [ ] Explicit high-contrast theme
+
+---
+
+## Brainstorm (everything else)
+
+The full feature wishlist (UX, social, audio effects, mobile, stats) lives in GH issue **#2** with effort tags (S/M/L). Pull from there when picking the next thing.
