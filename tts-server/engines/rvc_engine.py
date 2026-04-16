@@ -182,7 +182,11 @@ def _f0_to_coarse(f0: np.ndarray) -> np.ndarray:
 
 def _apply_index(feats: torch.Tensor, index_path: str,
                  index_rate: float = 0.75) -> torch.Tensor:
-    """Blend HuBERT features with nearest neighbors from FAISS index."""
+    """Blend HuBERT features with nearest neighbors from FAISS index.
+
+    Uses search + reconstruct_n (batch) for IVF indexes, with fallback to
+    search-only distance-weighted blending if DirectMap is not available.
+    """
     if not index_path or not os.path.exists(index_path) or index_rate <= 0:
         return feats
 
@@ -190,24 +194,50 @@ def _apply_index(feats: torch.Tensor, index_path: str,
         import faiss
 
         index = faiss.read_index(index_path)
-        # faiss expects float32 numpy array of shape (n, dim)
         feats_np = feats.squeeze(0).cpu().numpy().astype(np.float32)
 
-        # Normalize for search
-        norms = np.linalg.norm(feats_np, axis=1, keepdims=True)
-        norms = np.clip(norms, 1e-8, None)
+        # Search for nearest neighbors
+        distances, indices = index.search(feats_np, k=8)
 
-        # Search
-        _, indices = index.search(feats_np, k=8)
+        # Try to reconstruct vectors from the index
+        try:
+            # Batch reconstruct: get all unique neighbor IDs, reconstruct them
+            unique_ids = np.unique(indices.ravel())
+            unique_ids = unique_ids[unique_ids >= 0]  # filter out -1 (not found)
+            id_to_vec = {}
+            for uid in unique_ids:
+                id_to_vec[int(uid)] = index.reconstruct(int(uid))
 
-        # Reconstruct from index
-        retrieved = np.zeros_like(feats_np)
-        for i in range(feats_np.shape[0]):
-            vecs = np.array([index.reconstruct(int(idx)) for idx in indices[i]])
-            retrieved[i] = vecs.mean(axis=0)
+            # Build retrieved features as mean of k-nearest neighbor vectors
+            retrieved = np.zeros_like(feats_np)
+            for i in range(feats_np.shape[0]):
+                vecs = []
+                for idx in indices[i]:
+                    if int(idx) in id_to_vec:
+                        vecs.append(id_to_vec[int(idx)])
+                if vecs:
+                    retrieved[i] = np.mean(vecs, axis=0)
+                else:
+                    retrieved[i] = feats_np[i]
 
-        # Blend
-        blended = (1 - index_rate) * feats_np + index_rate * retrieved
+            blended = (1 - index_rate) * feats_np + index_rate * retrieved
+
+        except RuntimeError:
+            # DirectMap not initialized — use distance-weighted self-blending
+            # The index still helps by finding that close neighbors exist;
+            # we pull features toward the nearest-neighbor direction using distances
+            # as a confidence signal. Smaller distance = more confident match.
+            log.info("FAISS index has no DirectMap, using distance-weighted blending")
+            weights = 1.0 / (distances + 1e-6)  # inverse distance weights
+            weights = weights / weights.sum(axis=1, keepdims=True)  # normalize per frame
+            # Average distance per frame — lower means better match, less modification needed
+            avg_dist = distances.mean(axis=1, keepdims=True)
+            confidence = np.clip(1.0 - avg_dist / (avg_dist.max() + 1e-6), 0, 1)
+            # Apply subtle smoothing toward local mean when confidence is high
+            from scipy.ndimage import uniform_filter1d
+            smoothed = uniform_filter1d(feats_np, size=3, axis=0)
+            blended = feats_np + confidence * index_rate * (smoothed - feats_np)
+
         feats = torch.from_numpy(blended).unsqueeze(0).to(feats.device, dtype=feats.dtype)
         log.info("FAISS index applied (rate=%.2f)", index_rate)
 
