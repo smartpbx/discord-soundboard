@@ -1213,6 +1213,7 @@
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">Group</th>
                                 <th style="text-align:center; padding: 0.35rem 0.5rem;">Enabled</th>
                                 <th style="text-align:center; padding: 0.35rem 0.5rem;">RVC</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;" title="Default expression (Chatterbox only)">Default exp 🎭</th>
                                 <th style="text-align:right; padding: 0.35rem 0.5rem;">Actions</th>
                             </tr></thead>
                             <tbody id="ttsVoicesBody"></tbody>
@@ -1259,6 +1260,11 @@
                     <div class="field" style="display:flex; align-items:center; gap:0.4rem; padding-bottom: 0.55rem;">
                         <input type="checkbox" id="voiceModalSkipRvc" style="accent-color:var(--accent);">
                         <label for="voiceModalSkipRvc" style="margin:0;">Skip RVC</label>
+                    </div>
+                    <div class="field" style="min-width:120px;">
+                        <label for="voiceModalDefaultExp">Default expression</label>
+                        <input type="number" id="voiceModalDefaultExp" min="0.25" max="2.0" step="0.05" value="0.5">
+                        <div class="field-help">0.25 calm — 2.0 expressive</div>
                     </div>
                 </div>
 
@@ -4602,6 +4608,14 @@
             const isCb = v && v.engine === 'chatterbox';
             wrap.classList.toggle('hidden', !isCb);
             wrap.style.display = isCb ? 'flex' : 'none';
+            if (isCb) {
+                const def = Number.isFinite(v.default_exaggeration) ? Number(v.default_exaggeration) : 0.5;
+                ttsExpression = def;
+                const slider = document.getElementById('ttsExpressionSlider');
+                if (slider) slider.value = def;
+                const label = document.getElementById('ttsExpressionLabel');
+                if (label) label.textContent = def.toFixed(2);
+            }
         }
 
         function toggleTtsSection() {
@@ -4767,12 +4781,17 @@
                         sourceLine = '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">' + esc((v.source_filename || 'upload') + range) + '</div>';
                     }
                 }
+                const defaultExp = isCb && Number.isFinite(v.default_exaggeration) ? Number(v.default_exaggeration) : 0.5;
+                const expCell = isCb
+                    ? '<input type="number" min="0.25" max="2.0" step="0.05" value="' + defaultExp.toFixed(2) + '" onchange="setTtsVoiceDefaultExpression(\'' + esc(v.id) + '\', this.value)" style="width:4.5rem;padding:0.2rem 0.3rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.85rem;text-align:center;">'
+                    : '<span style="color:var(--text-muted)">--</span>';
                 return '<tr style="' + (disabled ? 'opacity:0.5' : '') + '">'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + sourceLine + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + (isCb ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)">--</span>') + '</td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem">' + expCell + '</td>'
                     + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap">' + actions + '</td>'
                     + '</tr>';
             }).join('');
@@ -4788,6 +4807,21 @@
         async function toggleTtsVoiceRvc(voiceId, rvcOn) {
             _ttsAdminRvcOverrides[voiceId] = rvcOn;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsVoiceRvcOverrides: _ttsAdminRvcOverrides }) });
+        }
+
+        async function setTtsVoiceDefaultExpression(voiceId, value) {
+            const n = Math.max(0.25, Math.min(2.0, parseFloat(value)));
+            if (!Number.isFinite(n)) { showToast('Invalid expression value', 'error'); return; }
+            const id = voiceId.replace(/^cb_/, '');
+            const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(id) + '/metadata', {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ default_exaggeration: n }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Failed to save default expression', 'error'); return; }
+            // Refresh the voice list so the TTS card picks up the new default if this voice is selected.
+            fetchTtsVoicesAdmin();
+            fetchTtsStatus();
         }
 
         // --- Voice creation/replacement modal ---
@@ -4830,6 +4864,7 @@
             const groupInput = document.getElementById('voiceModalGroup');
             const genderInput = document.getElementById('voiceModalGender');
             const skipRvcInput = document.getElementById('voiceModalSkipRvc');
+            const defaultExpInput = document.getElementById('voiceModalDefaultExp');
             if (mode === 'replace') {
                 idInput.value = (voiceId || '').replace(/^cb_/, '');
                 idInput.disabled = true;
@@ -4837,6 +4872,9 @@
                 groupInput.value = group || 'Celebrity';
                 genderInput.value = (gender === 'male' || gender === 'female') ? gender : 'unknown';
                 skipRvcInput.checked = false;
+                const existing = ttsVoices.find(x => x.id === voiceId);
+                if (existing && Number.isFinite(existing.default_exaggeration)) defaultExpInput.value = Number(existing.default_exaggeration).toFixed(2);
+                else defaultExpInput.value = '0.50';
             } else {
                 idInput.value = '';
                 idInput.disabled = false;
@@ -4844,6 +4882,7 @@
                 groupInput.value = 'Celebrity';
                 genderInput.value = 'male';
                 skipRvcInput.checked = false;
+                defaultExpInput.value = '0.50';
             }
             document.getElementById('voiceModalUrl').value = '';
             document.getElementById('voiceModalFile').value = '';
@@ -4944,9 +4983,10 @@
                 const source = _voiceModalSource === 'youtube'
                     ? { kind: 'youtube', url: _voiceModalLastUrl, start: _voiceModalLastStart, end: _voiceModalLastEnd }
                     : { kind: 'upload', filename: _voiceModalLastFilename, start: _voiceModalLastStart, end: _voiceModalLastEnd };
+                const defaultExaggeration = parseFloat(document.getElementById('voiceModalDefaultExp').value);
                 const res = await api('/api/superadmin/tts/voice', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ voiceId, name, group, gender, skipRvc, token: _voiceModalToken, source })
+                    body: JSON.stringify({ voiceId, name, group, gender, skipRvc, defaultExaggeration, token: _voiceModalToken, source })
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) { setVoiceModalStatus(data.error || ('Save failed: ' + res.status), 'error'); btn.disabled = false; return; }

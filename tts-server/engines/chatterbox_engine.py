@@ -87,6 +87,12 @@ def _scan_voices():
         for key in ("source_kind", "source_url", "source_filename", "source_start", "source_end", "updated_at"):
             if key in meta:
                 voice[key] = meta[key]
+        try:
+            de = float(meta.get("default_exaggeration", 0.5))
+            if 0.25 <= de <= 2.0:
+                voice["default_exaggeration"] = round(de, 2)
+        except (TypeError, ValueError):
+            pass
         voices.append(voice)
 
     return voices

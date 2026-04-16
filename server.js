@@ -3045,7 +3045,7 @@ app.get('/api/superadmin/tts/preview/:token', requireSuperadmin, (req, res) => {
 });
 
 app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
-    const { voiceId, name, group, gender, skipRvc, token, source } = req.body || {};
+    const { voiceId, name, group, gender, skipRvc, defaultExaggeration, token, source } = req.body || {};
     const dirId = ttsVoiceAdmin.normalizeVoiceId(voiceId);
     if (!dirId) return res.status(400).json({ error: 'Voice id must be lowercase letters, digits, or underscores (e.g. rfk_jr).' });
     const previewPath = ttsVoiceAdmin.getPreviewPath(token);
@@ -3056,6 +3056,7 @@ app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
             adminToken: TTS_ADMIN_TOKEN,
             voiceId: dirId,
             name, group, gender, skipRvc,
+            defaultExaggeration: typeof defaultExaggeration === 'number' ? defaultExaggeration : undefined,
             source: source && typeof source === 'object' ? source : null,
             previewPath,
         });
@@ -3074,6 +3075,40 @@ app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, async (req, res) 
         res.json({ ok: true });
     } catch (err) {
         ttsAdminError(res, err);
+    }
+});
+
+app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
+    if (!TTS_ADMIN_TOKEN) return res.status(503).json({ error: 'TTS_ADMIN_TOKEN not configured' });
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.name === 'string') patch.name = body.name;
+    if (['male', 'female', 'unknown'].includes(body.gender)) patch.gender = body.gender;
+    if (typeof body.group === 'string') patch.group = body.group;
+    if (typeof body.skip_rvc === 'boolean') patch.skip_rvc = body.skip_rvc;
+    if (typeof body.default_exaggeration === 'number') {
+        const v = Math.max(0.25, Math.min(2.0, body.default_exaggeration));
+        patch.default_exaggeration = Math.round(v * 100) / 100;
+    }
+    try {
+        const url = TTS_API_URL.replace(/\/+$/, '') + '/voices/chatterbox/' + encodeURIComponent(dirId) + '/metadata';
+        const r = await fetch(url, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': TTS_ADMIN_TOKEN },
+            body: JSON.stringify(patch),
+        });
+        const text = await r.text();
+        if (!r.ok) {
+            let detail = text;
+            try { detail = JSON.parse(text).detail || text; } catch {}
+            return res.status(r.status).json({ error: 'TTS server rejected patch: ' + detail });
+        }
+        res.json(JSON.parse(text));
+    } catch (e) {
+        res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
 });
 

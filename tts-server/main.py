@@ -55,6 +55,7 @@ class VoiceInfo(BaseModel):
     source_start: Optional[float] = None
     source_end: Optional[float] = None
     updated_at: Optional[int] = None
+    default_exaggeration: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +258,13 @@ async def upload_chatterbox_voice(
         "group": str(meta.get("group", "Celebrity")).strip()[:40] or "Celebrity",
         "skip_rvc": bool(meta.get("skip_rvc", False)),
     }
+    # Optional default expression (Chatterbox exaggeration 0.25–2.0).
+    try:
+        de = float(meta.get("default_exaggeration"))
+        if 0.25 <= de <= 2.0:
+            clean_meta["default_exaggeration"] = round(de, 2)
+    except (TypeError, ValueError):
+        pass
     # Optional source provenance: how this reference clip was produced.
     src_kind = meta.get("source_kind")
     if src_kind in ("youtube", "upload"):
@@ -311,6 +319,64 @@ async def upload_chatterbox_voice(
         "language": "en-us",
         "group": clean_meta["group"],
     }
+
+
+class ChatterboxMetadataPatch(BaseModel):
+    name: Optional[str] = None
+    gender: Optional[str] = None
+    group: Optional[str] = None
+    skip_rvc: Optional[bool] = None
+    default_exaggeration: Optional[float] = Field(None, ge=0.25, le=2.0)
+
+
+@app.patch("/voices/chatterbox/{voice_id}/metadata")
+def patch_chatterbox_metadata(
+    voice_id: str,
+    patch: ChatterboxMetadataPatch,
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Update metadata.json fields without touching reference.wav."""
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
+    meta_path = os.path.join(voice_dir, "metadata.json")
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Voice not found: {dir_id}")
+
+    existing = {}
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+
+    if patch.name is not None:
+        existing["name"] = str(patch.name).strip()[:80] or dir_id
+    if patch.gender is not None and patch.gender in ("male", "female", "unknown"):
+        existing["gender"] = patch.gender
+    if patch.group is not None:
+        existing["group"] = str(patch.group).strip()[:40] or "Celebrity"
+    if patch.skip_rvc is not None:
+        existing["skip_rvc"] = bool(patch.skip_rvc)
+    if patch.default_exaggeration is not None:
+        existing["default_exaggeration"] = round(float(patch.default_exaggeration), 2)
+    existing["updated_at"] = int(time.time())
+
+    tmp = meta_path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(existing, f, indent=2)
+        os.replace(tmp, meta_path)
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except OSError: pass
+
+    chatterbox_engine.invalidate_voice(f"cb_{dir_id}")
+    return {"ok": True, "metadata": existing}
 
 
 @app.delete("/voices/chatterbox/{voice_id}")
