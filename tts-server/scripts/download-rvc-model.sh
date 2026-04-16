@@ -169,9 +169,11 @@ if [[ "$PTH_URL" == *.zip ]]; then
     cd "$MODEL_DIR"
     unzip -o model.zip
     rm -f model.zip
-    # Find .pth and .index files
-    PTH_FILE=$(find . -name "*.pth" -type f | head -1)
-    INDEX_FILE=$(find . -name "*.index" -type f | head -1)
+    # Remove macOS resource forks
+    rm -rf __MACOSX
+    # Find .pth and .index files (ignore tiny files < 1KB which are macOS junk)
+    PTH_FILE=$(find . -name "*.pth" -type f -size +1k | head -1)
+    INDEX_FILE=$(find . -name "*.index" -type f -size +1k | head -1)
     if [[ -z "$PTH_FILE" ]]; then
         echo "[!] No .pth file found in zip!"
         exit 1
