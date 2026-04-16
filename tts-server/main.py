@@ -1,8 +1,9 @@
-"""TTS Service -- FastAPI app exposing Kokoro (and future engines) for the Discord soundboard."""
+"""TTS Service -- FastAPI app exposing Kokoro + RVC for the Discord soundboard."""
 
 import os
 import time
 import logging
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
@@ -11,13 +12,13 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tts-server")
 
-app = FastAPI(title="TTS Service", version="1.0.0")
+app = FastAPI(title="TTS Service", version="1.1.0")
 
 # ---------------------------------------------------------------------------
 # Engine loading (lazy -- first request triggers model load)
 # ---------------------------------------------------------------------------
 
-from engines import kokoro_engine  # noqa: E402
+from engines import kokoro_engine, rvc_engine  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +28,7 @@ from engines import kokoro_engine  # noqa: E402
 class SynthesizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
     voice_id: str = Field(..., min_length=1)
+    rvc_model_id: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -49,12 +51,17 @@ class VoiceInfo(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 def health():
-    return {"status": "ok", "engines": ["kokoro"]}
+    engines = ["kokoro"]
+    if rvc_engine.get_voices():
+        engines.append("rvc")
+    return {"status": "ok", "engines": engines}
 
 
 @app.get("/voices", response_model=list[VoiceInfo])
 def voices():
-    return kokoro_engine.get_voices()
+    all_voices = kokoro_engine.get_voices()
+    all_voices.extend(rvc_engine.get_voices())
+    return all_voices
 
 
 @app.post("/synthesize")
@@ -64,21 +71,50 @@ def synthesize(req: SynthesizeRequest):
         raise HTTPException(status_code=400, detail="Text is empty")
 
     voice_id = req.voice_id
-    valid_ids = kokoro_engine.get_voice_ids()
-    if voice_id not in valid_ids:
+    rvc_model_id = req.rvc_model_id
+
+    # If the voice_id itself is an RVC voice, use it for conversion with a default Kokoro base
+    rvc_ids = rvc_engine.get_rvc_model_ids()
+    if voice_id in rvc_ids:
+        rvc_model_id = voice_id
+        voice_id = "af_heart"  # Default base voice for RVC
+
+    # Validate base voice
+    valid_kokoro = kokoro_engine.get_voice_ids()
+    if voice_id not in valid_kokoro:
         raise HTTPException(status_code=400, detail=f"Unknown voice_id: {voice_id}")
 
-    log.info("synthesize voice=%s text_len=%d text_preview=%.60s", voice_id, len(text), text)
+    # Validate RVC model if specified
+    if rvc_model_id and rvc_model_id not in rvc_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown RVC model: {rvc_model_id}")
+
+    log.info("synthesize voice=%s rvc=%s text_len=%d text_preview=%.60s",
+             voice_id, rvc_model_id or "none", len(text), text)
     t0 = time.time()
 
+    # Step 1: Generate base audio with Kokoro
     try:
         wav_bytes = kokoro_engine.synthesize(text, voice_id)
     except Exception as e:
-        log.error("synthesis failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Synthesis failed: {e}")
+        log.error("kokoro synthesis failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
+
+    t_tts = time.time() - t0
+    log.info("kokoro done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
+    # Step 2: Voice conversion with RVC (if requested)
+    if rvc_model_id:
+        t1 = time.time()
+        try:
+            wav_bytes = rvc_engine.convert(wav_bytes, rvc_model_id)
+        except Exception as e:
+            log.error("RVC conversion failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"Voice conversion failed: {e}")
+        t_rvc = time.time() - t1
+        log.info("RVC done in %.2fs, %d bytes", t_rvc, len(wav_bytes))
 
     elapsed = time.time() - t0
-    log.info("synthesize done in %.2fs, %d bytes", elapsed, len(wav_bytes))
+    log.info("synthesize total %.2fs, %d bytes", elapsed, len(wav_bytes))
 
     return Response(
         content=wav_bytes,
