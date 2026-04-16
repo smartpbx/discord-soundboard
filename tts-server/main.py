@@ -63,8 +63,14 @@ def health():
 @app.get("/voices", response_model=list[VoiceInfo])
 def voices():
     all_voices = list(kokoro_engine.get_voices())
-    all_voices.extend(chatterbox_engine.get_voices())
-    all_voices.extend(rvc_engine.get_voices())
+    cb_voices = chatterbox_engine.get_voices()
+    all_voices.extend(cb_voices)
+    # Only show RVC voices that don't have a Chatterbox equivalent
+    # (Chatterbox versions are higher quality; RVC still runs as refinement behind the scenes)
+    cb_base_ids = {v["id"].replace("cb_", "") for v in cb_voices}
+    for rv in rvc_engine.get_voices():
+        if rv["id"].replace("rvc_", "") not in cb_base_ids:
+            all_voices.append(rv)
     return all_voices
 
 
