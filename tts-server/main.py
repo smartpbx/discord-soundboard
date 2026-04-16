@@ -34,6 +34,7 @@ class SynthesizeRequest(BaseModel):
     voice_id: str = Field(..., min_length=1)
     rvc_model_id: Optional[str] = None
     use_rvc: bool = True  # When True, pipe Chatterbox output through RVC if available
+    exaggeration: float = Field(0.5, ge=0.25, le=2.0)  # Chatterbox emotion intensity
 
 
 class HealthResponse(BaseModel):
@@ -110,7 +111,7 @@ def synthesize(req: SynthesizeRequest):
                  voice_id, len(text), text)
 
         try:
-            wav_bytes = chatterbox_engine.synthesize(text, voice_id)
+            wav_bytes = chatterbox_engine.synthesize(text, voice_id, exaggeration=req.exaggeration)
         except Exception as e:
             log.error("Chatterbox synthesis failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Chatterbox synthesis failed: {e}")

@@ -2685,10 +2685,11 @@ app.get('/api/tts/voices', requireAuth, async (req, res) => {
 });
 
 app.post('/api/tts/speak', requireAuth, async (req, res) => {
-    const { text, voiceId, volume: reqVolume } = req.body;
+    const { text, voiceId, volume: reqVolume, exaggeration: reqExag } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
     const ttsVolume = typeof reqVolume === 'number' ? Math.max(0, Math.min(2, reqVolume)) : 1;
+    const exaggeration = typeof reqExag === 'number' ? Math.max(0.25, Math.min(2.0, reqExag)) : 0.5;
 
     // Check TTS availability
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
@@ -2766,7 +2767,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         ttsRes = await ttsFetch('/synthesize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true }),
+            body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration }),
             timeout: 120000,
         });
     } catch (e) {

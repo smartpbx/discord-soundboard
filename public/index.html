@@ -773,6 +773,11 @@
                     <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume" style="flex:1;accent-color:var(--accent);height:6px;">
                     <span id="ttsVolumeLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">100%</span>
                 </div>
+                <div id="ttsExpressionWrap" class="hidden" style="display:none;align-items:center;gap:0.4rem;min-width:160px;" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
+                    <span style="font-size:0.8rem;color:var(--text-muted);">🎭</span>
+                    <input type="range" id="ttsExpressionSlider" min="0.25" max="2.0" step="0.05" value="0.5" style="flex:1;accent-color:var(--accent);height:6px;">
+                    <span id="ttsExpressionLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">0.50</span>
+                </div>
                 <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
@@ -4541,6 +4546,7 @@
         let ttsMaxLen = 500;
         let ttsBusy = false;
         let ttsVolume = 1.0;
+        let ttsExpression = 0.5;
 
         async function fetchTtsStatus() {
             try {
@@ -4585,6 +4591,17 @@
             if (prefs.ttsVoice && sel.querySelector(`option[value="${prefs.ttsVoice}"]`)) {
                 sel.value = prefs.ttsVoice;
             }
+            updateTtsExpressionVisibility();
+        }
+
+        function updateTtsExpressionVisibility() {
+            const sel = document.getElementById('ttsVoiceSelect');
+            const wrap = document.getElementById('ttsExpressionWrap');
+            if (!sel || !wrap) return;
+            const v = ttsVoices.find(x => x.id === sel.value);
+            const isCb = v && v.engine === 'chatterbox';
+            wrap.classList.toggle('hidden', !isCb);
+            wrap.style.display = isCb ? 'flex' : 'none';
         }
 
         function toggleTtsSection() {
@@ -4625,6 +4642,19 @@
                 savePrefs({ ttsVolume });
             });
         }
+        const ttsExprSlider = document.getElementById('ttsExpressionSlider');
+        if (ttsExprSlider) {
+            const prefs = loadPrefs();
+            if (prefs.ttsExpression != null) { ttsExpression = Number(prefs.ttsExpression); ttsExprSlider.value = ttsExpression; }
+            document.getElementById('ttsExpressionLabel').textContent = ttsExpression.toFixed(2);
+            ttsExprSlider.addEventListener('input', (e) => {
+                ttsExpression = Number(e.target.value);
+                document.getElementById('ttsExpressionLabel').textContent = ttsExpression.toFixed(2);
+                savePrefs({ ttsExpression });
+            });
+        }
+        const ttsVoiceSelectEl = document.getElementById('ttsVoiceSelect');
+        if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', updateTtsExpressionVisibility);
 
         function setTtsStatus(msg, isError) {
             const el = document.getElementById('ttsStatus');
@@ -4654,10 +4684,12 @@
             setTtsStatus('<span class="tts-spinner"></span> Generating speech...');
 
             try {
+                const v = ttsVoices.find(x => x.id === voiceId);
+                const isCb = v && v.engine === 'chatterbox';
                 const r = await api('/api/tts/speak', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, voiceId, volume: ttsVolume }),
+                    body: JSON.stringify({ text, voiceId, volume: ttsVolume, ...(isCb ? { exaggeration: ttsExpression } : {}) }),
                 });
                 if (!r) return;
                 const data = await r.json();
