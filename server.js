@@ -206,6 +206,41 @@ function setUserCooldownSec(sec) {
     saveGuestData(d);
 }
 
+// --- TTS settings (stored in guest.json alongside other settings) ---
+function getTtsEnabled() {
+    const d = loadGuestData();
+    return d.ttsEnabled === true;
+}
+function setTtsEnabled(v) {
+    const d = loadGuestData();
+    d.ttsEnabled = !!v;
+    saveGuestData(d);
+}
+function getTtsMaxTextLength(role) {
+    const d = loadGuestData();
+    const defaults = { guest: 0, user: 200, admin: 500, superadmin: 2000 };
+    const key = 'ttsMaxTextLength_' + role;
+    const n = Number(d[key]);
+    return Number.isFinite(n) && n >= 0 ? n : (defaults[role] ?? 500);
+}
+function setTtsMaxTextLength(role, len) {
+    const d = loadGuestData();
+    d['ttsMaxTextLength_' + role] = Number(len) >= 0 ? Number(len) : 0;
+    saveGuestData(d);
+}
+function getTtsCooldownSec(role) {
+    const d = loadGuestData();
+    const defaults = { guest: 30, user: 15, admin: 5, superadmin: 0 };
+    const key = 'ttsCooldownSec_' + role;
+    const n = Number(d[key]);
+    return Number.isFinite(n) && n >= 0 ? n : (defaults[role] ?? 5);
+}
+function setTtsCooldownSec(role, sec) {
+    const d = loadGuestData();
+    d['ttsCooldownSec_' + role] = Number(sec) >= 0 ? Number(sec) : 0;
+    saveGuestData(d);
+}
+
 function loadServerState() {
     try {
         const raw = fs.readFileSync(SERVER_STATE_PATH, 'utf8');
@@ -673,6 +708,9 @@ function updateOwnPassword(username, currentPassword, newPassword) {
 }
 const guestLastPlayByIP = new Map();
 const userLastPlayByUsername = new Map();
+const ttsLastPlayByIP = new Map();
+const ttsLastPlayByUsername = new Map();
+const TTS_API_URL = (process.env.TTS_API_URL || '').replace(/\/+$/, '');
 
 const COMPANION_TOKEN = (process.env.COMPANION_TOKEN || '').trim();
 function injectCompanionAuth(req) {
@@ -1323,7 +1361,18 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.userCooldownSec = getUserCooldownSec();
         const pending = (loadPendingMeta().uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
         out.pendingCount = pending.length;
+        // TTS settings (superadmin)
+        out.ttsEnabled = getTtsEnabled();
+        out.ttsAvailable = !!TTS_API_URL;
+        out.ttsMaxTextLength = { guest: getTtsMaxTextLength('guest'), user: getTtsMaxTextLength('user'), admin: getTtsMaxTextLength('admin'), superadmin: getTtsMaxTextLength('superadmin') };
+        out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
     }
+    // TTS availability for all roles
+    out.ttsEnabled = getTtsEnabled();
+    out.ttsAvailable = !!TTS_API_URL;
+    const role = req.session.user.role;
+    out.ttsMaxTextLength_self = getTtsMaxTextLength(role);
+    out.ttsCooldownSec_self = getTtsCooldownSec(role);
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
@@ -1372,6 +1421,21 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (typeof userMaxUploadBytes === 'number' && userMaxUploadBytes > 0) { setUserMaxUploadBytes(userMaxUploadBytes); out.userMaxUploadBytes = userMaxUploadBytes; }
         if (typeof userMaxDuration === 'number' && userMaxDuration > 0) { setUserMaxDuration(userMaxDuration); out.userMaxDuration = userMaxDuration; }
         if (typeof userCooldownSec === 'number' && userCooldownSec >= 0) { setUserCooldownSec(userCooldownSec); out.userCooldownSec = userCooldownSec; }
+        // TTS settings
+        const { ttsEnabled, ttsMaxTextLength, ttsCooldownSec } = req.body;
+        if (typeof ttsEnabled === 'boolean') { setTtsEnabled(ttsEnabled); out.ttsEnabled = ttsEnabled; }
+        if (ttsMaxTextLength && typeof ttsMaxTextLength === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof ttsMaxTextLength[r] === 'number' && ttsMaxTextLength[r] >= 0) { setTtsMaxTextLength(r, ttsMaxTextLength[r]); }
+            }
+            out.ttsMaxTextLength = { guest: getTtsMaxTextLength('guest'), user: getTtsMaxTextLength('user'), admin: getTtsMaxTextLength('admin'), superadmin: getTtsMaxTextLength('superadmin') };
+        }
+        if (ttsCooldownSec && typeof ttsCooldownSec === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof ttsCooldownSec[r] === 'number' && ttsCooldownSec[r] >= 0) { setTtsCooldownSec(r, ttsCooldownSec[r]); }
+            }
+            out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
+        }
     }
     res.json(Object.keys(out).length ? out : { ok: true });
 });
@@ -2022,6 +2086,204 @@ app.get('/api/online', requireAuth, (req, res) => {
         }
     });
     res.json(online);
+});
+
+// --- TTS endpoints ---
+
+// Helper: fetch from TTS service with timeout
+async function ttsFetch(urlPath, opts = {}) {
+    if (!TTS_API_URL) return null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), opts.timeout || 30000);
+    try {
+        const res = await fetch(`${TTS_API_URL}${urlPath}`, { ...opts, signal: controller.signal });
+        return res;
+    } catch (e) {
+        if (e.name === 'AbortError') return { ok: false, status: 504, statusText: 'TTS service timeout' };
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+app.get('/api/tts/status', requireAuth, async (req, res) => {
+    const available = !!TTS_API_URL;
+    const enabled = getTtsEnabled();
+    if (!available || !enabled) return res.json({ available, enabled, voices: [] });
+    try {
+        const r = await ttsFetch('/voices', { timeout: 5000 });
+        if (!r || !r.ok) return res.json({ available: false, enabled, voices: [] });
+        const voices = await r.json();
+        res.json({ available: true, enabled, voices });
+    } catch {
+        res.json({ available: false, enabled, voices: [] });
+    }
+});
+
+app.get('/api/tts/voices', requireAuth, async (req, res) => {
+    if (!TTS_API_URL) return res.json([]);
+    try {
+        const r = await ttsFetch('/voices', { timeout: 5000 });
+        if (!r || !r.ok) return res.json([]);
+        res.json(await r.json());
+    } catch {
+        res.json([]);
+    }
+});
+
+app.post('/api/tts/speak', requireAuth, async (req, res) => {
+    const { text, voiceId } = req.body;
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
+    if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
+
+    // Check TTS availability
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
+    if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+
+    const role = req.session.user.role;
+    const isGuest = role === 'guest';
+
+    // Check guest access
+    if (isGuest) {
+        if (!getGuestEnabled()) return res.status(403).json({ error: 'Guest access is disabled.' });
+        const ip = getClientIP(req);
+        if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
+    }
+
+    // Text length limit
+    const maxLen = getTtsMaxTextLength(role);
+    if (maxLen <= 0) return res.status(403).json({ error: 'TTS is not available for your role.' });
+    const trimmed = text.trim();
+    if (trimmed.length > maxLen) return res.status(400).json({ error: `Text too long. Maximum ${maxLen} characters for your role.` });
+    if (!trimmed) return res.status(400).json({ error: 'Text is empty' });
+
+    // TTS cooldown (separate from sound cooldown)
+    const cooldownSec = getTtsCooldownSec(role);
+    if (isGuest) {
+        const ip = getClientIP(req);
+        const last = ttsLastPlayByIP.get(ip);
+        if (last != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - last) / 1000;
+            if (elapsed < cooldownSec) return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before using TTS again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
+        }
+    } else if (role === 'user') {
+        const un = req.session.user.username;
+        const last = ttsLastPlayByUsername.get(un);
+        if (last != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - last) / 1000;
+            if (elapsed < cooldownSec) return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before using TTS again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
+        }
+    }
+
+    // Require voice connection
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) {
+        return res.status(400).json({ error: 'Join a voice channel first' });
+    }
+
+    // Playback lock checks (same as /api/play)
+    const meta = loadSoundsMeta();
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can play.' });
+    }
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (role === 'user' || isGuest) return res.status(403).json({ error: 'Playback is locked by an admin.' });
+    }
+
+    // Ensure voice connection is ready
+    const conn = getVoiceConnection(activeGuildId);
+    const connStatus = conn?.state?.status ?? 'no-connection';
+    if (conn && connStatus !== 'ready') {
+        try {
+            await entersState(conn, VoiceConnectionStatus.Ready, 15000);
+        } catch {
+            return res.status(503).json({ error: 'Voice connection failed to establish.' });
+        }
+    }
+
+    // Call TTS service
+    console.log('[TTS] synthesize voice=%s text_len=%d', voiceId, trimmed.length);
+    let ttsRes;
+    try {
+        ttsRes = await ttsFetch('/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: trimmed, voice_id: voiceId }),
+            timeout: 30000,
+        });
+    } catch (e) {
+        console.error('[TTS] fetch error:', e);
+        return res.status(503).json({ error: 'TTS service unreachable' });
+    }
+    if (!ttsRes || !ttsRes.ok) {
+        const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
+        console.error('[TTS] synthesis failed:', detail);
+        return res.status(502).json({ error: `TTS synthesis failed: ${detail}` });
+    }
+
+    let wavBuffer;
+    try {
+        const ab = await ttsRes.arrayBuffer();
+        wavBuffer = Buffer.from(ab);
+    } catch (e) {
+        console.error('[TTS] buffer error:', e);
+        return res.status(502).json({ error: 'Failed to read TTS audio' });
+    }
+
+    const startedBy = { username: req.session.user.username, role };
+    const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
+
+    try {
+        if (multiPlayEnabled) {
+            // Multi-play: WAV → ffmpeg PCM → mixer
+            const soundStopOthers = false;
+            const currentStatus = player.state.status;
+            const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
+
+            if (soundStopOthers || !isSomeonePlaying) {
+                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                activeTracks.clear();
+                player.stop();
+            }
+            if (!activeMixer || activeMixer.destroyed) {
+                activeMixer = new AudioMixer();
+                const resource = createAudioResource(activeMixer, { inputType: StreamType.Raw, inlineVolume: true });
+                resource.volume.setVolume(currentVolume);
+                player.play(resource);
+            }
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
+            Readable.from(wavBuffer).pipe(ff.stdin);
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName: ttsDisplayName });
+            activeTracks.set(trackId, { filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy });
+            playbackState = { status: 'playing', filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
+        } else {
+            // Single-play: WAV → ffmpeg → createAudioResource
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[TTS] ffmpeg error', err));
+            Readable.from(wavBuffer).pipe(ff.stdin);
+            const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'tts', displayName: ttsDisplayName } });
+            resource.volume.setVolume(currentVolume);
+            player.play(resource);
+            playbackState = { status: 'playing', filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
+        }
+
+        // Update cooldown
+        if (isGuest) {
+            ttsLastPlayByIP.set(getClientIP(req), Date.now());
+        } else if (role === 'user') {
+            ttsLastPlayByUsername.set(req.session.user.username, Date.now());
+        }
+
+        addToRecentlyPlayedServer('tts', ttsDisplayName, startedBy?.username ?? null, Date.now());
+        res.json({ ok: true, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
+    } catch (err) {
+        console.error('[TTS] play error:', err);
+        res.status(500).json({ error: err.message || 'Failed to play TTS audio' });
+    }
 });
 
 const token = (process.env.DISCORD_TOKEN || '').trim();

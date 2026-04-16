@@ -524,6 +524,23 @@
         .shortcut-row span:first-child { color: var(--text); }
         .shortcut-keys { display: inline-flex; align-items: center; gap: 0.2rem; }
         .kbd { display: inline-block; padding: 0.15rem 0.45rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 4px; font-size: 0.75rem; font-family: monospace; color: var(--text); line-height: 1.4; }
+        /* TTS card */
+        .tts-toggle-btn { height: 32px; padding: 0 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--surface-hover); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font-weight: 500; cursor: pointer; }
+        .tts-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .tts-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+        .tts-card-header .card-title { margin-bottom: 0; }
+        .tts-close-btn { padding: 0.25rem 0.4rem; font-size: 1rem; line-height: 1; color: var(--text-muted); }
+        .tts-close-btn:hover { color: var(--text); }
+        .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
+        .tts-textarea:focus { outline: none; border-color: var(--accent); }
+        .tts-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
+        .tts-controls select { flex: 1; min-width: 140px; padding: 0.45rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.85rem; }
+        .tts-char-count { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+        .tts-char-count.over-limit { color: var(--danger); }
+        .tts-status { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; }
+        .tts-status.error { color: var(--danger); }
+        .tts-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: tts-spin 0.6s linear infinite; vertical-align: middle; margin-right: 0.35rem; }
+        @keyframes tts-spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -682,10 +699,24 @@
             </div>
             <div class="upload-hint" id="uploadHint" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
         </div>
+        <div class="card hidden" id="ttsCard">
+            <div class="tts-card-header">
+                <span class="card-title">Text-to-Speech</span>
+                <button type="button" class="btn btn-ghost tts-close-btn" onclick="hideTtsSection()" title="Close">✕</button>
+            </div>
+            <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
+            <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
+            <div class="tts-controls">
+                <select id="ttsVoiceSelect"><option value="">Loading voices...</option></select>
+                <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
+            </div>
+            <div class="tts-status hidden" id="ttsStatus"></div>
+        </div>
         <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-actions">
+                    <button type="button" class="tts-toggle-btn hidden" id="ttsToggleBtn" onclick="toggleTtsSection()" title="Text-to-Speech">🗣 TTS</button>
                     <button type="button" class="btn upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound"><span class="upload-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span> Upload</button>
                     <div class="sounds-options-wrap">
                     <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
@@ -876,6 +907,32 @@
                         <span>Allow multiple sounds to play at once</span>
                     </label>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">When enabled, playing a new sound won't stop the current one. Use per-sound "Stop others" in the edit panel to override.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Text-to-Speech</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                        <input type="checkbox" id="ttsEnabledToggle" onchange="setTtsEnabledSetting(this.checked)">
+                        <span>Enable TTS</span>
+                    </label>
+                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>User max chars:</span>
+                            <input type="number" id="ttsMaxTextLengthUserInput" min="0" max="5000" value="200" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxTextLengthSetting('user', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Admin max chars:</span>
+                            <input type="number" id="ttsMaxTextLengthAdminInput" min="0" max="5000" value="500" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxTextLengthSetting('admin', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>User cooldown (s):</span>
+                            <input type="number" id="ttsCooldownSecUserInput" min="0" max="300" value="15" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsCooldownSecSetting('user', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Admin cooldown (s):</span>
+                            <input type="number" id="ttsCooldownSecAdminInput" min="0" max="300" value="5" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsCooldownSecSetting('admin', this.value)">
+                        </label>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</p>
                 </div>
             </div>
 
@@ -1658,6 +1715,16 @@
                 if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
                 if (d.userMaxUploadDuration !== undefined) { const g = document.getElementById('userMaxUploadDurationInput'); if (g) g.value = d.userMaxUploadDuration; }
                 if (d.userMaxUploadBytes !== undefined) { const g = document.getElementById('userMaxUploadBytesInput'); if (g) g.value = Math.round(d.userMaxUploadBytes / 1024); }
+                // TTS superadmin inputs
+                if (d.ttsEnabled !== undefined) { const g = document.getElementById('ttsEnabledToggle'); if (g) g.checked = d.ttsEnabled; }
+                if (d.ttsMaxTextLength) {
+                    const u = document.getElementById('ttsMaxTextLengthUserInput'); if (u && d.ttsMaxTextLength.user !== undefined) u.value = d.ttsMaxTextLength.user;
+                    const a = document.getElementById('ttsMaxTextLengthAdminInput'); if (a && d.ttsMaxTextLength.admin !== undefined) a.value = d.ttsMaxTextLength.admin;
+                }
+                if (d.ttsCooldownSec) {
+                    const u = document.getElementById('ttsCooldownSecUserInput'); if (u && d.ttsCooldownSec.user !== undefined) u.value = d.ttsCooldownSec.user;
+                    const a = document.getElementById('ttsCooldownSecAdminInput'); if (a && d.ttsCooldownSec.admin !== undefined) a.value = d.ttsCooldownSec.admin;
+                }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -1667,6 +1734,7 @@
                 updatePendingBadge(d.pendingCount, 0);
             }
             updateUploadCardVisibility();
+            updateTtsSettings(d);
         }
 
         function updateUploadCardVisibility() {
@@ -1798,6 +1866,19 @@
                 multiPlayActive = enabled;
                 showToast(enabled ? 'Multi-play enabled' : 'Multi-play disabled', 'success');
             }
+        }
+
+        async function setTtsEnabledSetting(enabled) {
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsEnabled: enabled }) });
+            if (res && res.ok) showToast(enabled ? 'TTS enabled' : 'TTS disabled', 'success');
+        }
+        async function setTtsMaxTextLengthSetting(role, val) {
+            const obj = {}; obj[role] = Number(val);
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsMaxTextLength: obj }) });
+        }
+        async function setTtsCooldownSecSetting(role, val) {
+            const obj = {}; obj[role] = Number(val);
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsCooldownSec: obj }) });
         }
 
         async function fetchGuestHistory() {
@@ -3461,6 +3542,144 @@
                     renderSoundsGrid();
                 }
             });
+        }
+
+        // --- TTS ---
+        let ttsVoices = [];
+        let ttsMaxLen = 500;
+        let ttsBusy = false;
+
+        async function fetchTtsStatus() {
+            try {
+                const r = await api('/api/tts/status');
+                if (!r || !r.ok) return;
+                const data = await r.json();
+                const btn = document.getElementById('ttsToggleBtn');
+                if (btn) btn.classList.toggle('hidden', !(data.available && data.enabled));
+                if (data.voices && data.voices.length) {
+                    ttsVoices = data.voices;
+                    populateTtsVoices();
+                }
+            } catch {}
+        }
+
+        function populateTtsVoices() {
+            const sel = document.getElementById('ttsVoiceSelect');
+            if (!sel) return;
+            sel.innerHTML = '';
+            const groups = {};
+            ttsVoices.forEach(v => {
+                const g = v.group || 'Other';
+                if (!groups[g]) groups[g] = [];
+                groups[g].push(v);
+            });
+            for (const [group, voices] of Object.entries(groups)) {
+                const og = document.createElement('optgroup');
+                og.label = group;
+                voices.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v.id;
+                    opt.textContent = `${v.name} (${v.gender})`;
+                    og.appendChild(opt);
+                });
+                sel.appendChild(og);
+            }
+            // Restore saved voice
+            const prefs = loadPrefs();
+            if (prefs.ttsVoice && sel.querySelector(`option[value="${prefs.ttsVoice}"]`)) {
+                sel.value = prefs.ttsVoice;
+            }
+        }
+
+        function toggleTtsSection() {
+            const card = document.getElementById('ttsCard');
+            if (!card) return;
+            const show = card.classList.contains('hidden');
+            card.classList.toggle('hidden', !show);
+            if (show) {
+                fetchTtsStatus();
+                document.getElementById('ttsTextInput')?.focus();
+            }
+        }
+        function hideTtsSection() {
+            document.getElementById('ttsCard')?.classList.add('hidden');
+        }
+
+        function updateTtsCharCount() {
+            const ta = document.getElementById('ttsTextInput');
+            const cc = document.getElementById('ttsCharCount');
+            if (!ta || !cc) return;
+            const len = (ta.value || '').trim().length;
+            cc.textContent = `${len} / ${ttsMaxLen}`;
+            cc.classList.toggle('over-limit', len > ttsMaxLen);
+        }
+
+        const ttsTextEl = document.getElementById('ttsTextInput');
+        if (ttsTextEl) {
+            ttsTextEl.addEventListener('input', updateTtsCharCount);
+        }
+
+        function setTtsStatus(msg, isError) {
+            const el = document.getElementById('ttsStatus');
+            if (!el) return;
+            if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+            el.classList.remove('hidden');
+            el.classList.toggle('error', !!isError);
+            el.innerHTML = msg;
+        }
+
+        async function ttsSpeak() {
+            if (ttsBusy) return;
+            const ta = document.getElementById('ttsTextInput');
+            const sel = document.getElementById('ttsVoiceSelect');
+            if (!ta || !sel) return;
+            const text = (ta.value || '').trim();
+            if (!text) { setTtsStatus('Type something first.', true); return; }
+            if (text.length > ttsMaxLen) { setTtsStatus(`Text too long (${text.length}/${ttsMaxLen}).`, true); return; }
+            const voiceId = sel.value;
+            if (!voiceId) { setTtsStatus('Select a voice.', true); return; }
+
+            savePrefs({ ttsVoice: voiceId });
+
+            ttsBusy = true;
+            const btn = document.getElementById('ttsSpeakBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
+            setTtsStatus('<span class="tts-spinner"></span> Generating speech...');
+
+            try {
+                const r = await api('/api/tts/speak', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, voiceId }),
+                });
+                if (!r) return;
+                const data = await r.json();
+                if (!r.ok) {
+                    setTtsStatus(data.error || 'TTS failed.', true);
+                    if (data.cooldownRemaining) {
+                        setTtsStatus(`Wait ${data.cooldownRemaining}s before using TTS again.`, true);
+                    }
+                } else {
+                    setTtsStatus('');
+                }
+            } catch (e) {
+                setTtsStatus('TTS request failed.', true);
+            } finally {
+                ttsBusy = false;
+                if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
+            }
+        }
+
+        // Update TTS max length from settings
+        function updateTtsSettings(settings) {
+            if (settings && typeof settings.ttsMaxTextLength_self === 'number') {
+                ttsMaxLen = settings.ttsMaxTextLength_self;
+                updateTtsCharCount();
+            }
+            const btn = document.getElementById('ttsToggleBtn');
+            if (btn && settings) {
+                btn.classList.toggle('hidden', !(settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
+            }
         }
 
         async function uploadSound(file) {

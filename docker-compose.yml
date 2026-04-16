@@ -10,3 +10,24 @@ services:
       - ./data:/usr/src/app/data
     env_file:
       - .env
+
+  # TTS service (optional, requires NVIDIA GPU)
+  # Uncomment to run alongside the soundboard in Docker.
+  # Set TTS_API_URL=http://tts-server:8880 in your .env
+  # tts-server:
+  #   build: ./tts-server
+  #   container_name: tts-server
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8880:8880"
+  #   volumes:
+  #     - ./tts-server/models:/app/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   env_file:
+  #     - ./tts-server/.env
