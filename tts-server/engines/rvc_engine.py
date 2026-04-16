@@ -1,5 +1,18 @@
 """RVC v2 voice conversion engine. Converts base TTS audio to a target voice."""
 
+# Monkey-patch fairseq dataclass bug (mutable default not allowed in Python 3.11+)
+# Must run before fairseq is imported by infer_rvc_python.
+import dataclasses as _dc
+_orig_field = _dc.field
+def _patched_field(*args, **kwargs):
+    if 'default' in kwargs:
+        default = kwargs['default']
+        if isinstance(default, type):
+            kwargs['default_factory'] = default
+            del kwargs['default']
+    return _orig_field(*args, **kwargs)
+_dc.field = _patched_field
+
 import os
 import json
 import tempfile
