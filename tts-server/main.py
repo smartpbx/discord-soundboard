@@ -1,19 +1,8 @@
 """TTS Service -- FastAPI app exposing Kokoro + RVC for the Discord soundboard."""
 
-# Monkey-patch Python's dataclass mutable default detection BEFORE fairseq is imported.
-# fairseq 0.12.2 assigns dataclass classes as field defaults (e.g. `common: CommonConfig = CommonConfig`).
-# Python 3.11+ rejects this in _process_class(). We patch _process_class to auto-wrap
-# mutable defaults with default_factory.
-import dataclasses as _dc
-if hasattr(_dc, '_process_class'):
-    _orig_process = _dc._process_class
-    def _patched_process(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot):
-        # Before processing, fix any mutable class defaults
-        for name, val in list(cls.__dict__.items()):
-            if isinstance(val, type) and _dc.is_dataclass(val):
-                setattr(cls, name, _dc.field(default_factory=val))
-        return _orig_process(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot)
-    _dc._process_class = _patched_process
+# NOTE: fairseq 0.12.2 has mutable dataclass defaults that break on Python 3.11+.
+# The fix is applied by tts-server/scripts/fix-fairseq.sh which patches the
+# installed fairseq source directly. Run it after installing/updating fairseq.
 
 import os
 import time
