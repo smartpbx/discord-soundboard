@@ -29,8 +29,13 @@ const DEFAULT_GUEST_COOLDOWN_SEC = 10;
 const DEFAULT_GUEST_MAX_DURATION = 7;
 const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
 
-function getGuestCooldownSec() {
+function getGuestCooldownSec(ip) {
     const d = loadGuestData();
+    if (ip) {
+        const overrides = d.cooldownOverrides && typeof d.cooldownOverrides === 'object' ? d.cooldownOverrides : {};
+        const v = Number(overrides[String(ip).trim()]);
+        if (Number.isFinite(v) && v >= 0) return v;
+    }
     const n = Number(d.guestCooldownSec);
     return Number.isFinite(n) && n >= 0 ? n : DEFAULT_GUEST_COOLDOWN_SEC;
 }
@@ -39,6 +44,36 @@ function setGuestCooldownSec(sec) {
     const d = loadGuestData();
     d.guestCooldownSec = Number(sec) >= 0 ? Number(sec) : DEFAULT_GUEST_COOLDOWN_SEC;
     saveGuestData(d);
+}
+
+function getCooldownOverrides() {
+    const d = loadGuestData();
+    return d.cooldownOverrides && typeof d.cooldownOverrides === 'object' ? { ...d.cooldownOverrides } : {};
+}
+
+function setCooldownOverride(ip, sec) {
+    const d = loadGuestData();
+    const key = String(ip || '').trim();
+    if (!key) return false;
+    const overrides = d.cooldownOverrides && typeof d.cooldownOverrides === 'object' ? d.cooldownOverrides : {};
+    const n = Number(sec);
+    if (!Number.isFinite(n) || n < 0) return false;
+    overrides[key] = n;
+    d.cooldownOverrides = overrides;
+    saveGuestData(d);
+    return true;
+}
+
+function deleteCooldownOverride(ip) {
+    const d = loadGuestData();
+    const key = String(ip || '').trim();
+    if (!key) return false;
+    const overrides = d.cooldownOverrides && typeof d.cooldownOverrides === 'object' ? d.cooldownOverrides : {};
+    if (!(key in overrides)) return false;
+    delete overrides[key];
+    d.cooldownOverrides = overrides;
+    saveGuestData(d);
+    return true;
 }
 
 function getGuestMaxDuration() {
@@ -641,7 +676,8 @@ function loadApprovedSignups() {
             username: String(u.username).trim().toLowerCase(),
             password: u.password,
             role: (u.role === 'admin' ? 'admin' : 'user'),
-            mustChangePassword: u.mustChangePassword === true
+            mustChangePassword: u.mustChangePassword === true,
+            disabled: u.disabled === true
         }));
     } catch {
         return [];
@@ -655,7 +691,7 @@ function loadUsers() {
     const signups = loadApprovedSignups();
     signups.forEach(u => {
         const un = u.username;
-        if (un && !env.has(un)) env.set(un, { username: un, password: u.password, role: u.role, mustChangePassword: u.mustChangePassword });
+        if (un && !env.has(un)) env.set(un, { username: un, password: u.password, role: u.role, mustChangePassword: u.mustChangePassword, disabled: u.disabled });
     });
     return env;
 }
@@ -679,8 +715,20 @@ function addApprovedUser(username, password, role) {
     const un = String(username).trim().toLowerCase();
     if (!un || !password) return false;
     const r = (role === 'admin' ? 'admin' : 'user');
-    USERS.set(un, { username: un, password: password, role: r, mustChangePassword: false });
-    approvedSignups.push({ username: un, password, role: r, mustChangePassword: false });
+    USERS.set(un, { username: un, password: password, role: r, mustChangePassword: false, disabled: false });
+    approvedSignups.push({ username: un, password, role: r, mustChangePassword: false, disabled: false });
+    saveApprovedSignups(approvedSignups);
+    return true;
+}
+
+function setManagedUserDisabled(username, disabled) {
+    const un = String(username).trim().toLowerCase();
+    if (!un || envUsernames.has(un)) return false;
+    const idx = approvedSignups.findIndex(u => u.username === un);
+    if (idx < 0) return false;
+    approvedSignups[idx].disabled = disabled === true;
+    const entry = USERS.get(un);
+    if (entry) entry.disabled = disabled === true;
     saveApprovedSignups(approvedSignups);
     return true;
 }
@@ -791,6 +839,7 @@ function checkCredentials(username, password) {
     const p = String(password || '');
     const entry = USERS.get(u);
     if (entry && entry.password === p) {
+        if (entry.disabled === true) return { disabled: true };
         return { username: entry.username, role: entry.role, mustChangePassword: entry.mustChangePassword === true };
     }
     return null;
@@ -962,6 +1011,7 @@ app.post('/api/login', (req, res) => {
     const { username, password } = req.body || {};
     const user = checkCredentials(String(username || ''), String(password || ''));
     if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+    if (user.disabled) return res.status(403).json({ error: 'Account is disabled. Contact an admin.' });
     req.session.user = user;
     req.session.save((err) => {
         if (err) return res.status(500).json({ error: 'Session error' });
@@ -1252,6 +1302,15 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
     }
 });
 
+const ARCHIVE_DIR = path.join(SOUNDS_DIR, '.archive');
+function archiveSoundFile(filePath, safeFilename) {
+    if (!fs.existsSync(ARCHIVE_DIR)) fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = path.join(ARCHIVE_DIR, `${ts}__${safeFilename}`);
+    fs.renameSync(filePath, dest);
+    return dest;
+}
+
 app.delete('/api/sounds/:filename', requireSuperadmin, (req, res) => {
     const raw = req.params.filename;
     const safeFilename = path.basename(raw);
@@ -1265,13 +1324,21 @@ app.delete('/api/sounds/:filename', requireSuperadmin, (req, res) => {
             player.stop();
             playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
         }
-        fs.unlinkSync(filePath);
+        const archivedPath = archiveSoundFile(filePath, safeFilename);
         const meta = loadSoundsMeta();
+        const snapshot = meta[safeFilename] || null;
         delete meta[safeFilename];
         const order = getSoundOrder(meta).filter(f => f !== safeFilename);
         meta._order = order;
         saveSoundsMeta(meta);
-        res.json({ ok: true });
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'sound.delete',
+            target: safeFilename,
+            details: { archivedPath: path.relative(SOUNDS_DIR, archivedPath), meta: snapshot },
+        });
+        res.json({ ok: true, archived: true });
     } catch (err) {
         console.error('Delete sound error:', err);
         res.status(500).json({ error: err.message || 'Failed to delete sound' });
@@ -1590,10 +1657,18 @@ app.post('/api/superadmin/pending-uploads/approve/:filename', requireSuperadmin,
         return res.status(400).json({ error: 'A sound with this name already exists' });
     }
     try {
+        const pendingMeta = (loadPendingMeta().uploads || []).find(u => u.filename === safeFilename) || {};
         fs.renameSync(pendingPath, targetPath);
         const duration = probeDuration(targetPath);
         if (duration != null) setSoundMeta(safeFilename, { duration });
         removePendingUpload(safeFilename);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'upload.approve',
+            target: safeFilename,
+            details: { uploader: pendingMeta.uploader || null },
+        });
         res.json({ ok: true, filename: safeFilename });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to approve' });
@@ -1605,8 +1680,16 @@ app.delete('/api/superadmin/pending-uploads/reject/:filename', requireSuperadmin
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
     const pendingPath = path.join(PENDING_DIR, safeFilename);
     try {
+        const pendingMeta = (loadPendingMeta().uploads || []).find(u => u.filename === safeFilename) || {};
         if (fs.existsSync(pendingPath)) fs.unlinkSync(pendingPath);
         removePendingUpload(safeFilename);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'upload.reject',
+            target: safeFilename,
+            details: { uploader: pendingMeta.uploader || null },
+        });
         res.json({ ok: true });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to reject' });
@@ -1629,7 +1712,43 @@ app.post('/api/superadmin/pending-signups/approve/:username', requireSuperadmin,
     if (!addApprovedUser(un, password, role)) return res.status(500).json({ error: 'Failed to add user' });
     pending.splice(idx, 1);
     savePendingUsers(pending);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'signup.approve',
+        target: un,
+        details: { role },
+    });
     res.json({ ok: true, username: un, role });
+});
+
+app.post('/api/superadmin/pending-signups/bulk-approve', requireSuperadmin, (req, res) => {
+    const usernames = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
+    const role = (req.body && req.body.role === 'admin') ? 'admin' : 'user';
+    const pending = loadPendingUsers();
+    const approved = [];
+    const failed = [];
+    for (const raw of usernames) {
+        const un = String(raw || '').trim().toLowerCase();
+        if (!un) continue;
+        const idx = pending.findIndex(p => String(p.username || '').toLowerCase() === un);
+        if (idx < 0) { failed.push({ username: un, reason: 'not found' }); continue; }
+        const { password } = pending[idx];
+        if (!addApprovedUser(un, password, role)) { failed.push({ username: un, reason: 'add failed' }); continue; }
+        pending.splice(idx, 1);
+        approved.push(un);
+    }
+    savePendingUsers(pending);
+    if (approved.length) {
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'signup.bulk-approve',
+            target: null,
+            details: { approved, role, failedCount: failed.length },
+        });
+    }
+    res.json({ approved, failed, role });
 });
 
 app.post('/api/superadmin/pending-signups/reject/:username', requireSuperadmin, (req, res) => {
@@ -1640,13 +1759,19 @@ app.post('/api/superadmin/pending-signups/reject/:username', requireSuperadmin, 
     if (idx < 0) return res.status(404).json({ error: 'Pending signup not found' });
     pending.splice(idx, 1);
     savePendingUsers(pending);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'signup.reject',
+        target: un,
+    });
     res.json({ ok: true });
 });
 
 app.get('/api/superadmin/users', requireSuperadmin, (req, res) => {
     const list = [];
     USERS.forEach((u, un) => {
-        list.push({ username: un, role: u.role, managed: !envUsernames.has(un) });
+        list.push({ username: un, role: u.role, managed: !envUsernames.has(un), disabled: u.disabled === true });
     });
     list.sort((a, b) => a.username.localeCompare(b.username));
     res.json(list);
@@ -1656,14 +1781,22 @@ app.patch('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     const un = String(req.params.username || '').trim().toLowerCase();
     if (!un) return res.status(400).json({ error: 'Username required' });
     const body = req.body || {};
+    const actor = req.session.user.username;
+    const actorRole = req.session.user.role;
     if (body.role !== undefined) {
         const role = body.role === 'admin' ? 'admin' : 'user';
         if (!updateManagedUserRole(un, role)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
+        statsDb.recordAdminAction({ actor, actorRole, action: 'user.role', target: un, details: { role } });
     }
     if (body.password !== undefined && body.password !== null && body.password !== '') {
         const newPw = String(body.password);
         const forceChange = body.forceChange === true;
         if (!updateManagedUserPassword(un, newPw, forceChange)) return res.status(400).json({ error: 'User not found, env-configured, or password too short (min 6 chars)' });
+        statsDb.recordAdminAction({ actor, actorRole, action: 'user.password-reset', target: un, details: { forceChange } });
+    }
+    if (body.disabled !== undefined) {
+        if (!setManagedUserDisabled(un, body.disabled === true)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
+        statsDb.recordAdminAction({ actor, actorRole, action: body.disabled ? 'user.disable' : 'user.enable', target: un });
     }
     res.json({ ok: true, username: un });
 });
@@ -1682,6 +1815,12 @@ app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     const un = String(req.params.username || '').trim().toLowerCase();
     if (!un) return res.status(400).json({ error: 'Username required' });
     if (!removeManagedUser(un)) return res.status(400).json({ error: 'User not found or cannot be removed (env-configured)' });
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'user.delete',
+        target: un,
+    });
     res.json({ ok: true });
 });
 
@@ -1712,6 +1851,12 @@ app.post('/api/guest/block-ip', requireSuperadmin, (req, res) => {
     const s = (ip != null ? String(ip) : '').trim();
     if (!s) return res.status(400).json({ error: 'IP required' });
     blockIP(s);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'ip.block',
+        target: s,
+    });
     res.json({ ok: true, blocked: s });
 });
 
@@ -1719,6 +1864,98 @@ app.delete('/api/guest/block-ip/:ip', requireSuperadmin, (req, res) => {
     const ip = decodeURIComponent(req.params.ip || '').trim();
     if (!ip) return res.status(400).json({ error: 'IP required' });
     unblockIP(ip);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'ip.unblock',
+        target: ip,
+    });
+    res.json({ ok: true });
+});
+
+function parseIpList(raw) {
+    if (Array.isArray(raw)) {
+        return raw.map(x => String(x).trim()).filter(Boolean);
+    }
+    if (typeof raw === 'string') {
+        return raw.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+app.post('/api/guest/block-ip/bulk', requireSuperadmin, (req, res) => {
+    const ips = parseIpList(req.body?.ips);
+    if (!ips.length) return res.status(400).json({ error: 'No IPs provided' });
+    const blocked = [];
+    for (const ip of ips) {
+        if (!isIPBlocked(ip)) {
+            blockIP(ip);
+            blocked.push(ip);
+        }
+    }
+    if (blocked.length) {
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'ip.bulk-block',
+            target: null,
+            details: { blocked, total: ips.length },
+        });
+    }
+    res.json({ blocked, skipped: ips.length - blocked.length });
+});
+
+app.post('/api/guest/unblock-ip/bulk', requireSuperadmin, (req, res) => {
+    const ips = parseIpList(req.body?.ips);
+    if (!ips.length) return res.status(400).json({ error: 'No IPs provided' });
+    const unblocked = [];
+    for (const ip of ips) {
+        if (isIPBlocked(ip)) {
+            unblockIP(ip);
+            unblocked.push(ip);
+        }
+    }
+    if (unblocked.length) {
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'ip.bulk-unblock',
+            target: null,
+            details: { unblocked, total: ips.length },
+        });
+    }
+    res.json({ unblocked, skipped: ips.length - unblocked.length });
+});
+
+app.get('/api/guest/cooldown-overrides', requireSuperadmin, (req, res) => {
+    res.json(getCooldownOverrides());
+});
+
+app.put('/api/guest/cooldown-override', requireSuperadmin, (req, res) => {
+    const { ip, cooldownSec } = req.body || {};
+    const key = (ip != null ? String(ip) : '').trim();
+    if (!key) return res.status(400).json({ error: 'IP required' });
+    if (!setCooldownOverride(key, cooldownSec)) return res.status(400).json({ error: 'Invalid cooldown value' });
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'ip.cooldown-override.set',
+        target: key,
+        details: { cooldownSec: Number(cooldownSec) },
+    });
+    res.json({ ok: true, ip: key, cooldownSec: Number(cooldownSec) });
+});
+
+app.delete('/api/guest/cooldown-override/:ip', requireSuperadmin, (req, res) => {
+    const ip = decodeURIComponent(req.params.ip || '').trim();
+    if (!ip) return res.status(400).json({ error: 'IP required' });
+    if (!deleteCooldownOverride(ip)) return res.status(404).json({ error: 'Override not found' });
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'ip.cooldown-override.clear',
+        target: ip,
+    });
     res.json({ ok: true });
 });
 
@@ -1832,7 +2069,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
         const ip = getClientIP(req);
         if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
         const lastPlay = guestLastPlayByIP.get(ip);
-        const cooldownSec = getGuestCooldownSec();
+        const cooldownSec = getGuestCooldownSec(ip);
         if (lastPlay != null && cooldownSec > 0) {
             const elapsed = (Date.now() - lastPlay) / 1000;
             if (elapsed < cooldownSec) {
@@ -2140,6 +2377,66 @@ app.get('/api/stats/plays', requireAdmin, (req, res) => {
     const limit = toInt(req.query.limit) ?? 100;
     const offset = toInt(req.query.offset) ?? 0;
     res.json(statsDb.listPlays({ from, to, user, sound, limit, offset }));
+});
+
+function csvEscape(v) {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+app.get('/api/stats/plays.csv', requireAdmin, (req, res) => {
+    const toInt = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    const from = toInt(req.query.from);
+    const to = toInt(req.query.to);
+    const user = req.query.user ? String(req.query.user) : null;
+    const sound = req.query.sound ? String(req.query.sound) : null;
+    const { rows } = statsDb.listPlays({ from, to, user, sound, limit: 10000, offset: 0 });
+    const header = ['id', 'sound_filename', 'display_name', 'user_id', 'user_role', 'guest_ip', 'started_at_iso', 'ended_at_iso', 'planned_duration_ms', 'actual_duration_ms', 'stopped_early'];
+    const lines = [header.join(',')];
+    for (const r of rows) {
+        lines.push([
+            r.id,
+            csvEscape(r.sound_filename),
+            csvEscape(r.display_name),
+            csvEscape(r.user_id),
+            csvEscape(r.user_role),
+            csvEscape(r.guest_ip),
+            r.started_at ? new Date(r.started_at).toISOString() : '',
+            r.ended_at ? new Date(r.ended_at).toISOString() : '',
+            r.planned_duration_ms ?? '',
+            r.actual_duration_ms ?? '',
+            r.stopped_early ? 1 : 0,
+        ].join(','));
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="plays-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(lines.join('\n'));
+});
+
+// Daily play counts for heatmap (default last 90 days).
+app.get('/api/stats/plays-per-day', requireAdmin, (req, res) => {
+    const days = Math.max(1, Math.min(365, Number(req.query.days) || 90));
+    const fromMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    res.json({ days, rows: statsDb.getPlaysPerDay(fromMs) });
+});
+
+// Admin action log (admin+ read, anyone with admin role).
+app.get('/api/stats/admin-actions', requireAdmin, (req, res) => {
+    const toInt = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    const from = toInt(req.query.from);
+    const to = toInt(req.query.to);
+    const actor = req.query.actor ? String(req.query.actor) : null;
+    const action = req.query.action ? String(req.query.action) : null;
+    const limit = toInt(req.query.limit) ?? 100;
+    const offset = toInt(req.query.offset) ?? 0;
+    res.json(statsDb.listAdminActions({ from, to, actor, action, limit, offset }));
 });
 
 app.post('/api/stop', requireAdmin, (req, res) => {
