@@ -3698,8 +3698,7 @@
             }
             const btn = document.getElementById('ttsToggleBtn');
             if (btn && settings) {
-                const isSuperadmin = user && user.role === 'superadmin';
-                btn.classList.toggle('hidden', !(isSuperadmin && settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
+                btn.classList.toggle('hidden', !(settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
             }
         }
 
