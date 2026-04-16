@@ -242,6 +242,18 @@ function setUserCooldownSec(sec) {
     saveGuestData(d);
 }
 
+function getAutoNormalizeUploads() {
+    const d = loadGuestData();
+    // Default ON if unset.
+    return d.autoNormalizeUploads !== false;
+}
+
+function setAutoNormalizeUploads(enabled) {
+    const d = loadGuestData();
+    d.autoNormalizeUploads = enabled === true;
+    saveGuestData(d);
+}
+
 // --- TTS settings (stored in guest.json alongside other settings) ---
 function getTtsEnabled() {
     const d = loadGuestData();
@@ -1400,52 +1412,52 @@ app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
     }
 });
 
+// Peak-based normalization using volumedetect. Writes to a .tmp.mp3 and
+// renames over the original on success. Callback: cb(err, { skipped, gain }).
+// Deterministic and idempotent — short files are safe (unlike loudnorm).
+function normalizeFileInPlace(filePath, cb) {
+    const measure = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let measureErr = '';
+    measure.stderr.on('data', chunk => { measureErr += chunk.toString(); });
+    measure.on('error', err => cb(err));
+    measure.on('close', code => {
+        if (code !== 0) return cb(new Error('Volume measurement failed'));
+        const maxMatch = measureErr.match(/max_volume:\s*([-\d.]+)\s*dB/);
+        if (!maxMatch) return cb(new Error('Could not parse volume measurement'));
+        const maxVolume = parseFloat(maxMatch[1]);
+        const gain = -1.0 - maxVolume;
+        console.log('[normalize]', path.basename(filePath), 'max_volume:', maxVolume, 'dB, gain:', gain.toFixed(1), 'dB');
+        if (Math.abs(gain) < 0.5) return cb(null, { skipped: true, gain });
+        const tmpPath = filePath + '.norm.tmp.mp3';
+        const pass = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', `volume=${gain}dB`, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+        pass.stderr.on('data', () => {});
+        pass.on('error', err => { try { fs.unlinkSync(tmpPath); } catch {} ; cb(err); });
+        pass.on('close', code2 => {
+            if (code2 !== 0) {
+                try { fs.unlinkSync(tmpPath); } catch {}
+                return cb(new Error('Normalization failed'));
+            }
+            try {
+                fs.renameSync(tmpPath, filePath);
+                cb(null, { skipped: false, gain });
+            } catch (err2) {
+                cb(err2);
+            }
+        });
+    });
+}
+
 app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
     const safeFilename = path.basename(req.params.filename || '');
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!path.resolve(filePath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-
-    // Peak-based normalization using volumedetect.
-    // Measures peak volume, then applies gain to bring peak to -1.0 dB.
-    // This is deterministic and idempotent — unlike loudnorm which breaks on short files.
-    const measure = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let measureErr = '';
-    measure.stderr.on('data', chunk => { measureErr += chunk.toString(); });
-    measure.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
-    measure.on('close', code => {
-        if (code !== 0) return res.status(500).json({ error: 'Volume measurement failed.' });
-
-        const maxMatch = measureErr.match(/max_volume:\s*([-\d.]+)\s*dB/);
-        if (!maxMatch) return res.status(500).json({ error: 'Could not parse volume measurement.' });
-
-        const maxVolume = parseFloat(maxMatch[1]);
-        const gain = -1.0 - maxVolume; // bring peak to -1.0 dB
-        console.log('[normalize]', safeFilename, 'max_volume:', maxVolume, 'dB, gain:', gain.toFixed(1), 'dB');
-
-        // If peak is already close to -1.0 dB (within 0.5 dB), skip
-        if (Math.abs(gain) < 0.5) {
-            return res.json({ ok: true, skipped: true, message: 'Already normalized' });
-        }
-
-        const tmpPath = filePath + '.norm.tmp.mp3';
-        const pass = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', `volume=${gain}dB`, '-ar', '48000', '-y', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] });
-        pass.stderr.on('data', () => {});
-        pass.on('error', err => { res.status(500).json({ error: 'ffmpeg error: ' + err.message }); });
-        pass.on('close', code2 => {
-            if (code2 !== 0) {
-                try { fs.unlinkSync(tmpPath); } catch {}
-                return res.status(500).json({ error: 'Normalization failed.' });
-            }
-            try {
-                fs.renameSync(tmpPath, filePath);
-                const duration = probeDuration(filePath);
-                if (duration != null) setSoundMeta(safeFilename, { duration });
-                res.json({ ok: true });
-            } catch (err2) {
-                res.status(500).json({ error: err2.message || 'Failed to save normalized file' });
-            }
-        });
+    normalizeFileInPlace(filePath, (err, result) => {
+        if (err) return res.status(500).json({ error: err.message || 'Normalization failed' });
+        if (result.skipped) return res.json({ ok: true, skipped: true, message: 'Already normalized' });
+        const duration = probeDuration(filePath);
+        if (duration != null) setSoundMeta(safeFilename, { duration });
+        res.json({ ok: true, gain: result.gain });
     });
 });
 
@@ -1540,6 +1552,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.userMaxUploadBytes = getUserMaxUploadBytes();
         out.userMaxDuration = getUserMaxDuration();
         out.userCooldownSec = getUserCooldownSec();
+        out.autoNormalizeUploads = getAutoNormalizeUploads();
         const pending = (loadPendingMeta().uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
         out.pendingCount = pending.length;
         // TTS settings (superadmin)
@@ -1554,6 +1567,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
     // TTS availability for all roles
     out.ttsEnabled = getTtsEnabled();
     out.ttsAvailable = !!TTS_API_URL;
+    out.autoNormalizeUploads = getAutoNormalizeUploads();
     const role = req.session.user.role;
     out.ttsMaxTextLength_self = getTtsMaxTextLength(role);
     out.ttsCooldownSec_self = getTtsCooldownSec(role);
@@ -1605,6 +1619,17 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (typeof userMaxUploadBytes === 'number' && userMaxUploadBytes > 0) { setUserMaxUploadBytes(userMaxUploadBytes); out.userMaxUploadBytes = userMaxUploadBytes; }
         if (typeof userMaxDuration === 'number' && userMaxDuration > 0) { setUserMaxDuration(userMaxDuration); out.userMaxDuration = userMaxDuration; }
         if (typeof userCooldownSec === 'number' && userCooldownSec >= 0) { setUserCooldownSec(userCooldownSec); out.userCooldownSec = userCooldownSec; }
+        if (typeof req.body.autoNormalizeUploads === 'boolean') {
+            setAutoNormalizeUploads(req.body.autoNormalizeUploads);
+            out.autoNormalizeUploads = getAutoNormalizeUploads();
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.autoNormalizeUploads',
+                target: null,
+                details: { enabled: req.body.autoNormalizeUploads === true },
+            });
+        }
         // TTS settings
         const { ttsEnabled, ttsMaxTextLength, ttsCooldownSec } = req.body;
         if (typeof ttsEnabled === 'boolean') { setTtsEnabled(ttsEnabled); out.ttsEnabled = ttsEnabled; }
@@ -1987,15 +2012,32 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
     const uploadedByRole = role;
     const uploadedByIP = role === 'guest' ? getClientIP(req) : null;
 
+    // Normalization runs by default but the caller can opt out with
+    // skipNormalize=1 on the form, and the global toggle disables it entirely.
+    const skipNormalize = String(req.body?.skipNormalize || '').toLowerCase();
+    const callerSkipped = skipNormalize === '1' || skipNormalize === 'true' || skipNormalize === 'on';
+    const shouldNormalize = getAutoNormalizeUploads() && !callerSkipped;
+
+    const finalizeWithNormalize = (finalPath, afterCb) => {
+        if (!shouldNormalize) return afterCb(null);
+        normalizeFileInPlace(finalPath, (err) => {
+            // Normalization is best-effort — log but don't block the upload.
+            if (err) console.warn('[upload.normalize] failed for', finalPath, err.message);
+            afterCb(null);
+        });
+    };
+
     if (mode === 'direct') {
         const targetPath = path.join(SOUNDS_DIR, safeName);
         const resolvedPath = path.resolve(targetPath);
         if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid filename' });
         fs.rename(tempPath, targetPath, (err) => {
             if (err) return res.status(500).json({ error: 'Error saving file' });
-            const duration = probeDuration(targetPath);
-            if (duration != null) setSoundMeta(safeName, { duration });
-            res.json({ ok: true, message: 'File uploaded!', pending: false });
+            finalizeWithNormalize(targetPath, () => {
+                const duration = probeDuration(targetPath);
+                if (duration != null) setSoundMeta(safeName, { duration });
+                res.json({ ok: true, message: 'File uploaded!', pending: false, normalized: shouldNormalize });
+            });
         });
         return;
     }
@@ -2026,16 +2068,21 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
             fs.unlinkSync(targetPath);
             return res.status(400).json({ error: `File too long. Max ${maxDur} seconds. This file is ${Math.ceil(duration)}s.` });
         }
-        addPendingUpload(safeName, {
-            uploadedBy,
-            uploadedByRole,
-            uploadedByIP,
-            uploadedAt: Date.now(),
-            duration: duration ?? null,
-            size,
-            originalName: origName,
+        finalizeWithNormalize(targetPath, () => {
+            // Re-stat after possible normalize (file contents change).
+            let finalSize = size;
+            try { finalSize = fs.statSync(targetPath).size; } catch {}
+            addPendingUpload(safeName, {
+                uploadedBy,
+                uploadedByRole,
+                uploadedByIP,
+                uploadedAt: Date.now(),
+                duration: duration ?? null,
+                size: finalSize,
+                originalName: origName,
+            });
+            res.json({ ok: true, message: 'Upload sent for moderation. A superadmin will review it.', pending: true, normalized: shouldNormalize });
         });
-        res.json({ ok: true, message: 'Upload sent for moderation. A superadmin will review it.', pending: true });
     });
 });
 

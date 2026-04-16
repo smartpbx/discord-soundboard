@@ -346,6 +346,15 @@
         .sound-grid.compact-mode .sound-item { min-height: 72px; }
         .sound-grid.compact-mode .sound-btn { min-height: 72px; height: 72px; padding: 0.4rem 0.35rem 0.3rem; font-size: 0.78rem; }
         .sound-grid.compact-mode .sound-btn-duration { font-size: 0.65rem; }
+        .sound-btn.hm-1, .mobile-grid-btn.hm-1 { background: #1e3a5f !important; color: #fff !important; border-color: #2b4c75 !important; }
+        .sound-btn.hm-2, .mobile-grid-btn.hm-2 { background: #22716e !important; color: #fff !important; border-color: #2f8784 !important; }
+        .sound-btn.hm-3, .mobile-grid-btn.hm-3 { background: #b25d2e !important; color: #fff !important; border-color: #c97139 !important; }
+        .sound-btn.hm-4, .mobile-grid-btn.hm-4 { background: #a02928 !important; color: #fff !important; border-color: #bd3a39 !important; }
+        .sound-btn.hm-1 .sound-btn-duration, .sound-btn.hm-2 .sound-btn-duration,
+        .sound-btn.hm-3 .sound-btn-duration, .sound-btn.hm-4 .sound-btn-duration,
+        .mobile-grid-btn.hm-1 .duration, .mobile-grid-btn.hm-2 .duration,
+        .mobile-grid-btn.hm-3 .duration, .mobile-grid-btn.hm-4 .duration { color: rgba(255,255,255,0.8); }
+        .sounds-option-item.hm-active { background: var(--accent); color: white; }
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
@@ -706,6 +715,10 @@
                 <label for="fileInput"><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
                 <input type="file" id="fileInput" accept="audio/*">
             </div>
+            <label id="uploadSkipNormalizeRow" class="hidden" style="display:flex; align-items:center; gap:0.4rem; margin-top:0.5rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer;">
+                <input type="checkbox" id="uploadSkipNormalize">
+                <span>Skip auto-normalization for this upload</span>
+            </label>
             <div class="upload-hint" id="uploadHint" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
         </div>
         <div class="card hidden" id="ttsCard">
@@ -741,6 +754,7 @@
                     <div class="sounds-options-menu hidden" id="soundsOptionsMenu">
                         <button type="button" class="sounds-option-item" id="mobileBtn" onclick="toggleMobileView(); closeSoundsOptionsMenu();" title="Mobile view: fullscreen soundboard">Mobile</button>
                         <button type="button" class="sounds-option-item" id="compactBtn" onclick="toggleCompact(); closeSoundsOptionsMenu();" title="Compact view: smaller buttons">Compact</button>
+                        <button type="button" class="sounds-option-item" id="heatmapBtn" onclick="toggleHeatmapMode(); closeSoundsOptionsMenu();" title="Tint each sound by play count — scale relative to the current filter">Heatmap</button>
                         <button type="button" class="sounds-option-item admin-only" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
                         <button type="button" class="sounds-option-item admin-only" id="manageTagsBtn" onclick="toggleManageTags(); closeSoundsOptionsMenu();" title="Manage tags: reorder, delete, hide">Manage tags</button>
                     </div>
@@ -928,6 +942,14 @@
                         <span>Allow multiple sounds to play at once</span>
                     </label>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">When enabled, playing a new sound won't stop the current one. Use per-sound "Stop others" in the edit panel to override.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Upload Processing</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="autoNormalizeUploadsToggle" onchange="setAutoNormalizeUploads(this.checked)">
+                        <span>Auto-normalize new uploads (peak to -1 dB)</span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">Runs after upload so volume is consistent across sounds. Users can opt out per-upload with a checkbox. Does not affect existing sounds.</p>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Text-to-Speech</div>
@@ -1186,6 +1208,9 @@
         let userUploadEnabled = false;
         let userMaxUploadDuration = 7;
         let userMaxUploadBytes = 2097152;
+        let autoNormalizeUploads = true;
+        let heatmapMode = false;
+        let playCountsMap = {};
         let pausedAt = 0;
         let waveformData = null;
         let waveformDuration = 0;
@@ -1271,6 +1296,37 @@
             if (grid) grid.classList.toggle('compact-mode', compactMode);
             if (compactBtn) compactBtn.classList.toggle('active', compactMode);
             savePrefs({ compact: compactMode });
+        }
+
+        async function toggleHeatmapMode() {
+            heatmapMode = !heatmapMode;
+            const btn = document.getElementById('heatmapBtn');
+            if (btn) btn.classList.toggle('hm-active', heatmapMode);
+            if (heatmapMode) {
+                await refreshPlayCounts();
+            } else {
+                playCountsMap = {};
+            }
+            renderSoundsGrid();
+        }
+
+        async function refreshPlayCounts() {
+            try {
+                const res = await api('/api/stats/play-counts');
+                if (!res || !res.ok) { playCountsMap = {}; return; }
+                playCountsMap = await res.json() || {};
+            } catch { playCountsMap = {}; }
+        }
+
+        function heatmapLevelForFilename(filename, maxCount) {
+            if (!heatmapMode || !maxCount) return 0;
+            const c = playCountsMap[filename] || 0;
+            if (c <= 0) return 0;
+            const ratio = c / maxCount;
+            if (ratio <= 0.25) return 1;
+            if (ratio <= 0.5) return 2;
+            if (ratio <= 0.75) return 3;
+            return 4;
         }
 
         function toggleMobileView() {
@@ -1525,6 +1581,7 @@
             const start = isPaged ? mobilePageIndex * perPage : 0;
             const end = isPaged ? Math.min(start + perPage, filtered.length) : filtered.length;
             const pageSounds = filtered.slice(start, end);
+            const heatmapMax = heatmapMode ? Math.max(0, ...filtered.map(s => playCountsMap[s.filename] || 0)) : 0;
             area.innerHTML = pageSounds.map(s => {
                 const disabled = !canPlay || tooLong(s.duration);
                 const name = (s.displayName || s.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1533,7 +1590,9 @@
                 const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
                 const colorBar = color ? '<span class="mobile-grid-color" style="background:' + color + '"></span>' : '';
                 const playing = (activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : '';
-                return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + playing + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
+                const hmLevel = heatmapLevelForFilename(s.filename, heatmapMax);
+                const hmClass = hmLevel > 0 ? ' hm-' + hmLevel : '';
+                return '<button type="button" class="mobile-grid-btn ' + (disabled ? 'disabled' : '') + playing + hmClass + '" data-filename="' + fn + '" ' + (disabled ? 'disabled' : '') + ' onclick="playSound(this.dataset.filename)">' + colorBar + '<span>' + name + '</span><span class="duration">' + dur + '</span></button>';
             }).join('');
             if (pageEl) pageEl.textContent = isPaged ? `${mobilePageIndex + 1} / ${totalPages}` : '—';
             if (prevBtn) prevBtn.disabled = !isPaged || mobilePageIndex <= 0;
@@ -1961,6 +2020,7 @@
             if (d.guestMaxUploadBytes !== undefined) guestMaxUploadBytes = d.guestMaxUploadBytes;
             if (d.userMaxDuration !== undefined) userMaxDuration = d.userMaxDuration;
             if (d.userCooldownSec !== undefined) userCooldownSec = d.userCooldownSec;
+            if (d.autoNormalizeUploads !== undefined) autoNormalizeUploads = d.autoNormalizeUploads === true;
             const cb = document.getElementById('playbackLockedTop');
             if (cb) cb.checked = playbackLocked;
             const cbSuper = document.getElementById('playbackSuperadminOnlyTop');
@@ -2000,6 +2060,8 @@
                     const a = document.getElementById('ttsCooldownSecAdminInput'); if (a && d.ttsCooldownSec.admin !== undefined) a.value = d.ttsCooldownSec.admin;
                 }
                 if (d.ttsMaxQueueSize !== undefined) { const q = document.getElementById('ttsMaxQueueSizeInput'); if (q) q.value = d.ttsMaxQueueSize; }
+                const an = document.getElementById('autoNormalizeUploadsToggle');
+                if (an && d.autoNormalizeUploads !== undefined) an.checked = d.autoNormalizeUploads === true;
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -2034,6 +2096,8 @@
             } else {
                 hint.textContent = '';
             }
+            const skipRow = document.getElementById('uploadSkipNormalizeRow');
+            if (skipRow) skipRow.classList.toggle('hidden', !(canUpload && autoNormalizeUploads));
             if (!canUpload) card.classList.add('hidden');
         }
         function toggleUploadSection() {
@@ -2140,6 +2204,15 @@
             if (res && res.ok) {
                 multiPlayActive = enabled;
                 showToast(enabled ? 'Multi-play enabled' : 'Multi-play disabled', 'success');
+            }
+        }
+
+        async function setAutoNormalizeUploads(enabled) {
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoNormalizeUploads: enabled === true }) });
+            if (res && res.ok) {
+                autoNormalizeUploads = enabled === true;
+                showToast(enabled ? 'Auto-normalize enabled' : 'Auto-normalize disabled', 'success');
+                updateUploadCardVisibility();
             }
         }
 
@@ -2864,6 +2937,7 @@
             const filtered = getFilteredSounds();
             const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
             const isAdmin = isAdminOrSuperadmin();
+            const heatmapMax = heatmapMode ? Math.max(0, ...filtered.map(s => playCountsMap[s.filename] || 0)) : 0;
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
@@ -2882,11 +2956,14 @@
                 const favorited = favIdx >= 0 ? ' favorited' : '';
                 const color = (s.color && /^#[0-9a-fA-F]{6}$/.test(s.color)) ? s.color : '';
                 const colorDot = color ? '<span class="sound-color-dot" style="background:' + color + '"></span>' : '';
+                const hmLevel = heatmapLevelForFilename(s.filename, heatmapMax);
+                const hmClass = hmLevel > 0 ? ' hm-' + hmLevel : '';
+                const hmTitle = heatmapMode ? ' · ' + (playCountsMap[s.filename] || 0) + ' play' + ((playCountsMap[s.filename] || 0) === 1 ? '' : 's') : '';
                 const inner = `
                     <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
                         ${colorDot}
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${(activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : ''}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${(activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : ''}${hmClass}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}${hmTitle}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -4280,14 +4357,18 @@
             }
             const formData = new FormData();
             formData.append('soundFile', f);
+            const skipEl = document.getElementById('uploadSkipNormalize');
+            if (skipEl && skipEl.checked) formData.append('skipNormalize', '1');
             const res = await api('/api/upload', { method: 'POST', body: formData });
             if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (res.ok) {
                 fileInput.value = '';
+                if (skipEl) skipEl.checked = false;
                 fetchSounds();
                 hideUploadSection();
                 if (data.pending) showToast(data.message || 'Upload sent for moderation.', 'info');
+                else if (data.normalized) showToast('Uploaded and normalized.', 'success');
             } else {
                 showToast(data.error || 'Upload failed', 'error');
             }
