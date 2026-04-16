@@ -17,3 +17,10 @@ Thumbs.db
 *.log
 .env.local
 .env.*.local
+
+# TTS service
+tts-server/.venv/
+tts-server/__pycache__/
+tts-server/engines/__pycache__/
+tts-server/models/
+data/tts-cache/
