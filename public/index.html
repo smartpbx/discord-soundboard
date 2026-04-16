@@ -708,6 +708,11 @@
             <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
             <div class="tts-controls">
                 <select id="ttsVoiceSelect"><option value="">Loading voices...</option></select>
+                <div style="display:flex;align-items:center;gap:0.4rem;min-width:120px;">
+                    <span style="font-size:0.8rem;color:var(--text-muted);">🔊</span>
+                    <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume" style="flex:1;accent-color:var(--accent);height:6px;">
+                    <span id="ttsVolumeLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">100%</span>
+                </div>
                 <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
@@ -3551,6 +3556,7 @@
         let ttsVoices = [];
         let ttsMaxLen = 500;
         let ttsBusy = false;
+        let ttsVolume = 1.0;
 
         async function fetchTtsStatus() {
             try {
@@ -3621,6 +3627,17 @@
         if (ttsTextEl) {
             ttsTextEl.addEventListener('input', updateTtsCharCount);
         }
+        const ttsVolSlider = document.getElementById('ttsVolumeSlider');
+        if (ttsVolSlider) {
+            const prefs = loadPrefs();
+            if (prefs.ttsVolume != null) { ttsVolume = Number(prefs.ttsVolume); ttsVolSlider.value = ttsVolume; }
+            document.getElementById('ttsVolumeLabel').textContent = Math.round(ttsVolume * 100) + '%';
+            ttsVolSlider.addEventListener('input', (e) => {
+                ttsVolume = Number(e.target.value);
+                document.getElementById('ttsVolumeLabel').textContent = Math.round(ttsVolume * 100) + '%';
+                savePrefs({ ttsVolume });
+            });
+        }
 
         function setTtsStatus(msg, isError) {
             const el = document.getElementById('ttsStatus');
@@ -3653,7 +3670,7 @@
                 const r = await api('/api/tts/speak', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, voiceId }),
+                    body: JSON.stringify({ text, voiceId, volume: ttsVolume }),
                 });
                 if (!r) return;
                 const data = await r.json();
@@ -3681,7 +3698,8 @@
             }
             const btn = document.getElementById('ttsToggleBtn');
             if (btn && settings) {
-                btn.classList.toggle('hidden', !(settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
+                const isSuperadmin = user && user.role === 'superadmin';
+                btn.classList.toggle('hidden', !(isSuperadmin && settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
             }
         }
 

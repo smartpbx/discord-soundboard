@@ -2132,9 +2132,10 @@ app.get('/api/tts/voices', requireAuth, async (req, res) => {
 });
 
 app.post('/api/tts/speak', requireAuth, async (req, res) => {
-    const { text, voiceId } = req.body;
+    const { text, voiceId, volume: reqVolume } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
+    const ttsVolume = typeof reqVolume === 'number' ? Math.max(0, Math.min(2, reqVolume)) : 1;
 
     // Check TTS availability
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
@@ -2252,7 +2253,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
                 resource.volume.setVolume(currentVolume);
                 player.play(resource);
             }
-            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-af', `volume=${ttsVolume}`, '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
             ff.stderr.on('data', () => {});
             ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
             Readable.from(wavBuffer).pipe(ff.stdin);
@@ -2266,7 +2267,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
             ff.on('error', (err) => console.error('[TTS] ffmpeg error', err));
             Readable.from(wavBuffer).pipe(ff.stdin);
             const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'tts', displayName: ttsDisplayName } });
-            resource.volume.setVolume(currentVolume);
+            resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume * ttsVolume)));
             player.play(resource);
             playbackState = { status: 'playing', filename: 'tts', displayName: ttsDisplayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
         }
