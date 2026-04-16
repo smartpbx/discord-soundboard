@@ -56,6 +56,12 @@
             line-height: 1.5;
         }
         .app { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
+        @media (min-width: 1100px) {
+            .app { max-width: none; }
+            .app .main-view:not(.hidden) { display: flex; gap: 1.5rem; align-items: flex-start; }
+            .app .sidebar { width: 340px; min-width: 340px; position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; scrollbar-width: thin; }
+            .app .main-panel { flex: 1; min-width: 0; }
+        }
         .app.hidden { display: none; }
         .hidden { display: none !important; }
         .login-screen {
@@ -578,6 +584,7 @@
         </div>
 
         <div id="soundsView" class="main-view">
+        <div class="sidebar">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
             <div class="top-bar-toggles-stack">
@@ -662,6 +669,8 @@
             </div>
         </div>
 
+        </div><!-- .sidebar -->
+        <div class="main-panel">
         <div class="card upload-card-collapsible hidden" id="uploadCard">
             <div class="upload-card-header">
                 <span class="card-title">Upload Sound</span>
@@ -673,7 +682,6 @@
             </div>
             <div class="upload-hint" id="uploadHint" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
         </div>
-
         <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
@@ -777,6 +785,7 @@
             </div>
             <div class="user-locked-msg hidden" id="userLockedMsg">Playback is locked by an admin.</div>
         </div>
+        </div><!-- .main-panel -->
         </div>
 
         <div id="superadminView" class="main-view hidden">
@@ -3446,7 +3455,11 @@
                 soundFilter = (e.target.value || '').trim();
                 savePrefs({ soundFilter });
                 updateFilterClearVisibility();
-                renderSoundsGrid();
+                if (soundFilter && selectedTag !== null) {
+                    selectTag(null);
+                } else {
+                    renderSoundsGrid();
+                }
             });
         }
 
