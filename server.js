@@ -24,6 +24,9 @@ const PENDING_META_PATH = path.join(DATA_DIR, 'pending.json');
 const SERVER_STATE_PATH = path.join(DATA_DIR, 'state.json');
 const USERS_JSON_PATH = path.join(DATA_DIR, 'users.json');
 const PENDING_USERS_PATH = path.join(DATA_DIR, 'pending-users.json');
+const TTS_RECENTS_DIR = path.join(DATA_DIR, 'tts-recents');
+if (!fs.existsSync(TTS_RECENTS_DIR)) fs.mkdirSync(TTS_RECENTS_DIR, { recursive: true });
+const TTS_RECENTS_PER_USER = 5;
 
 const DEFAULT_GUEST_COOLDOWN_SEC = 10;
 const DEFAULT_GUEST_MAX_DURATION = 7;
@@ -457,8 +460,26 @@ function setSoundMeta(filename, updates) {
     if (updates.stopOthers !== undefined) {
         next.stopOthers = !!updates.stopOthers;
     }
+    if (updates.tts !== undefined) {
+        if (updates.tts === null) { delete next.tts; }
+        else if (typeof updates.tts === 'object' && typeof updates.tts.text === 'string' && typeof updates.tts.voiceId === 'string') {
+            next.tts = {
+                text: String(updates.tts.text),
+                voiceId: String(updates.tts.voiceId),
+                voiceLabel: updates.tts.voiceLabel != null ? String(updates.tts.voiceLabel) : null,
+            };
+        }
+    }
     meta[filename] = next;
     saveSoundsMeta(meta);
+}
+
+function getSoundTts(meta, filename) {
+    const m = meta[filename];
+    if (m && typeof m === 'object' && m.tts && typeof m.tts === 'object' && typeof m.tts.text === 'string' && typeof m.tts.voiceId === 'string') {
+        return { text: m.tts.text, voiceId: m.tts.voiceId, voiceLabel: m.tts.voiceLabel || null };
+    }
+    return null;
 }
 
 function getTags(meta, filename) {
@@ -1258,6 +1279,7 @@ app.get('/api/sounds', requireAuth, (req, res) => {
             startTime: getSoundStartTime(meta, filename),
             endTime: getSoundEndTime(meta, filename),
             stopOthers: getSoundStopOthers(meta, filename),
+            tts: getSoundTts(meta, filename),
         }));
         const tagOrder = getTagOrder(meta);
         const hidden = getHiddenTags(meta);
@@ -1373,7 +1395,7 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     if (stopOthers !== undefined) updates.stopOthers = !!stopOthers;
     setSoundMeta(safeFilename, updates);
     const meta = loadSoundsMeta();
-    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename), stopOthers: getSoundStopOthers(meta, safeFilename) });
+    res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename), stopOthers: getSoundStopOthers(meta, safeFilename), tts: getSoundTts(meta, safeFilename) });
 });
 
 app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
@@ -2765,7 +2787,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         return res.status(502).json({ error: 'Failed to read TTS audio' });
     }
 
-    // Cache for "save as sound" feature
+    // Cache for legacy "save last TTS" feature
     ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
 
     const startedBy = { username: req.session.user.username, role };
@@ -2776,11 +2798,42 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()}). Wait for current clips to finish.` });
     }
 
+    // Persist this TTS to the user's recents (skip guests — no persistent identity).
+    let recentId = null;
+    if (!isGuest) {
+        try {
+            const username = req.session.user.username;
+            const ts = Date.now();
+            const fname = `${username.replace(/[^a-zA-Z0-9_-]/g, '_')}_${ts}.wav`;
+            const wavPath = path.join(TTS_RECENTS_DIR, fname);
+            fs.writeFileSync(wavPath, wavBuffer);
+            recentId = statsDb.insertTtsRecent({
+                owner: username,
+                text: trimmed,
+                voiceId,
+                voiceLabel: null,
+                displayName: ttsDisplayName,
+                wavPath: fname,
+            });
+            // Evict beyond TTS_RECENTS_PER_USER, deleting their WAV files.
+            const toEvict = statsDb.listTtsRecentsBeyond(username, TTS_RECENTS_PER_USER);
+            for (const old of toEvict) {
+                try {
+                    const p = path.join(TTS_RECENTS_DIR, path.basename(old.wav_path));
+                    if (p.startsWith(TTS_RECENTS_DIR) && fs.existsSync(p)) fs.unlinkSync(p);
+                } catch (e) { console.warn('[TTS Recents] evict unlink failed:', e.message); }
+                statsDb.deleteTtsRecent(old.id);
+            }
+        } catch (e) {
+            console.warn('[TTS Recents] persist failed:', e.message);
+        }
+    }
+
     // Enqueue and process
-    const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: trimmed, voiceId, ttsVolume, displayName: ttsDisplayName, startedBy, username: req.session.user.username };
+    const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: trimmed, voiceId, ttsVolume, displayName: ttsDisplayName, startedBy, username: req.session.user.username, recentId };
     ttsQueue.push(queueItem);
     const queuePosition = ttsQueue.length;
-    console.log('[TTS Queue] enqueued #%d, position %d, voice=%s', queueItem.id, queuePosition, voiceId);
+    console.log('[TTS Queue] enqueued #%d, position %d, voice=%s, recent=%s', queueItem.id, queuePosition, voiceId, recentId ?? '-');
 
     // Update cooldown
     if (isGuest) {
@@ -2793,66 +2846,117 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
 });
 
-// Save last TTS clip as a permanent sound file
-app.post('/api/tts/save', requireAuth, async (req, res) => {
+// --- TTS recents (per-user, max 5) ---
+
+// List the current user's TTS recents (most recent first).
+app.get('/api/tts/recents', requireAuth, (req, res) => {
+    if (req.session.user.role === 'guest') return res.json([]);
+    const rows = statsDb.listTtsRecents(req.session.user.username, TTS_RECENTS_PER_USER);
+    res.json(rows.map(r => ({
+        id: r.id,
+        text: r.text,
+        voiceId: r.voice_id,
+        voiceLabel: r.voice_label,
+        displayName: r.display_name,
+        createdAt: r.created_at,
+    })));
+});
+
+// Re-queue a stored TTS clip to play in Discord (uses the original WAV).
+app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot replay TTS recents.' });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const row = statsDb.getTtsRecent(id);
+    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    const wavPath = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
+    if (!wavPath.startsWith(TTS_RECENTS_DIR) || !fs.existsSync(wavPath)) {
+        return res.status(404).json({ error: 'Audio file missing' });
+    }
+    // Voice-connection + playback-lock checks (same spirit as /api/tts/speak).
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first' });
+    const meta = loadSoundsMeta();
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        if (lockedBy === 'superadmin' && role !== 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
+    }
+    if (ttsQueue.length >= getTtsMaxQueueSize()) {
+        return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()}).` });
+    }
+    let wavBuffer;
+    try { wavBuffer = fs.readFileSync(wavPath); }
+    catch (e) { return res.status(500).json({ error: 'Failed to read stored audio' }); }
+    const startedBy = { username: req.session.user.username, role };
+    const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: row.text, voiceId: row.voice_id, ttsVolume: 1, displayName: row.display_name || `TTS: "${row.text.slice(0, 40)}"`, startedBy, username: req.session.user.username, recentId: row.id };
+    ttsQueue.push(queueItem);
+    processTtsQueue();
+    res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName });
+});
+
+// Save a stored TTS recent as a permanent sound (WAV → MP3, adds tts metadata).
+app.post('/api/tts/recents/:id/save-as-sound', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot save TTS clips.' });
-    const username = req.session.user.username;
-    const cached = ttsLastBuffer.get(username);
-    if (!cached || !cached.wavBuffer) return res.status(404).json({ error: 'No TTS clip to save. Speak something first.' });
-
-    // Reject if the cached clip is too old (10 minutes)
-    if (Date.now() - cached.timestamp > 10 * 60 * 1000) {
-        ttsLastBuffer.delete(username);
-        return res.status(410).json({ error: 'TTS clip expired. Speak again first.' });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const row = statsDb.getTtsRecent(id);
+    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    const wavPath = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
+    if (!wavPath.startsWith(TTS_RECENTS_DIR) || !fs.existsSync(wavPath)) {
+        return res.status(404).json({ error: 'Audio file missing' });
     }
 
     const { displayName, tags } = req.body || {};
-
-    // Generate filename from display name or text
-    const baseName = (displayName || cached.text || 'tts').trim();
+    const baseName = (displayName || row.text || 'tts').trim();
     let safeName = baseName.replace(/[^a-zA-Z0-9._\- ]/g, '_').replace(/\s+/g, '_').substring(0, 80);
     if (!safeName) safeName = 'tts_clip';
     safeName += '.mp3';
-
-    // Avoid overwriting existing files
-    const targetDir = path.join(__dirname, 'sounds');
     let finalName = safeName;
     let counter = 1;
-    while (fs.existsSync(path.join(targetDir, finalName))) {
+    while (fs.existsSync(path.join(SOUNDS_DIR, finalName))) {
         finalName = safeName.replace('.mp3', `_${counter}.mp3`);
         counter++;
     }
-    const targetPath = path.join(targetDir, finalName);
-
-    // Convert WAV to MP3 via ffmpeg
+    const targetPath = path.join(SOUNDS_DIR, finalName);
     try {
         await new Promise((resolve, reject) => {
-            const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-b:a', '192k', '-y', targetPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+            const ff = spawn('ffmpeg', ['-nostdin', '-i', wavPath, '-b:a', '192k', '-y', targetPath], { stdio: ['ignore', 'pipe', 'pipe'] });
             let stderr = '';
             ff.stderr.on('data', chunk => { stderr += chunk.toString(); });
             ff.on('error', reject);
             ff.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-200)}`)));
-            Readable.from(cached.wavBuffer).pipe(ff.stdin);
         });
     } catch (e) {
         console.error('[TTS Save] ffmpeg error:', e);
         return res.status(500).json({ error: 'Failed to convert audio' });
     }
-
-    // Probe duration and save metadata
     const duration = probeDuration(targetPath);
-    const meta = { displayName: displayName || cached.text.substring(0, 80) };
+    const meta = { displayName: displayName || row.text.substring(0, 80) };
     if (duration != null) meta.duration = duration;
-    if (tags && Array.isArray(tags)) meta.tags = tags;
-    else meta.tags = ['TTS'];
+    meta.tags = Array.isArray(tags) && tags.length ? tags : ['TTS'];
+    meta.tts = { text: row.text, voiceId: row.voice_id, voiceLabel: row.voice_label || null };
     setSoundMeta(finalName, meta);
-
-    // Clear the cached buffer
-    ttsLastBuffer.delete(username);
-
-    console.log('[TTS Save] saved %s (%s bytes, %.1fs) by %s', finalName, fs.statSync(targetPath).size, duration || 0, username);
+    console.log('[TTS Save] saved recent %d as %s by %s', row.id, finalName, req.session.user.username);
     res.json({ ok: true, filename: finalName, displayName: meta.displayName, duration });
+});
+
+// Remove a stored recent and its WAV file.
+app.delete('/api/tts/recents/:id', requireAuth, (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests have no recents.' });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+    const row = statsDb.getTtsRecent(id);
+    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    try {
+        const p = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
+        if (p.startsWith(TTS_RECENTS_DIR) && fs.existsSync(p)) fs.unlinkSync(p);
+    } catch (e) { console.warn('[TTS Recents] unlink failed:', e.message); }
+    statsDb.deleteTtsRecent(row.id);
+    res.json({ ok: true });
 });
 
 app.post('/api/tts/queue/clear', requireAdmin, (req, res) => {
