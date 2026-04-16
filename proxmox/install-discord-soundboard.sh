@@ -9,7 +9,7 @@
 set -e
 
 # --- Config (override with env vars) ---
-HOSTNAME="${HOSTNAME:-discord-soundboard}"
+CT_HOSTNAME="${CT_HOSTNAME:-discord-soundboard}"
 MEMORY="${MEMORY:-512}"
 CORES="${CORES:-1}"
 DISK="${DISK:-8}"
@@ -28,7 +28,7 @@ usage() {
     echo "  install  - Create LXC and install Discord Soundboard in one run (default)"
     echo "  update   - Update existing container (requires CTID)"
     echo ""
-    echo "Uses next free container ID unless CTID is set. Override: CTID, HOSTNAME, MEMORY, CORES, DISK, STORAGE, BRIDGE, GIT_URL, IP, GW"
+    echo "Uses next free container ID unless CTID is set. Override: CTID, CT_HOSTNAME, MEMORY, CORES, DISK, STORAGE, BRIDGE, GIT_URL, IP, GW"
     exit 0
 }
 
@@ -79,9 +79,9 @@ else
     # Look for existing container with hostname discord-soundboard (e.g. from a previous failed run)
     for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
         conf_hostname=$(pct config "$id" 2>/dev/null | grep '^hostname:' | sed 's/.*: *//;s/^ *//;s/ *$//')
-        if [[ "$conf_hostname" == "${HOSTNAME}" ]]; then
+        if [[ "$conf_hostname" == "${CT_HOSTNAME}" ]]; then
             CTID="$id"
-            echo "[*] Found existing container with hostname ${HOSTNAME}: ${CTID} (resuming install)"
+            echo "[*] Found existing container with hostname ${CT_HOSTNAME}: ${CTID} (resuming install)"
             break
         fi
     done
@@ -133,7 +133,7 @@ if ! pct status "${CTID}" &>/dev/null; then
     # Bind-mount data dir on host so volume, channel, guest settings persist across container rebuilds
     DATA_MOUNT_HOST="/var/lib/discord-soundboard-data/${CTID}"
     mkdir -p "${DATA_MOUNT_HOST}"
-    pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
+    pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${CT_HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
         --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=0 ${NS_FOR_CT} --onboot 1 \
         --mp0 "${DATA_MOUNT_HOST},mp=${APP_DIR}/data"
 

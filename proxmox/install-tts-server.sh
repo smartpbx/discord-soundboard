@@ -7,7 +7,7 @@
 set -e
 
 # --- Config (override with env vars) ---
-HOSTNAME="${HOSTNAME:-tts-server}"
+CT_HOSTNAME="${CT_HOSTNAME:-tts-server}"
 MEMORY="${MEMORY:-4096}"
 CORES="${CORES:-4}"
 DISK="${DISK:-20}"
@@ -33,7 +33,7 @@ usage() {
     echo "  install  - Create GPU LXC and install TTS service (default)"
     echo "  update   - Update existing container (requires CTID)"
     echo ""
-    echo "Override: CTID, HOSTNAME, MEMORY, CORES, DISK, STORAGE, BRIDGE, GIT_URL, IP, GW"
+    echo "Override: CTID, CT_HOSTNAME, MEMORY, CORES, DISK, STORAGE, BRIDGE, GIT_URL, IP, GW"
     exit 0
 }
 
@@ -209,9 +209,9 @@ if [[ -n "${CTID:-}" ]]; then
 else
     for id in $(pct list 2>/dev/null | awk 'NR>1 {print $1}'); do
         conf_hostname=$(pct config "$id" 2>/dev/null | grep '^hostname:' | sed 's/.*: *//;s/^ *//;s/ *$//')
-        if [[ "$conf_hostname" == "${HOSTNAME}" ]]; then
+        if [[ "$conf_hostname" == "${CT_HOSTNAME}" ]]; then
             CTID="$id"
-            msg_info "Found existing container with hostname ${HOSTNAME}: ${CTID} (resuming)"
+            msg_info "Found existing container with hostname ${CT_HOSTNAME}: ${CTID} (resuming)"
             break
         fi
     done
@@ -240,7 +240,7 @@ msg_info "Using template: ${TEMPLATE_DEBIAN}"
 
 # Create CT if not exists
 if ! pct status "${CTID}" &>/dev/null; then
-    msg_info "Creating LXC ${CTID} (${HOSTNAME})..."
+    msg_info "Creating LXC ${CTID} (${CT_HOSTNAME})..."
     NET="name=eth0,bridge=${BRIDGE}"
     if [[ -n "${IP}" ]]; then
         NET="${NET},ip=${IP}"
@@ -256,7 +256,7 @@ if ! pct status "${CTID}" &>/dev/null; then
     else
         NS_FOR_CT="--nameserver 8.8.8.8"
     fi
-    pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
+    pct create "${CTID}" "${TEMPLATE_DEBIAN}" --hostname "${CT_HOSTNAME}" --memory "${MEMORY}" --cores "${CORES}" \
         --rootfs "${STORAGE}:${DISK}" --net0 "${NET}" --unprivileged 0 --features nesting=1 ${NS_FOR_CT} --onboot 1
 
     msg_info "Starting container..."
@@ -337,7 +337,7 @@ echo -e "${GN}══════════════════════
 echo -e "${GN}  TTS Server installed successfully!${CL}"
 echo -e "${GN}══════════════════════════════════════════${CL}"
 echo ""
-echo "    Container:  CT ${CTID} (${HOSTNAME})"
+echo "    Container:  CT ${CTID} (${CT_HOSTNAME})"
 echo "    API:        http://${CONTAINER_IP:-<container-ip>}:8880"
 echo "    Health:     curl http://${CONTAINER_IP:-<container-ip>}:8880/health"
 echo "    GPU:        ${GPU_TYPE:-none} (${#GPU_DEVICES[@]} devices)"
