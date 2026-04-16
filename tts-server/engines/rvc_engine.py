@@ -4,7 +4,9 @@ Converts base TTS audio to a target voice using:
 - HuBERT/ContentVec features via transformers (replaces fairseq)
 - F0 pitch extraction via torchcrepe
 - RVC synthesis via direct torch model loading
-- Optional FAISS index retrieval for timbre control
+- FAISS index retrieval for timbre control
+- Consonant/breath protection
+- Per-voice pitch transpose and base voice selection
 """
 
 import io
@@ -16,6 +18,8 @@ from typing import Optional
 import numpy as np
 import torch
 import soundfile as sf
+from scipy.signal import medfilt
+from torch.nn import functional as F
 
 log = logging.getLogger("tts-server")
 
@@ -27,6 +31,7 @@ _hubert_model = None
 _device = None
 _is_half = False
 _synthesizers = {}  # cache: model_id -> (net_g, if_f0, target_sr)
+_faiss_indexes = {}  # cache: index_path -> (index, big_npy)
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +39,7 @@ _synthesizers = {}  # cache: model_id -> (net_g, if_f0, target_sr)
 # ---------------------------------------------------------------------------
 
 def _load_manifest():
-    """Load the voice manifest. Each entry: { id, name, group, pth, index (optional) }"""
+    """Load the voice manifest."""
     if not os.path.exists(MANIFEST_PATH):
         return []
     try:
@@ -67,6 +72,30 @@ def get_voices():
 def get_rvc_model_ids():
     """Return set of valid RVC model IDs (with rvc_ prefix)."""
     return {v["id"] for v in get_voices()}
+
+
+def get_base_voice(rvc_model_id: str) -> Optional[str]:
+    """Return the preferred Kokoro base voice for an RVC model.
+
+    Male RVC targets should use a male Kokoro voice, female targets a female one.
+    The manifest can override this with a 'base_voice' field.
+    """
+    model_id = rvc_model_id.replace("rvc_", "", 1)
+    manifest = _load_manifest()
+    entry = next((e for e in manifest if e["id"] == model_id), None)
+    if not entry:
+        return None
+
+    # Explicit override in manifest
+    if entry.get("base_voice"):
+        return entry["base_voice"]
+
+    # Auto-select based on gender
+    gender = entry.get("gender", "unknown")
+    if gender == "female":
+        return "af_heart"
+    else:
+        return "am_adam"  # male default — deeper, neutral voice
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +161,16 @@ def _extract_hubert_features(audio_16k: np.ndarray) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 def _extract_f0(audio_16k: np.ndarray, hop_length: int = 160,
-                f0_min: float = 50.0, f0_max: float = 1100.0) -> np.ndarray:
-    """Extract F0 using torchcrepe. Returns f0 array of shape (time_frames,)."""
+                f0_min: float = 50.0, f0_max: float = 1100.0,
+                transpose: int = 0, filter_radius: int = 3) -> np.ndarray:
+    """Extract F0 using torchcrepe with median filtering and pitch transpose.
+
+    Args:
+        transpose: Semitones to shift pitch. -12 = one octave down, +12 = one octave up.
+        filter_radius: Median filter size for F0 smoothing. 0 to disable.
+
+    Returns: f0 array of shape (time_frames,)
+    """
     import torchcrepe
 
     device = _get_device()
@@ -155,6 +192,15 @@ def _extract_f0(audio_16k: np.ndarray, hop_length: int = 160,
 
     # Replace NaN with 0
     f0 = np.nan_to_num(f0)
+
+    # Median filter to smooth pitch jitter
+    if filter_radius >= 3:
+        f0 = medfilt(f0, kernel_size=filter_radius)
+
+    # Apply pitch transpose (semitones)
+    if transpose != 0:
+        f0[f0 > 0] *= pow(2, transpose / 12)
+
     return f0
 
 
@@ -180,66 +226,70 @@ def _f0_to_coarse(f0: np.ndarray) -> np.ndarray:
 # FAISS index retrieval
 # ---------------------------------------------------------------------------
 
+def _load_faiss_index(index_path: str):
+    """Load FAISS index and bulk-reconstruct all training vectors (cached)."""
+    if index_path in _faiss_indexes:
+        return _faiss_indexes[index_path]
+
+    import faiss
+
+    index = faiss.read_index(index_path)
+
+    # Try to add DirectMap so we can reconstruct vectors
+    try:
+        ivf = faiss.extract_index_ivf(index)
+        ivf.make_direct_map()
+    except Exception:
+        pass  # Not an IVF index, try reconstruct anyway
+
+    # Bulk-reconstruct all training vectors
+    big_npy = None
+    try:
+        big_npy = index.reconstruct_n(0, index.ntotal)
+        log.info("FAISS index loaded: %s (%d vectors)", index_path, index.ntotal)
+    except Exception as e:
+        log.warning("FAISS reconstruct_n failed (%s), index retrieval will be limited", e)
+
+    _faiss_indexes[index_path] = (index, big_npy)
+    return index, big_npy
+
+
 def _apply_index(feats: torch.Tensor, index_path: str,
-                 index_rate: float = 0.75) -> torch.Tensor:
+                 index_rate: float = 0.5) -> torch.Tensor:
     """Blend HuBERT features with nearest neighbors from FAISS index.
 
-    Uses search + reconstruct_n (batch) for IVF indexes, with fallback to
-    search-only distance-weighted blending if DirectMap is not available.
+    Uses the reference RVC pipeline approach: bulk reconstruct all training
+    vectors, search for k-nearest neighbors, inverse-distance-squared weighted
+    blending.
     """
     if not index_path or not os.path.exists(index_path) or index_rate <= 0:
         return feats
 
     try:
-        import faiss
-
-        index = faiss.read_index(index_path)
+        index, big_npy = _load_faiss_index(index_path)
         feats_np = feats.squeeze(0).cpu().numpy().astype(np.float32)
 
-        # Search for nearest neighbors
-        distances, indices = index.search(feats_np, k=8)
+        if big_npy is not None:
+            # Reference pipeline: search + inverse-distance-squared weighted retrieval
+            k = 8
+            distances, indices = index.search(feats_np, k=k)
 
-        # Try to reconstruct vectors from the index
-        try:
-            # Batch reconstruct: get all unique neighbor IDs, reconstruct them
-            unique_ids = np.unique(indices.ravel())
-            unique_ids = unique_ids[unique_ids >= 0]  # filter out -1 (not found)
-            id_to_vec = {}
-            for uid in unique_ids:
-                id_to_vec[int(uid)] = index.reconstruct(int(uid))
+            # Inverse-distance-squared weighting
+            weights = np.square(1.0 / (distances + 1e-6))
+            weights /= weights.sum(axis=1, keepdims=True)
 
-            # Build retrieved features as mean of k-nearest neighbor vectors
-            retrieved = np.zeros_like(feats_np)
-            for i in range(feats_np.shape[0]):
-                vecs = []
-                for idx in indices[i]:
-                    if int(idx) in id_to_vec:
-                        vecs.append(id_to_vec[int(idx)])
-                if vecs:
-                    retrieved[i] = np.mean(vecs, axis=0)
-                else:
-                    retrieved[i] = feats_np[i]
+            # Weighted sum of neighbor vectors from bulk-reconstructed array
+            retrieved = np.sum(big_npy[indices] * np.expand_dims(weights, axis=2), axis=1)
 
+            # Blend with original features
             blended = (1 - index_rate) * feats_np + index_rate * retrieved
-
-        except RuntimeError:
-            # DirectMap not initialized — use distance-weighted self-blending
-            # The index still helps by finding that close neighbors exist;
-            # we pull features toward the nearest-neighbor direction using distances
-            # as a confidence signal. Smaller distance = more confident match.
-            log.info("FAISS index has no DirectMap, using distance-weighted blending")
-            weights = 1.0 / (distances + 1e-6)  # inverse distance weights
-            weights = weights / weights.sum(axis=1, keepdims=True)  # normalize per frame
-            # Average distance per frame — lower means better match, less modification needed
-            avg_dist = distances.mean(axis=1, keepdims=True)
-            confidence = np.clip(1.0 - avg_dist / (avg_dist.max() + 1e-6), 0, 1)
-            # Apply subtle smoothing toward local mean when confidence is high
-            from scipy.ndimage import uniform_filter1d
-            smoothed = uniform_filter1d(feats_np, size=3, axis=0)
-            blended = feats_np + confidence * index_rate * (smoothed - feats_np)
+            log.info("FAISS index applied (rate=%.2f, %d vectors)", index_rate, index.ntotal)
+        else:
+            # Fallback: no reconstruction available, skip index
+            log.warning("FAISS index has no reconstructable vectors, skipping")
+            blended = feats_np
 
         feats = torch.from_numpy(blended).unsqueeze(0).to(feats.device, dtype=feats.dtype)
-        log.info("FAISS index applied (rate=%.2f)", index_rate)
 
     except ImportError:
         log.warning("faiss-cpu not installed, skipping index retrieval")
@@ -274,18 +324,13 @@ def _load_synthesizer(model_id: str, pth_path: str):
     if config is None:
         raise ValueError(f"RVC checkpoint missing 'config' key: {pth_path}")
 
-    # config is a list/tuple of constructor args
-    # Determine model version from config
-    # v2 models have "version" key or can be inferred from config length
     version = cpt.get("version", "v1")
-    if_f0 = cpt.get("f0", 1)  # 1 = uses F0, 0 = no F0
+    if_f0 = cpt.get("f0", 1)
 
-    # Get sample rate
     sr = config[-1] if isinstance(config[-1], (int, str)) else 40000
     if isinstance(sr, str):
         sr = sr2sr.get(sr, 40000)
 
-    # Select model class
     if version == "v2" or version == "v2_nof0":
         if if_f0:
             model_cls = SynthesizerTrnMs768NSFsid
@@ -319,10 +364,11 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
     Pipeline:
     1. Read input WAV, resample to 16kHz mono
     2. Extract HuBERT content features
-    3. Extract F0 pitch contour
-    4. Optionally blend features with FAISS index
-    5. Run RVC synthesizer
-    6. Return output as WAV bytes
+    3. Extract F0 pitch with transpose and median filtering
+    4. Upsample features, apply FAISS index retrieval
+    5. Apply consonant/breath protection
+    6. Run RVC synthesizer
+    7. Normalize and return output WAV
     """
     model_id = rvc_model_id.replace("rvc_", "", 1)
     manifest = _load_manifest()
@@ -337,6 +383,11 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
         raise FileNotFoundError(f"Model file not found: {pth_path}")
     if index_path and not os.path.exists(index_path):
         index_path = ""
+
+    # Per-voice settings from manifest (with defaults)
+    transpose = entry.get("transpose", 0)
+    index_rate = entry.get("index_rate", 0.5)
+    protect = entry.get("protect", 0.33)
 
     device = _get_device()
 
@@ -364,46 +415,54 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
     # --- 3. Load RVC model ---
     net_g, if_f0, target_sr = _load_synthesizer(model_id, pth_path)
 
-    # --- 4. Extract F0 (if model uses pitch) ---
+    # --- 4. Extract F0 with transpose and filtering ---
     hop_length = 160  # 10ms at 16kHz
     if if_f0:
-        f0 = _extract_f0(audio_16k, hop_length=hop_length)
+        f0 = _extract_f0(audio_16k, hop_length=hop_length, transpose=transpose,
+                         filter_radius=3)
 
     # --- 5. Align feature and F0 lengths ---
-    # HuBERT outputs 1 frame per ~320 samples (20ms) at 16kHz
-    # F0 with hop_length=160 outputs 1 frame per 10ms
-    # We need to upsample HuBERT features 2x to match F0 frame rate
-    feats_len = feats.shape[1]
-
     if if_f0:
         # Upsample HuBERT features 2x to match F0 resolution
         feats = F.interpolate(feats.transpose(1, 2), scale_factor=2, mode="nearest")
-        feats = feats.transpose(1, 2)  # back to (1, T*2, 768)
+        feats = feats.transpose(1, 2)
 
         # Align lengths
         p_len = min(feats.shape[1], len(f0))
         feats = feats[:, :p_len, :]
         f0 = f0[:p_len]
 
-        # --- FAISS index blending ---
+        # Save pre-index features for consonant protection
+        feats0 = feats.clone()
+
+        # FAISS index blending
         if index_path:
-            feats = _apply_index(feats, index_path, index_rate=0.75)
+            feats = _apply_index(feats, index_path, index_rate=index_rate)
+
+        # --- Consonant/breath protection ---
+        if protect < 0.5:
+            pitchf_for_protect = torch.from_numpy(f0).float().unsqueeze(0).to(device)
+            # Build per-frame blend mask: voiced frames use converted features,
+            # unvoiced frames blend back toward original (protecting consonants)
+            protect_mask = torch.ones_like(pitchf_for_protect)
+            protect_mask[pitchf_for_protect < 1] = protect
+            protect_mask = protect_mask.unsqueeze(-1)  # (1, T, 1) for broadcasting
+            feats = feats * protect_mask + feats0 * (1 - protect_mask)
 
         # Prepare pitch tensors
         f0_coarse = _f0_to_coarse(f0)
-        pitch = torch.from_numpy(f0_coarse).long().unsqueeze(0).to(device)  # (1, T)
-        pitchf = torch.from_numpy(f0).float().unsqueeze(0).to(device)  # (1, T)
+        pitch = torch.from_numpy(f0_coarse).long().unsqueeze(0).to(device)
+        pitchf = torch.from_numpy(f0).float().unsqueeze(0).to(device)
     else:
-        # No F0 — just use features directly, still upsample 2x for frame alignment
         feats = F.interpolate(feats.transpose(1, 2), scale_factor=2, mode="nearest")
         feats = feats.transpose(1, 2)
         p_len = feats.shape[1]
 
         if index_path:
-            feats = _apply_index(feats, index_path, index_rate=0.75)
+            feats = _apply_index(feats, index_path, index_rate=index_rate)
 
     # --- 6. Run RVC synthesis ---
-    phone = feats.to(device)  # (1, T, 768 or 256)
+    phone = feats.to(device)
     phone_lengths = torch.tensor([p_len], dtype=torch.long, device=device)
     sid = torch.tensor([0], dtype=torch.long, device=device)
 
@@ -416,11 +475,9 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
     audio_out = audio_out.squeeze(0).squeeze(0).cpu().numpy()
 
     # --- 7. Normalize and write output WAV ---
-    # Clip and normalize
     audio_out = np.clip(audio_out, -1.0, 1.0)
     peak = np.abs(audio_out).max()
     if peak > 0:
-        # Match roughly the input level
         input_peak = np.abs(audio_16k).max()
         if input_peak > 0:
             audio_out = audio_out * (input_peak / peak)
@@ -430,7 +487,3 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
     sf.write(output_buf, audio_out, target_sr, format="WAV")
     output_buf.seek(0)
     return output_buf.read()
-
-
-# Need F for interpolate in convert()
-from torch.nn import functional as F

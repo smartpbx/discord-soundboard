@@ -73,11 +73,11 @@ def synthesize(req: SynthesizeRequest):
     voice_id = req.voice_id
     rvc_model_id = req.rvc_model_id
 
-    # If the voice_id itself is an RVC voice, use it for conversion with a default Kokoro base
+    # If the voice_id itself is an RVC voice, use it for conversion with a matched Kokoro base
     rvc_ids = rvc_engine.get_rvc_model_ids()
     if voice_id in rvc_ids:
         rvc_model_id = voice_id
-        voice_id = "af_heart"  # Default base voice for RVC
+        voice_id = rvc_engine.get_base_voice(voice_id) or "am_adam"
 
     # Validate base voice
     valid_kokoro = kokoro_engine.get_voice_ids()
