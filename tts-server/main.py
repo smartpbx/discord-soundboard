@@ -59,7 +59,7 @@ def health():
 
 @app.get("/voices", response_model=list[VoiceInfo])
 def voices():
-    all_voices = kokoro_engine.get_voices()
+    all_voices = list(kokoro_engine.get_voices())
     all_voices.extend(rvc_engine.get_voices())
     return all_voices
 
