@@ -127,6 +127,14 @@
         .superadmin-panel.active { display: block; }
         .superadmin-section { margin-bottom: 1.5rem; }
         .superadmin-section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .activity-heatmap { display: inline-grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 2px; }
+        .activity-heatmap .hm-cell { width: 12px; height: 12px; border-radius: 2px; background: var(--surface-hover); }
+        .activity-heatmap .hm-cell[data-count="0"] { background: var(--surface-hover); }
+        .activity-heatmap .hm-cell[data-level="1"] { background: #2d4a2b; }
+        .activity-heatmap .hm-cell[data-level="2"] { background: #3d7c38; }
+        .activity-heatmap .hm-cell[data-level="3"] { background: #4da340; }
+        .activity-heatmap .hm-cell[data-level="4"] { background: #6ecb60; }
+        .activity-heatmap .hm-cell:hover { outline: 1px solid var(--accent); }
         .change-password-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: flex; align-items: center; justify-content: center; }
         .change-password-overlay.hidden { display: none !important; }
         .change-password-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; min-width: 280px; max-width: 90vw; }
@@ -841,6 +849,7 @@
                 <button type="button" class="superadmin-tab" data-panel="guests" onclick="switchSuperadminTab('guests')">Guests</button>
                 <button type="button" class="superadmin-tab" data-panel="users" onclick="switchSuperadminTab('users')">Users<span class="tab-badge hidden" id="superadminTabUsersBadge">0</span></button>
                 <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation<span class="tab-badge hidden" id="superadminTabModerationBadge">0</span></button>
+                <button type="button" class="superadmin-tab" data-panel="activity" onclick="switchSuperadminTab('activity')">Activity</button>
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
             </div>
 
@@ -967,6 +976,29 @@
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Blocked IPs</div>
                     <div id="blockedIPsList" class="blocked-ips-list" style="font-size: 0.85rem;"></div>
+                    <details style="margin-top:0.5rem; font-size:0.85rem;">
+                        <summary style="cursor:pointer; color:var(--text-muted);">Bulk block / unblock</summary>
+                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-top:0.5rem;">
+                            <div style="flex:1; min-width:200px;">
+                                <textarea id="bulkBlockInput" rows="3" placeholder="Paste IPs (comma, space, or newline separated)" style="width:100%; padding:0.35rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-family:monospace; font-size:0.85rem;"></textarea>
+                                <button type="button" class="btn btn-danger block-btn" style="margin-top:0.35rem;" onclick="bulkBlockIPs()">Block all</button>
+                            </div>
+                            <div style="flex:1; min-width:200px;">
+                                <textarea id="bulkUnblockInput" rows="3" placeholder="Paste IPs to unblock" style="width:100%; padding:0.35rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-family:monospace; font-size:0.85rem;"></textarea>
+                                <button type="button" class="btn btn-primary block-btn" style="margin-top:0.35rem;" onclick="bulkUnblockIPs()">Unblock all</button>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Per-IP Cooldown Overrides</div>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom:0.35rem;">Override the global guest cooldown for specific IPs. Use for trusted or abusive guests.</p>
+                    <div id="cooldownOverridesList" style="font-size: 0.85rem;"></div>
+                    <div style="display:flex; gap:0.35rem; margin-top:0.5rem; flex-wrap:wrap; align-items:center; font-size:0.85rem;">
+                        <input type="text" id="cooldownOverrideIp" placeholder="IP address" style="padding:0.35rem; flex:1; min-width:140px; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <input type="number" id="cooldownOverrideSec" min="0" max="3600" placeholder="Seconds" style="padding:0.35rem; width:6rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <button type="button" class="btn btn-primary block-btn" onclick="addCooldownOverride()">Add / Update</button>
+                    </div>
                 </div>
             </div>
 
@@ -984,10 +1016,25 @@
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Pending Signups</div>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Choose role when approving.</p>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Choose role when approving. Use checkboxes for bulk approve.</p>
+                    <div id="pendingSignupsBulkBar" class="hidden" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; padding:0.35rem 0.5rem; background:var(--surface-hover); border-radius:var(--radius-sm); font-size:0.85rem;">
+                        <span id="pendingSignupsSelectedCount">0 selected</span>
+                        <select id="bulkApproveRoleSelect" style="padding:0.25rem;font-size:0.85rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text)">
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                        <button type="button" class="btn btn-primary block-btn" onclick="bulkApprovePendingSignups()">Approve selected</button>
+                        <button type="button" class="btn btn-ghost block-btn" onclick="clearPendingSignupSelection()">Clear</button>
+                    </div>
                     <div class="pending-uploads-wrap" style="max-height: 140px; overflow-y: auto;">
                         <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
-                            <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">Username</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Requested</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th><th></th></tr></thead>
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem; width: 24px;"><input type="checkbox" id="pendingSignupsSelectAll" onchange="togglePendingSignupsSelectAll(this.checked)"></th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Username</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Requested</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th>
+                                <th></th>
+                            </tr></thead>
                             <tbody id="pendingSignupsBody"></tbody>
                         </table>
                     </div>
@@ -999,6 +1046,16 @@
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Moderation Queue</div>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">User and guest uploads await approval.</p>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem; font-size:0.85rem; align-items:center;">
+                        <input type="text" id="modUploaderFilter" placeholder="Uploader" style="padding:0.3rem; width:9rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
+                        <input type="date" id="modFromFilter" title="From" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" onchange="applyModerationFilters()">
+                        <input type="date" id="modToFilter" title="To" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" onchange="applyModerationFilters()">
+                        <input type="number" id="modMinSizeKB" min="0" placeholder="Min KB" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
+                        <input type="number" id="modMaxSizeKB" min="0" placeholder="Max KB" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
+                        <input type="number" id="modMinDurationSec" min="0" step="0.1" placeholder="Min sec" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
+                        <input type="number" id="modMaxDurationSec" min="0" step="0.1" placeholder="Max sec" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
+                        <button type="button" class="btn btn-ghost block-btn" onclick="clearModerationFilters()">Clear</button>
+                    </div>
                     <div class="pending-uploads-wrap" style="max-height: 280px; overflow-y: auto;">
                         <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
                             <thead><tr><th style="text-align:left; padding: 0.35rem 0.5rem;">File</th><th style="text-align:left; padding: 0.35rem 0.5rem;">By</th><th style="text-align:left; padding: 0.35rem 0.5rem;">Time</th><th></th></tr></thead>
@@ -1006,6 +1063,65 @@
                         </table>
                     </div>
                     <div id="pendingUploadsEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No pending uploads</div>
+                    <div id="pendingUploadsMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;"></div>
+                </div>
+            </div>
+
+            <div id="superadminPanelActivity" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Activity Heatmap (last 90 days)</div>
+                    <div id="activityHeatmap" class="activity-heatmap" style="overflow-x:auto; padding:0.5rem 0;"></div>
+                    <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;">Each cell = one day. Hover for count.</div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Play Audit Log</span>
+                        <span>
+                            <button type="button" class="btn btn-ghost block-btn" onclick="downloadPlaysCsv()" title="Export current filter as CSV">CSV</button>
+                            <button type="button" class="btn btn-ghost block-btn" onclick="fetchPlayAudit()" title="Reload">↻</button>
+                        </span>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem; font-size:0.85rem;">
+                        <input type="text" id="auditUserFilter" placeholder="User" style="padding:0.3rem; width:8rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <input type="text" id="auditSoundFilter" placeholder="Sound filename" style="padding:0.3rem; width:12rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <input type="date" id="auditFromFilter" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <input type="date" id="auditToFilter" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                        <button type="button" class="btn btn-primary block-btn" onclick="fetchPlayAudit()">Apply</button>
+                        <button type="button" class="btn btn-ghost block-btn" onclick="clearAuditFilters()">Clear</button>
+                    </div>
+                    <div style="max-height:320px; overflow-y:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size:0.85rem; border-collapse:collapse;">
+                            <thead><tr>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Time</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">User</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Role</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Sound</th>
+                                <th style="text-align:right; padding:0.35rem 0.5rem;">Duration</th>
+                                <th style="text-align:center; padding:0.35rem 0.5rem;">Stopped early</th>
+                            </tr></thead>
+                            <tbody id="playAuditBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="playAuditMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;"></div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Admin Action Log</span>
+                        <button type="button" class="btn btn-ghost block-btn" onclick="fetchAdminActions()" title="Reload">↻</button>
+                    </div>
+                    <div style="max-height:280px; overflow-y:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size:0.85rem; border-collapse:collapse;">
+                            <thead><tr>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Time</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Actor</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Action</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Target</th>
+                                <th style="text-align:left; padding:0.35rem 0.5rem;">Details</th>
+                            </tr></thead>
+                            <tbody id="adminActionsBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="adminActionsMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;"></div>
                 </div>
             </div>
 
@@ -1489,6 +1605,124 @@
             document.querySelectorAll('.superadmin-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panelId));
             document.querySelectorAll('.superadmin-panel').forEach(p => p.classList.toggle('active', p.id === 'superadminPanel' + panelId.charAt(0).toUpperCase() + panelId.slice(1)));
             if (panelId === 'ttsVoices') fetchTtsVoicesAdmin();
+            if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
+            if (panelId === 'guests') { fetchCooldownOverrides(); }
+        }
+
+        function clearAuditFilters() {
+            ['auditUserFilter','auditSoundFilter','auditFromFilter','auditToFilter'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            fetchPlayAudit();
+        }
+
+        function _auditQueryString() {
+            const u = (document.getElementById('auditUserFilter')?.value || '').trim();
+            const s = (document.getElementById('auditSoundFilter')?.value || '').trim();
+            const fromDate = (document.getElementById('auditFromFilter')?.value || '').trim();
+            const toDate = (document.getElementById('auditToFilter')?.value || '').trim();
+            const params = new URLSearchParams();
+            if (u) params.set('user', u);
+            if (s) params.set('sound', s);
+            if (fromDate) params.set('from', String(new Date(fromDate + 'T00:00:00').getTime()));
+            if (toDate) params.set('to', String(new Date(toDate + 'T23:59:59').getTime()));
+            return params.toString();
+        }
+
+        async function fetchPlayAudit() {
+            const qs = _auditQueryString();
+            const res = await api('/api/stats/plays?limit=200' + (qs ? '&' + qs : ''));
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            const tbody = document.getElementById('playAuditBody');
+            const meta = document.getElementById('playAuditMeta');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (!data.rows || data.rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted); padding:0.5rem; text-align:center;">No plays match the filters.</td></tr>';
+                if (meta) meta.textContent = 'Total: 0';
+                return;
+            }
+            tbody.innerHTML = data.rows.map(r => {
+                const when = new Date(r.started_at).toLocaleString();
+                const userLabel = r.user_id ? esc(r.user_id) : (r.guest_ip ? 'guest (' + esc(r.guest_ip) + ')' : 'unknown');
+                const dur = r.actual_duration_ms != null ? (r.actual_duration_ms / 1000).toFixed(1) + 's' : '—';
+                const early = r.stopped_early ? '<span style="color:var(--danger)">✓</span>' : '';
+                return '<tr>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(when) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + userLabel + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(r.user_role) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(r.display_name || r.sound_filename) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem; text-align:right;">' + dur + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem; text-align:center;">' + early + '</td>' +
+                    '</tr>';
+            }).join('');
+            if (meta) meta.textContent = 'Showing ' + data.rows.length + ' of ' + data.total + ' (server-capped at 200).';
+        }
+
+        function downloadPlaysCsv() {
+            const qs = _auditQueryString();
+            window.location.href = '/api/stats/plays.csv' + (qs ? '?' + qs : '');
+        }
+
+        async function fetchAdminActions() {
+            const res = await api('/api/stats/admin-actions?limit=200');
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            const tbody = document.getElementById('adminActionsBody');
+            const meta = document.getElementById('adminActionsMeta');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (!data.rows || data.rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted); padding:0.5rem; text-align:center;">No admin actions logged.</td></tr>';
+                if (meta) meta.textContent = 'Total: 0';
+                return;
+            }
+            tbody.innerHTML = data.rows.map(r => {
+                const when = new Date(r.at).toLocaleString();
+                let details = '';
+                if (r.details) {
+                    try { details = JSON.stringify(JSON.parse(r.details)); }
+                    catch { details = String(r.details); }
+                    if (details.length > 80) details = details.slice(0, 80) + '…';
+                }
+                return '<tr>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(when) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(r.actor) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.8em;">' + esc(r.action) + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem;">' + esc(r.target || '—') + '</td>' +
+                    '<td style="padding:0.3rem 0.5rem; color:var(--text-muted); font-family:monospace; font-size:0.8em;" title="' + esc(r.details || '') + '">' + esc(details || '—') + '</td>' +
+                    '</tr>';
+            }).join('');
+            if (meta) meta.textContent = 'Showing ' + data.rows.length + ' of ' + data.total + '.';
+        }
+
+        async function renderActivityHeatmap() {
+            const el = document.getElementById('activityHeatmap');
+            if (!el) return;
+            const res = await api('/api/stats/plays-per-day?days=90');
+            if (!res || !res.ok) { el.innerHTML = '<span style="color:var(--text-muted)">Failed to load heatmap.</span>'; return; }
+            const { rows } = await res.json();
+            const counts = new Map();
+            (rows || []).forEach(r => counts.set(r.day, r.count));
+            const max = Math.max(1, ...counts.values());
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const cells = [];
+            for (let i = 89; i >= 0; i--) {
+                const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+                const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                const c = counts.get(iso) || 0;
+                let level = 0;
+                if (c > 0) {
+                    const ratio = c / max;
+                    level = ratio < 0.25 ? 1 : ratio < 0.5 ? 2 : ratio < 0.75 ? 3 : 4;
+                }
+                cells.push('<div class="hm-cell" data-level="' + level + '" data-count="' + c + '" title="' + esc(iso) + ': ' + c + ' play' + (c === 1 ? '' : 's') + '"></div>');
+            }
+            el.innerHTML = cells.join('');
         }
 
         function openChangePasswordModal(forced) {
@@ -1966,6 +2200,65 @@
             if (res && res.ok) fetchBlockedIPs();
         }
 
+        async function bulkBlockIPs() {
+            const ta = document.getElementById('bulkBlockInput');
+            if (!ta || !ta.value.trim()) { showToast('Paste at least one IP', 'info'); return; }
+            const res = await api('/api/guest/block-ip/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: ta.value }) });
+            if (res && res.ok) {
+                const d = await res.json();
+                showToast('Blocked ' + d.blocked.length + (d.skipped ? ' (' + d.skipped + ' skipped)' : ''), 'success');
+                ta.value = '';
+                fetchBlockedIPs();
+            } else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+
+        async function bulkUnblockIPs() {
+            const ta = document.getElementById('bulkUnblockInput');
+            if (!ta || !ta.value.trim()) { showToast('Paste at least one IP', 'info'); return; }
+            const res = await api('/api/guest/unblock-ip/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: ta.value }) });
+            if (res && res.ok) {
+                const d = await res.json();
+                showToast('Unblocked ' + d.unblocked.length + (d.skipped ? ' (' + d.skipped + ' not blocked)' : ''), 'success');
+                ta.value = '';
+                fetchBlockedIPs();
+            } else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+
+        async function fetchCooldownOverrides() {
+            const res = await api('/api/guest/cooldown-overrides');
+            if (!res || !res.ok) return;
+            const overrides = await res.json();
+            const el = document.getElementById('cooldownOverridesList');
+            if (!el) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const entries = Object.entries(overrides);
+            if (entries.length === 0) { el.innerHTML = '<span style="color:var(--text-muted)">No overrides — all guests use the global cooldown.</span>'; return; }
+            el.innerHTML = entries.map(([ip, sec]) =>
+                '<div class="ip-row" style="display:flex; justify-content:space-between; align-items:center; padding:0.25rem 0;">' +
+                '<span><code>' + esc(ip) + '</code> → ' + esc(String(sec)) + 's</span>' +
+                '<button type="button" class="btn btn-ghost block-btn" data-ip="' + esc(ip) + '" onclick="deleteCooldownOverride(this.dataset.ip)">Remove</button>' +
+                '</div>'
+            ).join('');
+        }
+
+        async function addCooldownOverride() {
+            const ipEl = document.getElementById('cooldownOverrideIp');
+            const secEl = document.getElementById('cooldownOverrideSec');
+            const ip = (ipEl?.value || '').trim();
+            const sec = Number(secEl?.value);
+            if (!ip) { showToast('Enter an IP', 'info'); return; }
+            if (!Number.isFinite(sec) || sec < 0) { showToast('Enter a valid cooldown (seconds)', 'error'); return; }
+            const res = await api('/api/guest/cooldown-override', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, cooldownSec: sec }) });
+            if (res && res.ok) { showToast('Override saved.', 'success'); if (ipEl) ipEl.value = ''; if (secEl) secEl.value = ''; fetchCooldownOverrides(); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+
+        async function deleteCooldownOverride(ip) {
+            const res = await api('/api/guest/cooldown-override/' + encodeURIComponent(ip), { method: 'DELETE' });
+            if (res && res.ok) { showToast('Override removed.', 'success'); fetchCooldownOverrides(); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+
         function updatePendingBadge(uploads, signups) {
             const total = (uploads || 0) + (signups || 0);
             const badge = document.getElementById('pendingBadge');
@@ -2047,28 +2340,67 @@
             updatePendingBadge(uploads, signups);
         }
 
+        let _pendingUploadsCache = [];
+
         async function fetchPendingUploads() {
             const res = await api('/api/superadmin/pending-uploads');
             if (!res || !res.ok) return;
-            const uploads = await res.json();
+            _pendingUploadsCache = await res.json();
             fetchPendingCount();
+            renderPendingUploads();
+        }
+
+        function renderPendingUploads() {
             const tbody = document.getElementById('pendingUploadsBody');
             const empty = document.getElementById('pendingUploadsEmpty');
+            const meta = document.getElementById('pendingUploadsMeta');
             if (!tbody || !empty) return;
             const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-            if (uploads.length === 0) {
+            const filters = {
+                uploader: (document.getElementById('modUploaderFilter')?.value || '').trim().toLowerCase(),
+                fromMs: document.getElementById('modFromFilter')?.value ? new Date(document.getElementById('modFromFilter').value + 'T00:00:00').getTime() : null,
+                toMs: document.getElementById('modToFilter')?.value ? new Date(document.getElementById('modToFilter').value + 'T23:59:59').getTime() : null,
+                minSize: Number(document.getElementById('modMinSizeKB')?.value) * 1024 || null,
+                maxSize: Number(document.getElementById('modMaxSizeKB')?.value) * 1024 || null,
+                minDur: Number(document.getElementById('modMinDurationSec')?.value) || null,
+                maxDur: Number(document.getElementById('modMaxDurationSec')?.value) || null,
+            };
+            const filtered = _pendingUploadsCache.filter(u => {
+                const uploader = (u.uploadedBy || (u.uploadedByIP || '')).toLowerCase();
+                if (filters.uploader && !uploader.includes(filters.uploader)) return false;
+                if (filters.fromMs && u.uploadedAt && u.uploadedAt < filters.fromMs) return false;
+                if (filters.toMs && u.uploadedAt && u.uploadedAt > filters.toMs) return false;
+                if (filters.minSize && u.size != null && u.size < filters.minSize) return false;
+                if (filters.maxSize && u.size != null && u.size > filters.maxSize) return false;
+                if (filters.minDur && u.duration != null && u.duration < filters.minDur) return false;
+                if (filters.maxDur && u.duration != null && u.duration > filters.maxDur) return false;
+                return true;
+            });
+            if (filtered.length === 0) {
                 tbody.innerHTML = '';
                 empty.classList.remove('hidden');
+                if (meta) meta.textContent = _pendingUploadsCache.length > 0 ? 'All ' + _pendingUploadsCache.length + ' hidden by filters.' : '';
                 return;
             }
             empty.classList.add('hidden');
-            tbody.innerHTML = uploads.map(u => {
+            tbody.innerHTML = filtered.map(u => {
                 const dt = new Date(u.uploadedAt);
                 const by = u.uploadedBy || (u.uploadedByIP ? 'guest' : '?');
                 const dur = u.duration != null ? u.duration.toFixed(1) + 's' : '—';
                 const sz = u.size != null ? Math.round(u.size / 1024) + 'KB' : '—';
                 return '<tr><td><a href="/api/superadmin/pending-uploads/audio/' + encodeURIComponent(u.filename) + '" target="_blank" rel="noopener" style="color:var(--accent)">' + esc(u.filename) + '</a> <span style="color:var(--text-muted);font-size:0.8em">' + dur + ' ' + sz + '</span></td><td>' + esc(by) + '</td><td>' + esc(dt.toLocaleString()) + '</td><td><button type="button" class="btn btn-primary block-btn" data-filename="' + esc(u.filename) + '" onclick="approvePendingUpload(this.dataset.filename)">Approve</button> <button type="button" class="btn btn-danger block-btn" data-filename="' + esc(u.filename) + '" onclick="rejectPendingUpload(this.dataset.filename)">Reject</button></td></tr>';
             }).join('');
+            if (meta) meta.textContent = filtered.length < _pendingUploadsCache.length ? 'Showing ' + filtered.length + ' of ' + _pendingUploadsCache.length + '.' : '';
+        }
+
+        function applyModerationFilters() { renderPendingUploads(); }
+
+        function clearModerationFilters() {
+            ['modUploaderFilter','modFromFilter','modToFilter','modMinSizeKB','modMaxSizeKB','modMinDurationSec','modMaxDurationSec'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            renderPendingUploads();
         }
 
         async function approvePendingUpload(filename) {
@@ -2100,8 +2432,56 @@
             tbody.innerHTML = signups.map(u => {
                 const dt = u.createdAt ? new Date(u.createdAt) : null;
                 const timeStr = dt ? dt.toLocaleString() : '—';
-                return '<tr data-username="' + esc(u.username) + '"><td>' + esc(u.username) + '</td><td>' + esc(timeStr) + '</td><td><select class="approve-role-select" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text)"><option value="user">User</option><option value="admin">Admin</option></select></td><td><button type="button" class="btn btn-primary block-btn" onclick="approvePendingSignup(this.closest(\'tr\').dataset.username, this.closest(\'tr\').querySelector(\'.approve-role-select\').value)">Approve</button> <button type="button" class="btn btn-danger block-btn" onclick="rejectPendingSignup(this.closest(\'tr\').dataset.username)">Reject</button></td></tr>';
+                return '<tr data-username="' + esc(u.username) + '">' +
+                    '<td style="padding: 0.35rem 0.5rem;"><input type="checkbox" class="pending-signup-chk" data-username="' + esc(u.username) + '" onchange="updatePendingSignupSelection()"></td>' +
+                    '<td>' + esc(u.username) + '</td><td>' + esc(timeStr) + '</td>' +
+                    '<td><select class="approve-role-select" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text)"><option value="user">User</option><option value="admin">Admin</option></select></td>' +
+                    '<td><button type="button" class="btn btn-primary block-btn" onclick="approvePendingSignup(this.closest(\'tr\').dataset.username, this.closest(\'tr\').querySelector(\'.approve-role-select\').value)">Approve</button> <button type="button" class="btn btn-danger block-btn" onclick="rejectPendingSignup(this.closest(\'tr\').dataset.username)">Reject</button></td>' +
+                    '</tr>';
             }).join('');
+            updatePendingSignupSelection();
+        }
+
+        function togglePendingSignupsSelectAll(checked) {
+            document.querySelectorAll('.pending-signup-chk').forEach(chk => { chk.checked = checked; });
+            updatePendingSignupSelection();
+        }
+
+        function updatePendingSignupSelection() {
+            const boxes = document.querySelectorAll('.pending-signup-chk');
+            const selected = Array.from(boxes).filter(b => b.checked);
+            const bar = document.getElementById('pendingSignupsBulkBar');
+            const count = document.getElementById('pendingSignupsSelectedCount');
+            const all = document.getElementById('pendingSignupsSelectAll');
+            if (bar) bar.classList.toggle('hidden', selected.length === 0);
+            if (count) count.textContent = selected.length + ' selected';
+            if (all) all.checked = boxes.length > 0 && selected.length === boxes.length;
+        }
+
+        function clearPendingSignupSelection() {
+            document.querySelectorAll('.pending-signup-chk').forEach(chk => { chk.checked = false; });
+            updatePendingSignupSelection();
+        }
+
+        async function bulkApprovePendingSignups() {
+            const usernames = Array.from(document.querySelectorAll('.pending-signup-chk'))
+                .filter(chk => chk.checked)
+                .map(chk => chk.dataset.username);
+            if (!usernames.length) return;
+            const role = document.getElementById('bulkApproveRoleSelect')?.value === 'admin' ? 'admin' : 'user';
+            const res = await api('/api/superadmin/pending-signups/bulk-approve', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ usernames, role })
+            });
+            if (res && res.ok) {
+                const data = await res.json();
+                showToast('Approved ' + data.approved.length + (data.failed.length ? ' (' + data.failed.length + ' failed)' : ''), 'success');
+                fetchPendingSignups();
+                fetchUsers();
+            } else if (res) {
+                const d = await res.json().catch(() => ({}));
+                showToast(d.error || 'Bulk approve failed', 'error');
+            }
         }
 
         async function approvePendingSignup(username, role) {
@@ -2132,15 +2512,29 @@
             tbody.innerHTML = users.map(u => {
                 const roleLabel = u.role === 'superadmin' ? 'Superadmin' : (u.role === 'admin' ? 'Admin' : 'User');
                 const managed = u.managed === true;
+                const disabled = u.disabled === true;
                 let actions = '';
                 if (managed) {
                     const roleOpts = '<option value="user"' + (u.role === 'user' ? ' selected' : '') + '>User</option><option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
-                    actions = '<select class="user-role-select" data-username="' + esc(u.username) + '" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);margin-right:0.35rem" onchange="updateUserRole(this.dataset.username, this.value)">' + roleOpts + '</select><button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="resetUserPassword(this.dataset.username)" title="Reset password">Reset PW</button> <button type="button" class="btn btn-danger block-btn" data-username="' + esc(u.username) + '" onclick="deleteUser(this.dataset.username)">Delete</button>';
+                    const banBtn = disabled
+                        ? '<button type="button" class="btn btn-primary block-btn" data-username="' + esc(u.username) + '" onclick="toggleUserDisabled(this.dataset.username, false)" title="Re-enable login">Enable</button>'
+                        : '<button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="toggleUserDisabled(this.dataset.username, true)" title="Block login without deleting the account">Disable</button>';
+                    actions = '<select class="user-role-select" data-username="' + esc(u.username) + '" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);margin-right:0.35rem" onchange="updateUserRole(this.dataset.username, this.value)">' + roleOpts + '</select>' + banBtn + ' <button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="resetUserPassword(this.dataset.username)" title="Reset password">Reset PW</button> <button type="button" class="btn btn-danger block-btn" data-username="' + esc(u.username) + '" onclick="deleteUser(this.dataset.username)">Delete</button>';
                 } else {
                     actions = '<span style="color:var(--text-muted);font-size:0.8em">(env)</span>';
                 }
-                return '<tr><td>' + esc(u.username) + '</td><td>' + esc(roleLabel) + '</td><td>' + actions + '</td></tr>';
+                const nameLabel = disabled
+                    ? esc(u.username) + ' <span style="color:var(--danger); font-size:0.75em;">(disabled)</span>'
+                    : esc(u.username);
+                return '<tr><td>' + nameLabel + '</td><td>' + esc(roleLabel) + '</td><td>' + actions + '</td></tr>';
             }).join('');
+        }
+
+        async function toggleUserDisabled(username, disabled) {
+            if (disabled && !confirm('Disable "' + username + '"? They will be logged out and unable to sign in.')) return;
+            const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }) });
+            if (res && res.ok) { fetchUsers(); showToast(disabled ? 'User disabled.' : 'User enabled.', 'success'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
         }
 
         async function updateUserRole(username, role) {
@@ -3871,6 +4265,19 @@
             const fileInput = document.getElementById('fileInput');
             const f = file || (fileInput && fileInput.files && fileInput.files[0]);
             if (!f) return;
+            const role = user && user.role;
+            const isGuest = role === 'guest';
+            const isPrivileged = role === 'admin' || role === 'superadmin';
+            if (!isPrivileged) {
+                const limit = isGuest ? (guestMaxUploadBytes || 0) : (userMaxUploadBytes || 0);
+                if (limit > 0 && f.size > limit) {
+                    const limitKB = Math.round(limit / 1024);
+                    const fileKB = Math.round(f.size / 1024);
+                    showToast('File is ' + fileKB + 'KB — over the ' + limitKB + 'KB limit for your role.', 'error');
+                    if (fileInput) fileInput.value = '';
+                    return;
+                }
+            }
             const formData = new FormData();
             formData.append('soundFile', f);
             const res = await api('/api/upload', { method: 'POST', body: formData });
