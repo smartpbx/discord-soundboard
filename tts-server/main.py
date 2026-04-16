@@ -1,4 +1,4 @@
-"""TTS Service -- FastAPI app exposing Kokoro + RVC for the Discord soundboard."""
+"""TTS Service -- FastAPI app exposing Kokoro + Chatterbox + RVC for the Discord soundboard."""
 
 import os
 import time
@@ -12,13 +12,13 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tts-server")
 
-app = FastAPI(title="TTS Service", version="1.1.0")
+app = FastAPI(title="TTS Service", version="2.0.0")
 
 # ---------------------------------------------------------------------------
 # Engine loading (lazy -- first request triggers model load)
 # ---------------------------------------------------------------------------
 
-from engines import kokoro_engine, rvc_engine  # noqa: E402
+from engines import kokoro_engine, rvc_engine, chatterbox_engine  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ class SynthesizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
     voice_id: str = Field(..., min_length=1)
     rvc_model_id: Optional[str] = None
+    use_rvc: bool = True  # When True, pipe Chatterbox output through RVC if available
 
 
 class HealthResponse(BaseModel):
@@ -52,6 +53,8 @@ class VoiceInfo(BaseModel):
 @app.get("/health", response_model=HealthResponse)
 def health():
     engines = ["kokoro"]
+    if chatterbox_engine.get_voices():
+        engines.append("chatterbox")
     if rvc_engine.get_voices():
         engines.append("rvc")
     return {"status": "ok", "engines": engines}
@@ -60,6 +63,7 @@ def health():
 @app.get("/voices", response_model=list[VoiceInfo])
 def voices():
     all_voices = list(kokoro_engine.get_voices())
+    all_voices.extend(chatterbox_engine.get_voices())
     all_voices.extend(rvc_engine.get_voices())
     return all_voices
 
@@ -71,39 +75,61 @@ def synthesize(req: SynthesizeRequest):
         raise HTTPException(status_code=400, detail="Text is empty")
 
     voice_id = req.voice_id
-    rvc_model_id = req.rvc_model_id
-
-    # If the voice_id itself is an RVC voice, use it for conversion with a matched Kokoro base
-    rvc_ids = rvc_engine.get_rvc_model_ids()
-    if voice_id in rvc_ids:
-        rvc_model_id = voice_id
-        voice_id = rvc_engine.get_base_voice(voice_id) or "am_adam"
-
-    # Validate base voice
-    valid_kokoro = kokoro_engine.get_voice_ids()
-    if voice_id not in valid_kokoro:
-        raise HTTPException(status_code=400, detail=f"Unknown voice_id: {voice_id}")
-
-    # Validate RVC model if specified
-    if rvc_model_id and rvc_model_id not in rvc_ids:
-        raise HTTPException(status_code=400, detail=f"Unknown RVC model: {rvc_model_id}")
-
-    log.info("synthesize voice=%s rvc=%s text_len=%d text_preview=%.60s",
-             voice_id, rvc_model_id or "none", len(text), text)
     t0 = time.time()
 
-    # Step 1: Generate base audio with Kokoro
-    try:
-        wav_bytes = kokoro_engine.synthesize(text, voice_id)
-    except Exception as e:
-        log.error("kokoro synthesis failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
+    cb_ids = chatterbox_engine.get_voice_ids()
+    rvc_ids = rvc_engine.get_rvc_model_ids()
+    kokoro_ids = kokoro_engine.get_voice_ids()
 
-    t_tts = time.time() - t0
-    log.info("kokoro done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+    # -----------------------------------------------------------------------
+    # Route 1: Chatterbox celebrity voice (cb_trump, cb_obama, etc.)
+    # Optionally refined through RVC
+    # -----------------------------------------------------------------------
+    if voice_id in cb_ids:
+        log.info("synthesize [chatterbox] voice=%s text_len=%d text_preview=%.60s",
+                 voice_id, len(text), text)
 
-    # Step 2: Voice conversion with RVC (if requested)
-    if rvc_model_id:
+        try:
+            wav_bytes = chatterbox_engine.synthesize(text, voice_id)
+        except Exception as e:
+            log.error("Chatterbox synthesis failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"Chatterbox synthesis failed: {e}")
+
+        t_tts = time.time() - t0
+        log.info("Chatterbox done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
+        # Optional RVC refinement: check if matching RVC model exists
+        # cb_trump -> rvc_trump
+        rvc_model_id = voice_id.replace("cb_", "rvc_", 1)
+        if req.use_rvc and rvc_model_id in rvc_ids:
+            t1 = time.time()
+            try:
+                wav_bytes = rvc_engine.convert(wav_bytes, rvc_model_id)
+                t_rvc = time.time() - t1
+                log.info("RVC refinement done in %.2fs, %d bytes", t_rvc, len(wav_bytes))
+            except Exception as e:
+                log.warning("RVC refinement failed (using Chatterbox output): %s", e)
+                # Non-fatal — Chatterbox output is still good without RVC
+
+    # -----------------------------------------------------------------------
+    # Route 2: RVC-only voice (rvc_trump, etc.) — legacy Kokoro base
+    # -----------------------------------------------------------------------
+    elif voice_id in rvc_ids:
+        rvc_model_id = voice_id
+        base_voice = rvc_engine.get_base_voice(voice_id) or "am_adam"
+
+        log.info("synthesize [kokoro+rvc] voice=%s base=%s text_len=%d text_preview=%.60s",
+                 voice_id, base_voice, len(text), text)
+
+        try:
+            wav_bytes = kokoro_engine.synthesize(text, base_voice)
+        except Exception as e:
+            log.error("Kokoro synthesis failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
+
+        t_tts = time.time() - t0
+        log.info("Kokoro done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
         t1 = time.time()
         try:
             wav_bytes = rvc_engine.convert(wav_bytes, rvc_model_id)
@@ -112,6 +138,25 @@ def synthesize(req: SynthesizeRequest):
             raise HTTPException(status_code=500, detail=f"Voice conversion failed: {e}")
         t_rvc = time.time() - t1
         log.info("RVC done in %.2fs, %d bytes", t_rvc, len(wav_bytes))
+
+    # -----------------------------------------------------------------------
+    # Route 3: Plain Kokoro voice (af_heart, am_adam, etc.)
+    # -----------------------------------------------------------------------
+    elif voice_id in kokoro_ids:
+        log.info("synthesize [kokoro] voice=%s text_len=%d text_preview=%.60s",
+                 voice_id, len(text), text)
+
+        try:
+            wav_bytes = kokoro_engine.synthesize(text, voice_id)
+        except Exception as e:
+            log.error("Kokoro synthesis failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
+
+        t_tts = time.time() - t0
+        log.info("Kokoro done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown voice_id: {voice_id}")
 
     elapsed = time.time() - t0
     log.info("synthesize total %.2fs, %d bytes", elapsed, len(wav_bytes))

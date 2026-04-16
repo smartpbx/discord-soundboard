@@ -7,3 +7,4 @@ torchcrepe>=0.0.22
 torchaudio>=2.0.0
 faiss-cpu>=1.7.0
 scipy>=1.10.0
+chatterbox-tts>=0.1.0
