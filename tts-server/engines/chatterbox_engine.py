@@ -137,8 +137,12 @@ def synthesize(text: str, voice_id: str, exaggeration: float = 0.5) -> bytes:
             temperature=0.8,
         )
 
-    # Convert tensor to WAV bytes
+    # Convert tensor to WAV bytes using soundfile (avoids torchcodec dependency)
+    import soundfile as sf
+    import numpy as np
+
+    audio_np = wav.squeeze(0).cpu().numpy()
     buf = io.BytesIO()
-    ta.save(buf, wav, model.sr, format="wav")
+    sf.write(buf, audio_np, model.sr, format="WAV")
     buf.seek(0)
     return buf.getvalue()
