@@ -203,6 +203,9 @@
             position: relative;
         }
         .waveform-wrap canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+        .live-waveform-wrap { position: relative; height: 48px; margin-top: 0.25rem; background: rgba(124, 58, 237, 0.08); border-radius: var(--radius-sm); overflow: hidden; }
+        .live-waveform-wrap canvas { display: block; width: 100%; height: 100%; }
+        .live-waveform-label { position: absolute; top: 4px; right: 8px; font-size: 0.7rem; color: var(--text-muted); pointer-events: none; }
         .waveform-placeholder {
             height: 48px;
             background: var(--border);
@@ -671,6 +674,10 @@
             <div class="waveform-placeholder" id="waveformPlaceholder">Waveform will appear when a sound is playing</div>
             <div class="waveform-wrap" id="waveformWrap" style="display: none;">
                 <canvas id="waveformCanvas" width="600" height="48"></canvas>
+            </div>
+            <div class="live-waveform-wrap" id="liveWaveformWrap" style="display: none;">
+                <canvas id="liveWaveformCanvas" width="600" height="48"></canvas>
+                <span class="live-waveform-label">🎧 Previewing (local)</span>
             </div>
             <div class="progress-time" id="progressTime">0:00 / 0:00</div>
             <div class="multi-track-display hidden" id="multiTrackDisplay"></div>
@@ -3349,17 +3356,93 @@
         let previewAudio = null;
         let previewBtn = null;
         let previewId = 0;
+
+        // Shared AudioContext for live-waveform analysis of preview playback.
+        let liveWaveformCtx = null;
+        let liveWaveformAnalyser = null;
+        let liveWaveformRafId = null;
+        function ensureLiveWaveformCtx() {
+            if (liveWaveformCtx) return liveWaveformCtx;
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return null;
+            try { liveWaveformCtx = new AC(); } catch { liveWaveformCtx = null; }
+            return liveWaveformCtx;
+        }
+        function attachLiveWaveform(audio) {
+            const ctx = ensureLiveWaveformCtx();
+            if (!ctx || !audio) return;
+            try { if (ctx.state === 'suspended') ctx.resume(); } catch {}
+            let source;
+            try { source = ctx.createMediaElementSource(audio); }
+            catch { return; }
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            source.connect(analyser);
+            analyser.connect(ctx.destination);
+            liveWaveformAnalyser = analyser;
+            const wrap = document.getElementById('liveWaveformWrap');
+            if (wrap) wrap.style.display = 'block';
+            startLiveWaveformDraw();
+        }
+        function detachLiveWaveform() {
+            if (liveWaveformRafId) { cancelAnimationFrame(liveWaveformRafId); liveWaveformRafId = null; }
+            liveWaveformAnalyser = null;
+            const wrap = document.getElementById('liveWaveformWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
+        function startLiveWaveformDraw() {
+            const canvas = document.getElementById('liveWaveformCanvas');
+            if (!canvas || !liveWaveformAnalyser) return;
+            const ctx2d = canvas.getContext('2d');
+            const data = new Uint8Array(liveWaveformAnalyser.fftSize);
+            function resizeIfNeeded() {
+                const rect = canvas.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                const w = Math.max(1, Math.floor(rect.width * dpr));
+                const h = Math.max(1, Math.floor(rect.height * dpr));
+                if (canvas.width !== w || canvas.height !== h) {
+                    canvas.width = w;
+                    canvas.height = h;
+                }
+            }
+            function draw() {
+                liveWaveformRafId = requestAnimationFrame(draw);
+                if (!liveWaveformAnalyser) return;
+                resizeIfNeeded();
+                liveWaveformAnalyser.getByteTimeDomainData(data);
+                const W = canvas.width;
+                const H = canvas.height;
+                ctx2d.clearRect(0, 0, W, H);
+                ctx2d.strokeStyle = 'rgba(124,58,237,0.9)';
+                ctx2d.lineWidth = Math.max(1, (window.devicePixelRatio || 1) * 1.5);
+                ctx2d.beginPath();
+                const slice = W / data.length;
+                let x = 0;
+                for (let i = 0; i < data.length; i++) {
+                    const v = data[i] / 128.0;
+                    const y = (v * H) / 2;
+                    if (i === 0) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
+                    x += slice;
+                }
+                ctx2d.lineTo(W, H / 2);
+                ctx2d.stroke();
+            }
+            draw();
+        }
+
         function previewSound(filename, btn) {
             if (!filename) return;
             if (previewBtn === btn && previewAudio) {
                 previewAudio.pause();
                 previewAudio = null;
+                detachLiveWaveform();
                 btn.classList.remove('playing');
                 return;
             }
             if (previewAudio) {
                 previewAudio.pause();
                 previewAudio = null;
+                detachLiveWaveform();
                 if (previewBtn) previewBtn.classList.remove('playing');
             }
             const id = ++previewId;
@@ -3371,13 +3454,15 @@
                 if (id !== previewId) return;
                 const blob = new Blob([buf]);
                 const audio = new Audio(URL.createObjectURL(blob));
-                audio.addEventListener('ended', () => { URL.revokeObjectURL(audio.src); previewAudio = null; if (previewBtn) previewBtn.classList.remove('playing'); });
-                audio.addEventListener('error', () => { if (audio.src) URL.revokeObjectURL(audio.src); previewAudio = null; if (previewBtn) previewBtn.classList.remove('playing'); });
+                audio.addEventListener('ended', () => { URL.revokeObjectURL(audio.src); previewAudio = null; detachLiveWaveform(); if (previewBtn) previewBtn.classList.remove('playing'); });
+                audio.addEventListener('error', () => { if (audio.src) URL.revokeObjectURL(audio.src); previewAudio = null; detachLiveWaveform(); if (previewBtn) previewBtn.classList.remove('playing'); });
+                audio.addEventListener('pause', () => { if (audio.ended) return; /* user-initiated pause; keep the canvas visible but frozen — stopping RAF is optional */ });
                 previewAudio = audio;
                 previewBtn = btn;
                 btn.classList.add('playing');
-                audio.play().catch(() => { previewAudio = null; btn.classList.remove('playing'); });
-            }).catch(() => { if (id === previewId) { previewAudio = null; btn.classList.remove('playing'); } });
+                attachLiveWaveform(audio);
+                audio.play().catch(() => { previewAudio = null; detachLiveWaveform(); btn.classList.remove('playing'); });
+            }).catch(() => { if (id === previewId) { previewAudio = null; detachLiveWaveform(); btn.classList.remove('playing'); } });
         }
 
         function closeSoundPanel() {
