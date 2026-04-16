@@ -3616,7 +3616,12 @@
             if (res && res.ok) fetchChannels();
         }
 
-        async function playSound(filename, startTime) {
+        async function playSound(filename, startTime, opts) {
+            const isScrub = !!(opts && opts.isScrub) && filename === playback.filename;
+            // For scrubs, preserve the sound's configured trim window for display;
+            // the server reports only the remaining slice after the seek.
+            const prevOriginalStart = playback.originalStartTimeOffset;
+            const prevDisplayTotal = playback.duration;
             const body = { filename };
             if (typeof startTime === 'number' && startTime > 0) body.startTime = startTime;
             const res = await api('/api/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -3637,10 +3642,16 @@
             }
             if ((user && user.role) === 'guest') guestLastPlayTime = Date.now();
             if ((user && user.role) === 'user') userLastPlayTime = Date.now();
-            playback.duration = (data.duration != null ? data.duration : null);
             playback.startTime = Date.now();
             playback.startTimeOffset = (data.startTimeOffset != null ? data.startTimeOffset : 0);
-            playback.originalStartTimeOffset = playback.startTimeOffset;
+            if (isScrub) {
+                // Keep the display total + original trim start stable across a scrub.
+                playback.duration = prevDisplayTotal;
+                playback.originalStartTimeOffset = prevOriginalStart != null ? prevOriginalStart : playback.startTimeOffset;
+            } else {
+                playback.duration = (data.duration != null ? data.duration : null);
+                playback.originalStartTimeOffset = playback.startTimeOffset;
+            }
             playback.serverCurrentTime = undefined;
             playback.status = 'playing';
             playback.displayName = (data.displayName != null ? data.displayName : filename);
@@ -3651,10 +3662,12 @@
             updatePlayPauseButton();
             const timeEl = document.getElementById('progressTime');
             if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
-            loadWaveform(filename);
-            const newItem = { filename, displayName: playback.displayName || filename, playedBy: (user && user.username) || null, playedAt: Date.now() };
-            serverRecentlyPlayed = [newItem, ...serverRecentlyPlayed.filter(x => x.filename !== filename)].slice(0, 5);
-            renderRecentlyPlayed();
+            if (!isScrub) loadWaveform(filename);
+            if (!isScrub) {
+                const newItem = { filename, displayName: playback.displayName || filename, playedBy: (user && user.username) || null, playedAt: Date.now() };
+                serverRecentlyPlayed = [newItem, ...serverRecentlyPlayed.filter(x => x.filename !== filename)].slice(0, 5);
+                renderRecentlyPlayed();
+            }
             renderSoundsGrid();
         }
 
@@ -4166,7 +4179,7 @@
             const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
             const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
             const t = trimStart + Math.max(0, Math.min(trimDuration, xNorm * trimDuration));
-            if (t < trimStart + trimDuration - 0.5) playSound(playback.filename, Number(t));
+            if (t < trimStart + trimDuration - 0.5) playSound(playback.filename, Number(t), { isScrub: true });
         });
 
         function setVolume(volume, syncOnly) {
