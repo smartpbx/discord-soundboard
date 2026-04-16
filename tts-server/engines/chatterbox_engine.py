@@ -106,6 +106,23 @@ def get_voice_ids():
     return {v["id"] for v in get_voices()}
 
 
+def invalidate_voice(voice_id: str = None):
+    """Drop cached voice list and pre-computed conditionals for a voice.
+
+    Called after a reference clip changes on disk so the new audio is picked up.
+    """
+    global _voices_cache
+    _voices_cache = None
+    if voice_id:
+        _conditionals.pop(voice_id, None)
+    else:
+        _conditionals.clear()
+
+
+def get_models_dir() -> str:
+    return MODELS_DIR
+
+
 def should_skip_rvc(voice_id: str) -> bool:
     """Check if a voice has RVC refinement disabled (e.g. cartoon voices)."""
     for v in get_voices():

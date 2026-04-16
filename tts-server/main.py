@@ -1,11 +1,15 @@
 """TTS Service -- FastAPI app exposing Kokoro + Chatterbox + RVC + GPT-SoVITS for the Discord soundboard."""
 
+import io
+import json
 import os
+import re
+import shutil
 import time
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -193,6 +197,110 @@ def synthesize(req: SynthesizeRequest):
         media_type="audio/wav",
         headers={"X-Synthesis-Time": f"{elapsed:.3f}"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Admin endpoints (Chatterbox voice management)
+# ---------------------------------------------------------------------------
+
+VOICE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+ADMIN_TOKEN = os.environ.get("TTS_ADMIN_TOKEN", "").strip()
+
+
+def _check_admin(token: Optional[str]):
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="TTS_ADMIN_TOKEN not configured")
+    if not token or token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _normalize_voice_dir_id(raw_id: str) -> str:
+    """Strip cb_ prefix if present, validate format. Returns the on-disk dir name."""
+    cleaned = raw_id[3:] if raw_id.startswith("cb_") else raw_id
+    if not VOICE_ID_RE.match(cleaned):
+        raise HTTPException(status_code=400, detail=f"Invalid voice id: {raw_id!r}")
+    return cleaned
+
+
+@app.put("/voices/chatterbox/{voice_id}")
+async def upload_chatterbox_voice(
+    voice_id: str,
+    reference: UploadFile = File(...),
+    metadata: str = Form(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Create or replace a Chatterbox voice. Multipart: reference WAV + metadata JSON."""
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+
+    try:
+        meta = json.loads(metadata)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="metadata is not valid JSON")
+    if not isinstance(meta, dict):
+        raise HTTPException(status_code=400, detail="metadata must be a JSON object")
+
+    clean_meta = {
+        "name": str(meta.get("name", dir_id.replace("_", " ").title())).strip()[:80] or dir_id,
+        "gender": meta.get("gender", "unknown") if meta.get("gender") in ("male", "female", "unknown") else "unknown",
+        "group": str(meta.get("group", "Celebrity")).strip()[:40] or "Celebrity",
+        "skip_rvc": bool(meta.get("skip_rvc", False)),
+    }
+
+    audio_bytes = await reference.read()
+    if len(audio_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="Reference audio is empty or too small")
+    if len(audio_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Reference audio exceeds 50MB")
+
+    voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
+    os.makedirs(voice_dir, exist_ok=True)
+
+    ref_tmp = os.path.join(voice_dir, "reference.wav.tmp")
+    meta_tmp = os.path.join(voice_dir, "metadata.json.tmp")
+    try:
+        with open(ref_tmp, "wb") as f:
+            f.write(audio_bytes)
+        with open(meta_tmp, "w") as f:
+            json.dump(clean_meta, f, indent=2)
+        os.replace(ref_tmp, os.path.join(voice_dir, "reference.wav"))
+        os.replace(meta_tmp, os.path.join(voice_dir, "metadata.json"))
+    finally:
+        for p in (ref_tmp, meta_tmp):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    chatterbox_engine.invalidate_voice(f"cb_{dir_id}")
+    log.info("Chatterbox voice upserted: %s (%d bytes)", dir_id, len(audio_bytes))
+
+    return {
+        "id": f"cb_{dir_id}",
+        "name": clean_meta["name"],
+        "engine": "chatterbox",
+        "gender": clean_meta["gender"],
+        "language": "en-us",
+        "group": clean_meta["group"],
+    }
+
+
+@app.delete("/voices/chatterbox/{voice_id}")
+def delete_chatterbox_voice(voice_id: str, x_admin_token: Optional[str] = Header(None)):
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Voice not found: {dir_id}")
+    shutil.rmtree(voice_dir)
+    chatterbox_engine.invalidate_voice(f"cb_{dir_id}")
+    log.info("Chatterbox voice deleted: %s", dir_id)
+    return {"deleted": f"cb_{dir_id}"}
 
 
 # ---------------------------------------------------------------------------

@@ -14,9 +14,12 @@ systemctl disable -q --now systemd-networkd-wait-online.service 2>/dev/null || t
 
 echo "[*] Installing dependencies..."
 apt-get update -qq
-apt-get install -y curl git ffmpeg build-essential python3
+apt-get install -y curl git ffmpeg build-essential python3 python3-pip
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
+
+echo "[*] Installing yt-dlp (for TTS voice admin YouTube fetch)..."
+pip3 install --break-system-packages --upgrade yt-dlp || pip3 install --upgrade yt-dlp
 
 echo "[*] Cloning app to ${APP_DIR}..."
 # Preserve data/ if it exists (bind mount from host); clone to temp then move

@@ -14,6 +14,7 @@ const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const statsDb = require('./lib/stats-db');
+const ttsVoiceAdmin = require('./lib/tts-voice-admin');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -2963,6 +2964,115 @@ app.post('/api/tts/queue/clear', requireAdmin, (req, res) => {
     ttsQueue.length = 0;
     console.log('[TTS Queue] cleared by %s', req.session.user.username);
     res.json({ ok: true });
+});
+
+// --- Superadmin: Chatterbox voice management ---
+
+const ttsVoiceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: ttsVoiceAdmin.MAX_UPLOAD_BYTES },
+});
+const TTS_ADMIN_TOKEN = (process.env.TTS_ADMIN_TOKEN || '').trim();
+
+function ttsAdminError(res, err) {
+    const status = (err && err.status) || 500;
+    const msg = (err && err.message) || 'Voice admin error';
+    return res.status(status).json({ error: msg });
+}
+
+app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, res) => {
+    const { url, startSec, endSec } = req.body || {};
+    if (!ttsVoiceAdmin.validateYouTubeUrl(url)) return res.status(400).json({ error: 'Provide a youtube.com or youtu.be URL.' });
+    try {
+        const { sourcePath, cached } = await ttsVoiceAdmin.fetchYouTubeSource(url);
+        const sourceDuration = await ttsVoiceAdmin.probeDuration(sourcePath);
+        const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
+        res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}` });
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
+app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No audio file uploaded' });
+    const { startSec, endSec } = req.body || {};
+    ttsVoiceAdmin.ensureStaging();
+    const sourceId = require('crypto').randomBytes(8).toString('hex');
+    const sourcePath = require('path').join(ttsVoiceAdmin.STAGING_DIR, `source-upload-${sourceId}.bin`);
+    try {
+        require('fs').writeFileSync(sourcePath, req.file.buffer);
+        const sourceDuration = await ttsVoiceAdmin.probeDuration(sourcePath);
+        if (sourceDuration <= 0) {
+            try { require('fs').unlinkSync(sourcePath); } catch {}
+            return res.status(400).json({ error: 'Could not read audio file (unsupported format?)' });
+        }
+        const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
+        // Keep the uploaded source around so retrim works without re-uploading.
+        res.json({ token, duration, sourceDuration, sourceRef: sourceId, previewUrl: `/api/superadmin/tts/preview/${token}` });
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
+app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res) => {
+    const { url, sourceRef, startSec, endSec } = req.body || {};
+    try {
+        let sourcePath;
+        if (sourceRef) {
+            const candidate = require('path').join(ttsVoiceAdmin.STAGING_DIR, `source-upload-${String(sourceRef).replace(/[^a-f0-9]/gi, '')}.bin`);
+            if (!require('fs').existsSync(candidate)) return res.status(404).json({ error: 'Uploaded source expired — please re-upload.' });
+            sourcePath = candidate;
+        } else if (url) {
+            const result = await ttsVoiceAdmin.fetchYouTubeSource(url);
+            sourcePath = result.sourcePath;
+        } else {
+            return res.status(400).json({ error: 'Need url or sourceRef' });
+        }
+        const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
+        res.json({ token, duration, previewUrl: `/api/superadmin/tts/preview/${token}` });
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
+app.get('/api/superadmin/tts/preview/:token', requireSuperadmin, (req, res) => {
+    const previewPath = ttsVoiceAdmin.getPreviewPath(req.params.token);
+    if (!previewPath) return res.status(404).json({ error: 'Preview not found' });
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(previewPath).pipe(res);
+});
+
+app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
+    const { voiceId, name, group, gender, skipRvc, token } = req.body || {};
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(voiceId);
+    if (!dirId) return res.status(400).json({ error: 'Voice id must be lowercase letters, digits, or underscores (e.g. rfk_jr).' });
+    const previewPath = ttsVoiceAdmin.getPreviewPath(token);
+    if (!previewPath) return res.status(400).json({ error: 'Preview not found — re-cut the clip and try again.' });
+    try {
+        const result = await ttsVoiceAdmin.commitToTtsServer({
+            ttsApiUrl: TTS_API_URL,
+            adminToken: TTS_ADMIN_TOKEN,
+            voiceId: dirId,
+            name, group, gender, skipRvc,
+            previewPath,
+        });
+        ttsVoiceAdmin.deletePreview(token);
+        res.json({ ok: true, voice: result });
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
+app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    try {
+        await ttsVoiceAdmin.deleteFromTtsServer({ ttsApiUrl: TTS_API_URL, adminToken: TTS_ADMIN_TOKEN, voiceId: dirId });
+        res.json({ ok: true });
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
 });
 
 const token = (process.env.DISCORD_TOKEN || '').trim();

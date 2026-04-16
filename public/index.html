@@ -142,6 +142,27 @@
         .change-password-modal label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.35rem; }
         .change-password-modal input { width: 100%; padding: 0.5rem; margin-bottom: 0.75rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
         .change-password-modal .btn { margin-right: 0.5rem; }
+        .voice-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 210; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .voice-modal-overlay.hidden { display: none !important; }
+        .voice-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; width: 560px; max-width: 95vw; max-height: 92vh; overflow-y: auto; }
+        .voice-modal h3 { margin: 0 0 1rem; font-size: 1rem; }
+        .voice-modal .field { margin-bottom: 0.75rem; }
+        .voice-modal label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+        .voice-modal input[type="text"], .voice-modal input[type="url"], .voice-modal input[type="number"], .voice-modal select { width: 100%; padding: 0.45rem 0.55rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
+        .voice-modal input[type="number"] { width: 6rem; }
+        .voice-modal .row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+        .voice-modal .source-tabs { display: flex; gap: 0.25rem; margin-bottom: 0.75rem; }
+        .voice-modal .source-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; }
+        .voice-modal .source-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+        .voice-modal .source-panel { display: none; }
+        .voice-modal .source-panel.active { display: block; }
+        .voice-modal .preview-box { margin-top: 0.5rem; padding: 0.75rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        .voice-modal .preview-box audio { width: 100%; margin-top: 0.5rem; }
+        .voice-modal .status-line { font-size: 0.85rem; color: var(--text-muted); min-height: 1.2em; }
+        .voice-modal .status-line.error { color: var(--danger); }
+        .voice-modal .status-line.success { color: #4ade80; }
+        .voice-modal .footer-row { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+        .voice-modal .field-help { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -1174,8 +1195,11 @@
 
             <div id="superadminPanelTtsVoices" class="superadmin-panel">
                 <div class="superadmin-section">
-                    <div class="superadmin-section-title">Voice Management</div>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Enable or disable voices. Toggle RVC refinement for Chatterbox voices.</p>
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Voice Management</span>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openVoiceModal('create')">+ Add Chatterbox voice</button>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Enable/disable voices, toggle RVC refinement, and replace reference clips. Add new Chatterbox voices from a YouTube URL or audio file.</p>
                     <div style="max-height: 400px; overflow-y: auto;">
                         <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
                             <thead><tr>
@@ -1184,6 +1208,7 @@
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">Group</th>
                                 <th style="text-align:center; padding: 0.35rem 0.5rem;">Enabled</th>
                                 <th style="text-align:center; padding: 0.35rem 0.5rem;">RVC</th>
+                                <th style="text-align:right; padding: 0.35rem 0.5rem;">Actions</th>
                             </tr></thead>
                             <tbody id="ttsVoicesBody"></tbody>
                         </table>
@@ -1192,6 +1217,89 @@
                 </div>
             </div>
         </div>
+        </div>
+
+        <div id="voiceModalOverlay" class="voice-modal-overlay hidden">
+            <div class="voice-modal">
+                <h3 id="voiceModalTitle">Add Chatterbox voice</h3>
+                <div class="row">
+                    <div class="field" style="flex:1; min-width: 180px;">
+                        <label for="voiceModalId">Voice id</label>
+                        <input type="text" id="voiceModalId" placeholder="e.g. rfk_jr">
+                        <div class="field-help">Lowercase letters, digits, underscores. Auto-prefixed with <code>cb_</code>.</div>
+                    </div>
+                    <div class="field" style="flex:1; min-width: 180px;">
+                        <label for="voiceModalName">Display name</label>
+                        <input type="text" id="voiceModalName" placeholder="e.g. RFK Jr.">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="field" style="flex:1; min-width: 140px;">
+                        <label for="voiceModalGroup">Group</label>
+                        <select id="voiceModalGroup">
+                            <option>Celebrity</option>
+                            <option>Cartoon</option>
+                            <option>Gaming</option>
+                            <option>Other</option>
+                        </select>
+                    </div>
+                    <div class="field" style="flex:1; min-width: 140px;">
+                        <label for="voiceModalGender">Gender</label>
+                        <select id="voiceModalGender">
+                            <option value="male">male</option>
+                            <option value="female">female</option>
+                            <option value="unknown">unknown</option>
+                        </select>
+                    </div>
+                    <div class="field" style="display:flex; align-items:center; gap:0.4rem; padding-bottom: 0.55rem;">
+                        <input type="checkbox" id="voiceModalSkipRvc" style="accent-color:var(--accent);">
+                        <label for="voiceModalSkipRvc" style="margin:0;">Skip RVC</label>
+                    </div>
+                </div>
+
+                <div class="source-tabs">
+                    <button type="button" class="source-tab active" data-source="youtube" onclick="switchVoiceSource('youtube')">YouTube URL</button>
+                    <button type="button" class="source-tab" data-source="upload" onclick="switchVoiceSource('upload')">Upload file</button>
+                </div>
+
+                <div id="voiceSourceYoutube" class="source-panel active">
+                    <div class="field">
+                        <label for="voiceModalUrl">YouTube URL</label>
+                        <input type="url" id="voiceModalUrl" placeholder="https://www.youtube.com/watch?v=...">
+                    </div>
+                </div>
+                <div id="voiceSourceUpload" class="source-panel">
+                    <div class="field">
+                        <label for="voiceModalFile">Audio file (mp3/wav/m4a/...)</label>
+                        <input type="file" id="voiceModalFile" accept="audio/*">
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="field">
+                        <label for="voiceModalStart">Start (sec)</label>
+                        <input type="number" id="voiceModalStart" min="0" step="0.1" value="0">
+                    </div>
+                    <div class="field">
+                        <label for="voiceModalEnd">End (sec)</label>
+                        <input type="number" id="voiceModalEnd" min="0.1" step="0.1" value="10">
+                    </div>
+                    <div class="field" style="flex:1; min-width: 140px;">
+                        <button type="button" class="btn btn-primary btn-sm" id="voiceModalGenerateBtn" onclick="generateVoicePreview()">Generate preview</button>
+                    </div>
+                </div>
+                <div class="field-help">Recommended: 6–30 seconds of one speaker, no music or background noise. Max 60s.</div>
+
+                <div class="preview-box">
+                    <div class="status-line" id="voiceModalStatus">No preview yet.</div>
+                    <audio id="voiceModalAudio" controls preload="none" style="display:none"></audio>
+                </div>
+
+                <div class="footer-row">
+                    <button type="button" class="btn btn-ghost" onclick="closeVoiceModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="voiceModalSaveBtn" onclick="saveVoice()" disabled>Save voice</button>
+                </div>
+            </div>
         </div>
 
         <div id="changePasswordOverlay" class="change-password-overlay hidden">
@@ -4614,12 +4722,17 @@
                 const disabled = _ttsAdminDisabled.includes(v.id);
                 const isCb = v.engine === 'chatterbox';
                 const rvcOn = isCb ? (_ttsAdminRvcOverrides[v.id] ?? true) : false;
+                const actions = isCb
+                    ? '<button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Replace</button>'
+                      + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>'
+                    : '<span style="color:var(--text-muted)">--</span>';
                 return '<tr style="' + (disabled ? 'opacity:0.5' : '') + '">'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + (isCb ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)">--</span>') + '</td>'
+                    + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap">' + actions + '</td>'
                     + '</tr>';
             }).join('');
         }
@@ -4635,6 +4748,167 @@
             _ttsAdminRvcOverrides[voiceId] = rvcOn;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsVoiceRvcOverrides: _ttsAdminRvcOverrides }) });
         }
+
+        // --- Voice creation/replacement modal ---
+        let _voiceModalMode = 'create';
+        let _voiceModalSource = 'youtube';
+        let _voiceModalToken = null;
+        let _voiceModalSourceRef = null;
+
+        function setVoiceModalStatus(text, kind) {
+            const el = document.getElementById('voiceModalStatus');
+            if (!el) return;
+            el.textContent = text || '';
+            el.classList.remove('error', 'success');
+            if (kind) el.classList.add(kind);
+        }
+
+        function switchVoiceSource(which) {
+            _voiceModalSource = which;
+            document.querySelectorAll('#voiceModalOverlay .source-tab').forEach(t => t.classList.toggle('active', t.dataset.source === which));
+            document.getElementById('voiceSourceYoutube').classList.toggle('active', which === 'youtube');
+            document.getElementById('voiceSourceUpload').classList.toggle('active', which === 'upload');
+            _voiceModalSourceRef = null;
+        }
+
+        function openVoiceModal(mode, voiceId, name, group, gender) {
+            _voiceModalMode = mode;
+            _voiceModalToken = null;
+            _voiceModalSourceRef = null;
+            document.getElementById('voiceModalTitle').textContent = mode === 'replace' ? ('Replace reference: ' + (name || voiceId)) : 'Add Chatterbox voice';
+            const idInput = document.getElementById('voiceModalId');
+            const nameInput = document.getElementById('voiceModalName');
+            const groupInput = document.getElementById('voiceModalGroup');
+            const genderInput = document.getElementById('voiceModalGender');
+            const skipRvcInput = document.getElementById('voiceModalSkipRvc');
+            if (mode === 'replace') {
+                idInput.value = (voiceId || '').replace(/^cb_/, '');
+                idInput.disabled = true;
+                nameInput.value = name || '';
+                groupInput.value = group || 'Celebrity';
+                genderInput.value = (gender === 'male' || gender === 'female') ? gender : 'unknown';
+                skipRvcInput.checked = false;
+            } else {
+                idInput.value = '';
+                idInput.disabled = false;
+                nameInput.value = '';
+                groupInput.value = 'Celebrity';
+                genderInput.value = 'male';
+                skipRvcInput.checked = false;
+            }
+            document.getElementById('voiceModalUrl').value = '';
+            document.getElementById('voiceModalFile').value = '';
+            document.getElementById('voiceModalStart').value = '0';
+            document.getElementById('voiceModalEnd').value = '10';
+            const audio = document.getElementById('voiceModalAudio');
+            audio.style.display = 'none';
+            audio.removeAttribute('src');
+            document.getElementById('voiceModalSaveBtn').disabled = true;
+            switchVoiceSource('youtube');
+            setVoiceModalStatus('No preview yet.');
+            document.getElementById('voiceModalOverlay').classList.remove('hidden');
+        }
+
+        function closeVoiceModal() {
+            document.getElementById('voiceModalOverlay').classList.add('hidden');
+            const audio = document.getElementById('voiceModalAudio');
+            try { audio.pause(); } catch {}
+            audio.removeAttribute('src');
+        }
+
+        async function generateVoicePreview() {
+            const startSec = parseFloat(document.getElementById('voiceModalStart').value);
+            const endSec = parseFloat(document.getElementById('voiceModalEnd').value);
+            if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
+                setVoiceModalStatus('Start/end seconds invalid.', 'error');
+                return;
+            }
+            const btn = document.getElementById('voiceModalGenerateBtn');
+            btn.disabled = true;
+            setVoiceModalStatus('Generating preview…');
+            document.getElementById('voiceModalSaveBtn').disabled = true;
+            try {
+                let res, data;
+                if (_voiceModalSource === 'youtube') {
+                    const url = document.getElementById('voiceModalUrl').value.trim();
+                    if (!url) { setVoiceModalStatus('Paste a YouTube URL first.', 'error'); return; }
+                    res = await api('/api/superadmin/tts/source/youtube', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, startSec, endSec })
+                    });
+                } else {
+                    const fileInput = document.getElementById('voiceModalFile');
+                    if (_voiceModalSourceRef) {
+                        res = await api('/api/superadmin/tts/source/retrim', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec })
+                        });
+                    } else {
+                        if (!fileInput.files || !fileInput.files[0]) { setVoiceModalStatus('Choose an audio file first.', 'error'); return; }
+                        const fd = new FormData();
+                        fd.append('audio', fileInput.files[0]);
+                        fd.append('startSec', String(startSec));
+                        fd.append('endSec', String(endSec));
+                        res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
+                    }
+                }
+                data = await res.json().catch(() => ({}));
+                if (!res.ok) { setVoiceModalStatus(data.error || ('Error: ' + res.status), 'error'); return; }
+                _voiceModalToken = data.token;
+                if (data.sourceRef) _voiceModalSourceRef = data.sourceRef;
+                const audio = document.getElementById('voiceModalAudio');
+                audio.src = data.previewUrl + '?t=' + Date.now();
+                audio.style.display = 'block';
+                const dur = (data.duration || 0).toFixed(1);
+                const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
+                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + '. Listen, then save or re-cut.', 'success');
+                document.getElementById('voiceModalSaveBtn').disabled = false;
+            } catch (e) {
+                setVoiceModalStatus('Network error: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function saveVoice() {
+            if (!_voiceModalToken) { setVoiceModalStatus('Generate a preview first.', 'error'); return; }
+            const voiceId = document.getElementById('voiceModalId').value.trim();
+            const name = document.getElementById('voiceModalName').value.trim();
+            const group = document.getElementById('voiceModalGroup').value;
+            const gender = document.getElementById('voiceModalGender').value;
+            const skipRvc = document.getElementById('voiceModalSkipRvc').checked;
+            if (!voiceId) { setVoiceModalStatus('Voice id required.', 'error'); return; }
+            const btn = document.getElementById('voiceModalSaveBtn');
+            btn.disabled = true;
+            setVoiceModalStatus('Saving…');
+            try {
+                const res = await api('/api/superadmin/tts/voice', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voiceId, name, group, gender, skipRvc, token: _voiceModalToken })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) { setVoiceModalStatus(data.error || ('Save failed: ' + res.status), 'error'); btn.disabled = false; return; }
+                setVoiceModalStatus('Saved.', 'success');
+                showToast(_voiceModalMode === 'replace' ? 'Reference clip replaced.' : 'Voice added.', 'success');
+                fetchTtsVoicesAdmin();
+                setTimeout(closeVoiceModal, 400);
+            } catch (e) {
+                setVoiceModalStatus('Network error: ' + e.message, 'error');
+                btn.disabled = false;
+            }
+        }
+
+        async function deleteChatterboxVoice(voiceId, name) {
+            if (!confirm('Delete voice "' + (name || voiceId) + '"? This removes the reference clip from disk.')) return;
+            const id = voiceId.replace(/^cb_/, '');
+            const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(id), { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Delete failed', 'error'); return; }
+            showToast('Voice deleted.', 'success');
+            fetchTtsVoicesAdmin();
+        }
+
+        document.getElementById('voiceModalFile').addEventListener('change', () => { _voiceModalSourceRef = null; });
 
         async function uploadSound(file) {
             const fileInput = document.getElementById('fileInput');
