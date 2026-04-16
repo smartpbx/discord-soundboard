@@ -1,6 +1,7 @@
 fastapi>=0.115.0
 uvicorn>=0.30.0
 kokoro>=0.9.0
-numpy>=1.26.0
 soundfile>=0.12.0
-rvc-python>=0.1.5
+# rvc-python has a stale numpy<=1.23.5 pin that conflicts with kokoro.
+# Install it with --no-deps then install its actual deps manually.
+# See tts-server/scripts/update.sh for the install sequence.

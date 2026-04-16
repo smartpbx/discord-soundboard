@@ -86,6 +86,11 @@ if [[ "$PTH_URL" == *.zip ]]; then
     echo "[*] Downloading zip for ${NAME}..."
     curl -fSL "$PTH_URL" -o "${MODEL_DIR}/model.zip"
     echo "[*] Extracting..."
+    # Ensure unzip is available
+    if ! command -v unzip &>/dev/null; then
+        echo "[*] Installing unzip..."
+        apt-get install -y unzip 2>/dev/null || { echo "[!] Failed to install unzip. Run: apt-get install -y unzip"; exit 1; }
+    fi
     cd "$MODEL_DIR"
     unzip -o model.zip
     rm -f model.zip
