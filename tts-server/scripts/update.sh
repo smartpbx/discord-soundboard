@@ -17,7 +17,11 @@ $PIP install -r "${TTS_DIR}/requirements.txt"
 echo "[*] Installing RVC dependencies (--no-deps to avoid fairseq resolver loop)..."
 $PIP install --no-deps infer-rvc-python 2>/dev/null || true
 $PIP install --no-deps fairseq 2>/dev/null || true
-$PIP install torchcrepe pyworld faiss-cpu omegaconf hydra-core sacrebleu bitarray torchaudio 2>/dev/null || true
+$PIP install torchcrepe pyworld faiss-cpu omegaconf hydra-core sacrebleu bitarray torchaudio ffmpeg-python praat-parselmouth cython 2>/dev/null || true
+
+# Patch fairseq dataclass bug for Python 3.11+
+echo "[*] Patching fairseq for Python 3.11+ compatibility..."
+"${TTS_DIR}/.venv/bin/python" "${TTS_DIR}/scripts/fix-fairseq.py" 2>/dev/null || true
 
 echo "[*] Restarting TTS service..."
 systemctl restart tts-server
