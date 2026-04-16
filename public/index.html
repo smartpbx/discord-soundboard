@@ -4609,6 +4609,7 @@
             if (!tbody) return;
             if (voices.length === 0) { tbody.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return; }
             if (empty) empty.classList.add('hidden');
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
             tbody.innerHTML = voices.map(v => {
                 const disabled = _ttsAdminDisabled.includes(v.id);
                 const isCb = v.engine === 'chatterbox';
