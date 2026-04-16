@@ -1870,7 +1870,10 @@
 
         async function setTtsEnabledSetting(enabled) {
             const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsEnabled: enabled }) });
-            if (res && res.ok) showToast(enabled ? 'TTS enabled' : 'TTS disabled', 'success');
+            if (res && res.ok) {
+                showToast(enabled ? 'TTS enabled' : 'TTS disabled', 'success');
+                fetchSettings();
+            }
         }
         async function setTtsMaxTextLengthSetting(role, val) {
             const obj = {}; obj[role] = Number(val);
