@@ -675,6 +675,20 @@ if (!fs.existsSync(SOUNDS_DIR)) {
 if (!fs.existsSync(PENDING_DIR)) {
     fs.mkdirSync(PENDING_DIR, { recursive: true });
 }
+
+// Find an unused filename across a set of directories. Starts with base+ext,
+// then base_2.ext, base_3.ext, … Returns `${base}${suffix}${ext}`.
+function findAvailableSoundName(baseName, ext, dirs) {
+    const tryName = (name) => dirs.every(d => !fs.existsSync(path.join(d, name)));
+    let candidate = baseName + ext;
+    if (tryName(candidate)) return candidate;
+    for (let i = 2; i < 1000; i++) {
+        candidate = `${baseName}_${i}${ext}`;
+        if (tryName(candidate)) return candidate;
+    }
+    // Ultimate fallback — timestamp (extremely unlikely to collide).
+    return `${baseName}_${Date.now()}${ext}`;
+}
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -1833,27 +1847,30 @@ app.post('/api/superadmin/pending-uploads/approve/:filename', requireSuperadmin,
     const safeFilename = path.basename(req.params.filename || '');
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
     const pendingPath = path.join(PENDING_DIR, safeFilename);
-    const targetPath = path.join(SOUNDS_DIR, safeFilename);
     if (!fs.existsSync(pendingPath)) return res.status(404).json({ error: 'Pending file not found' });
-    if (fs.existsSync(targetPath)) {
-        fs.unlinkSync(pendingPath);
-        removePendingUpload(safeFilename);
-        return res.status(400).json({ error: 'A sound with this name already exists' });
-    }
+    const ext = path.extname(safeFilename);
+    const base = path.basename(safeFilename, ext);
+    // Auto-rename on collision so multiple clips imported from the same source
+    // (same auto-generated title) don't block each other at approval time.
+    const finalFilename = findAvailableSoundName(base, ext, [SOUNDS_DIR]);
+    const targetPath = path.join(SOUNDS_DIR, finalFilename);
     try {
         const pendingMeta = (loadPendingMeta().uploads || []).find(u => u.filename === safeFilename) || {};
         fs.renameSync(pendingPath, targetPath);
         const duration = probeDuration(targetPath);
-        if (duration != null) setSoundMeta(safeFilename, { duration });
+        const metaPatch = {};
+        if (duration != null) metaPatch.duration = duration;
+        if (pendingMeta.originalName) metaPatch.displayName = pendingMeta.originalName;
+        if (Object.keys(metaPatch).length) setSoundMeta(finalFilename, metaPatch);
         removePendingUpload(safeFilename);
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
             action: 'upload.approve',
-            target: safeFilename,
-            details: { uploader: pendingMeta.uploader || null },
+            target: finalFilename,
+            details: { uploader: pendingMeta.uploader || null, renamedFrom: finalFilename !== safeFilename ? safeFilename : undefined },
         });
-        res.json({ ok: true, filename: safeFilename });
+        res.json({ ok: true, filename: finalFilename, renamedFrom: finalFilename !== safeFilename ? safeFilename : undefined });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to approve' });
     }
@@ -2317,13 +2334,10 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
         return;
     }
 
+    const uploadExt = path.extname(safeName);
+    const uploadBase = path.basename(safeName, uploadExt);
+    safeName = findAvailableSoundName(uploadBase, uploadExt, [SOUNDS_DIR, PENDING_DIR]);
     let targetPath = path.join(PENDING_DIR, safeName);
-    if (fs.existsSync(targetPath)) {
-        const ext = path.extname(safeName);
-        const base = path.basename(safeName, ext);
-        safeName = `${base}_${Date.now()}${ext}`;
-        targetPath = path.join(PENDING_DIR, safeName);
-    }
     const resolvedPath = path.resolve(targetPath);
     if (!resolvedPath.startsWith(path.resolve(PENDING_DIR))) return res.status(403).json({ error: 'Invalid filename' });
 
@@ -2964,13 +2978,10 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
 
     const rawName = String(body.displayName || entry.title || 'url-import').trim();
     const baseName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'url-import';
-    let safeName = baseName + '.mp3';
     const targetDir = canDirectUpload ? SOUNDS_DIR : PENDING_DIR;
-    let targetPath = path.join(targetDir, safeName);
-    if (fs.existsSync(targetPath)) {
-        safeName = `${baseName}_${Date.now()}.mp3`;
-        targetPath = path.join(targetDir, safeName);
-    }
+    // Check collisions in both dirs so pending sounds don't break at approval time.
+    const safeName = findAvailableSoundName(baseName, '.mp3', [SOUNDS_DIR, PENDING_DIR]);
+    const targetPath = path.join(targetDir, safeName);
     const resolvedPath = path.resolve(targetPath);
     if (!resolvedPath.startsWith(path.resolve(targetDir))) return res.status(403).json({ error: 'Invalid path' });
 
