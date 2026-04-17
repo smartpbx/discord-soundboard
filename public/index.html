@@ -1291,6 +1291,28 @@
                     </div>
                     <div id="ttsVoicesEmpty" class="pending-empty hidden" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No voices available</div>
                 </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Train Custom RVC Voice (Phase 10)</span>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openTrainVoiceModal()">+ Train new voice</button>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                        Hands-off custom RVC training via Claude Code. Supply a name (and optionally URLs) — Claude finds source clips, runs the 6-phase pipeline on the GPU, and produces an A/B benchmark for you to approve. Takes ~60-90 minutes per voice.
+                    </p>
+                    <div style="max-height: 240px; overflow-y: auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Voice</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Started</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;">Status</th>
+                                <th style="text-align:right; padding: 0.35rem 0.5rem;">Actions</th>
+                            </tr></thead>
+                            <tbody id="trainJobsBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="trainJobsEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No training jobs yet</div>
+                </div>
             </div>
 
             <div id="superadminPanelEntranceExit" class="superadmin-panel">
@@ -1410,6 +1432,74 @@
                 <div class="footer-row">
                     <button type="button" class="btn btn-ghost" onclick="closeVoiceModal()">Cancel</button>
                     <button type="button" class="btn btn-primary" id="voiceModalSaveBtn" onclick="saveVoice()" disabled>Save voice</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="trainVoiceOverlay" class="voice-modal-overlay hidden">
+            <div class="voice-modal" style="width: 640px;">
+                <h3 id="trainVoiceTitle">Train new RVC voice</h3>
+
+                <div id="trainVoiceForm">
+                    <div class="row">
+                        <div class="field" style="flex:1; min-width:180px;">
+                            <label for="trainVoiceName">Display name</label>
+                            <input type="text" id="trainVoiceName" placeholder="e.g. Joe Rogan">
+                        </div>
+                        <div class="field" style="flex:1; min-width:180px;">
+                            <label for="trainVoiceId">Voice id</label>
+                            <input type="text" id="trainVoiceId" placeholder="e.g. joe_rogan">
+                            <div class="field-help">Lowercase, underscore-separated. Auto-prefixed with <code>cb_</code> in dropdowns.</div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="field" style="flex:1; min-width:140px;">
+                            <label for="trainVoiceGroup">Group</label>
+                            <select id="trainVoiceGroup">
+                                <option>Celebrity</option>
+                                <option>Cartoon</option>
+                                <option>Gaming</option>
+                                <option>Other</option>
+                            </select>
+                        </div>
+                        <div class="field" style="flex:1; min-width:140px;">
+                            <label for="trainVoiceGender">Gender</label>
+                            <select id="trainVoiceGender">
+                                <option value="male">male</option>
+                                <option value="female">female</option>
+                                <option value="unknown">unknown</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="trainVoiceUrls">Source YouTube URLs (optional, one per line)</label>
+                        <textarea id="trainVoiceUrls" rows="4" placeholder="Leave blank for Claude to find clips automatically.
+&#10;Or paste known-good URLs here, one per line." style="width:100%; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.9rem; font-family:inherit; resize:vertical;"></textarea>
+                    </div>
+                    <div class="field">
+                        <label for="trainVoiceMarkers">Speaker marker words (optional, comma-separated)</label>
+                        <input type="text" id="trainVoiceMarkers" placeholder='e.g. yeah, "you know", podcast, jamie'>
+                        <div class="field-help">Words the target speaker says often. Used by clustering to identify their segments vs interviewers.</div>
+                    </div>
+                    <div class="field">
+                        <label for="trainVoiceNotes">Notes for Claude (optional)</label>
+                        <input type="text" id="trainVoiceNotes" placeholder="e.g. prefer studio podcast clips over live shows">
+                    </div>
+
+                    <div class="footer-row">
+                        <button type="button" class="btn btn-ghost" onclick="closeTrainVoiceModal()">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="trainVoiceStartBtn" onclick="startTrainingJob()">Start training</button>
+                    </div>
+                </div>
+
+                <div id="trainVoiceStatus" class="hidden">
+                    <div class="status-line" id="trainVoiceStatusLine"></div>
+                    <div id="trainVoiceMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem;"></div>
+                    <div id="trainVoiceEvents" style="margin-top:0.75rem; max-height:340px; overflow-y:auto; padding:0.5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); font-family:ui-monospace,monospace; font-size:0.8rem; line-height:1.4;"></div>
+                    <div class="footer-row">
+                        <button type="button" class="btn btn-ghost" onclick="closeTrainVoiceModal()">Close (job keeps running)</button>
+                        <button type="button" class="btn btn-danger" id="trainVoiceCancelBtn" onclick="cancelTrainingJob()">Cancel job</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2070,7 +2160,7 @@
         function switchSuperadminTab(panelId) {
             document.querySelectorAll('.superadmin-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panelId));
             document.querySelectorAll('.superadmin-panel').forEach(p => p.classList.toggle('active', p.id === 'superadminPanel' + panelId.charAt(0).toUpperCase() + panelId.slice(1)));
-            if (panelId === 'ttsVoices') fetchTtsVoicesAdmin();
+            if (panelId === 'ttsVoices') { fetchTtsVoicesAdmin(); fetchTrainJobs(); }
             if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
             if (panelId === 'guests') { fetchCooldownOverrides(); }
             if (panelId === 'entranceExit') fetchEntranceExitAdmin();
@@ -5670,6 +5760,161 @@
         }
 
         document.getElementById('voiceModalFile').addEventListener('change', () => { _voiceModalSourceRef = null; });
+
+        // --- Train new RVC voice (Phase 10) ---
+        let _trainPollTimer = null;
+        let _trainCurrentJobId = null;
+        let _trainEventCursor = 0;
+
+        function openTrainVoiceModal() {
+            _trainCurrentJobId = null;
+            _trainEventCursor = 0;
+            document.getElementById('trainVoiceTitle').textContent = 'Train new RVC voice';
+            document.getElementById('trainVoiceForm').classList.remove('hidden');
+            document.getElementById('trainVoiceStatus').classList.add('hidden');
+            ['trainVoiceName','trainVoiceId','trainVoiceUrls','trainVoiceMarkers','trainVoiceNotes'].forEach(id => { document.getElementById(id).value = ''; });
+            document.getElementById('trainVoiceGroup').value = 'Celebrity';
+            document.getElementById('trainVoiceGender').value = 'male';
+            document.getElementById('trainVoiceStartBtn').disabled = false;
+            document.getElementById('trainVoiceStartBtn').textContent = 'Start training';
+            document.getElementById('trainVoiceOverlay').classList.remove('hidden');
+        }
+
+        function closeTrainVoiceModal() {
+            stopTrainPoll();
+            document.getElementById('trainVoiceOverlay').classList.add('hidden');
+            fetchTrainJobs();
+        }
+
+        async function startTrainingJob() {
+            const name = document.getElementById('trainVoiceName').value.trim();
+            const voiceId = document.getElementById('trainVoiceId').value.trim().toLowerCase().replace(/^cb_/, '');
+            if (!name) { showToast('Display name required', 'error'); return; }
+            if (!/^[a-z][a-z0-9_]{1,31}$/.test(voiceId)) { showToast('Voice id must be lowercase letters/digits/underscores', 'error'); return; }
+            const group = document.getElementById('trainVoiceGroup').value;
+            const gender = document.getElementById('trainVoiceGender').value;
+            const urls = document.getElementById('trainVoiceUrls').value.split(/\n/).map(u => u.trim()).filter(Boolean);
+            const markers = document.getElementById('trainVoiceMarkers').value.split(',').map(m => m.trim()).filter(Boolean);
+            const notes = document.getElementById('trainVoiceNotes').value.trim();
+
+            const btn = document.getElementById('trainVoiceStartBtn');
+            btn.disabled = true; btn.textContent = 'Starting...';
+
+            const res = await api('/api/superadmin/tts/train', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voice_id: voiceId, name, group, gender, urls, speaker_markers: markers, notes }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                showToast(data.error || 'Failed to start training', 'error');
+                btn.disabled = false; btn.textContent = 'Start training';
+                return;
+            }
+            _trainCurrentJobId = data.job.id;
+            _trainEventCursor = 0;
+            document.getElementById('trainVoiceForm').classList.add('hidden');
+            document.getElementById('trainVoiceStatus').classList.remove('hidden');
+            document.getElementById('trainVoiceTitle').textContent = 'Training: ' + data.job.input.name;
+            document.getElementById('trainVoiceMeta').textContent = 'Job id: ' + data.job.id + ' · started ' + new Date(data.job.started_at).toLocaleTimeString();
+            document.getElementById('trainVoiceEvents').innerHTML = '';
+            startTrainPoll();
+        }
+
+        function startTrainPoll() {
+            stopTrainPoll();
+            _trainPollTimer = setInterval(pollTrainStatus, 4000);
+            pollTrainStatus();
+        }
+
+        function stopTrainPoll() {
+            if (_trainPollTimer) { clearInterval(_trainPollTimer); _trainPollTimer = null; }
+        }
+
+        async function pollTrainStatus() {
+            if (!_trainCurrentJobId) return;
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(_trainCurrentJobId) + '?since=' + _trainEventCursor);
+            if (!res.ok) return;
+            const data = await res.json();
+            const meta = data.meta;
+            document.getElementById('trainVoiceStatusLine').textContent = 'Status: ' + meta.status + (meta.exit_code != null ? ' (exit ' + meta.exit_code + ')' : '');
+            const eventsBox = document.getElementById('trainVoiceEvents');
+            for (const evt of data.events || []) {
+                const line = document.createElement('div');
+                line.style.marginBottom = '0.3rem';
+                if (evt.kind === 'message') {
+                    line.style.color = 'var(--text)';
+                    line.textContent = evt.text;
+                } else if (evt.kind === 'tool_use') {
+                    line.style.color = 'var(--text-muted)';
+                    const inputSummary = JSON.stringify(evt.input).slice(0, 200);
+                    line.textContent = '🔧 ' + evt.name + ': ' + inputSummary;
+                } else if (evt.kind === 'tool_result') {
+                    line.style.color = 'var(--text-muted)';
+                    line.style.opacity = '0.7';
+                    line.textContent = '   ↳ ' + (evt.summary || '(no output)').replace(/\n/g, ' ').slice(0, 240);
+                } else if (evt.kind === 'session_started') {
+                    line.style.color = 'var(--accent)';
+                    line.textContent = '⏵ Session ' + (evt.session_id || '').slice(0, 8) + ' started';
+                } else if (evt.kind === 'result') {
+                    line.style.color = evt.subtype === 'success' ? '#4ade80' : 'var(--danger)';
+                    const cost = evt.total_cost_usd ? ' · $' + evt.total_cost_usd.toFixed(4) : '';
+                    line.textContent = '⏹ ' + evt.subtype + cost;
+                }
+                eventsBox.appendChild(line);
+            }
+            if (data.events && data.events.length) {
+                eventsBox.scrollTop = eventsBox.scrollHeight;
+                _trainEventCursor = data.next_since || _trainEventCursor;
+            }
+            if (meta.status !== 'running') {
+                stopTrainPoll();
+                fetchTrainJobs();
+            }
+        }
+
+        async function cancelTrainingJob() {
+            if (!_trainCurrentJobId) return;
+            if (!confirm('Cancel this training job? The pipeline will stop where it is.')) return;
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(_trainCurrentJobId) + '/cancel', { method: 'POST' });
+            if (res.ok) showToast('Job cancelled', 'info');
+            stopTrainPoll();
+            pollTrainStatus();
+        }
+
+        async function fetchTrainJobs() {
+            const res = await api('/api/superadmin/tts/train');
+            if (!res.ok) return;
+            const data = await res.json();
+            const jobs = data.jobs || [];
+            const tbody = document.getElementById('trainJobsBody');
+            const empty = document.getElementById('trainJobsEmpty');
+            if (!tbody) return;
+            if (jobs.length === 0) { tbody.innerHTML = ''; empty.classList.remove('hidden'); return; }
+            empty.classList.add('hidden');
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            const statusColor = { running: 'var(--accent)', completed: '#4ade80', failed: 'var(--danger)', cancelled: 'var(--text-muted)', unknown_exit: 'var(--text-muted)' };
+            tbody.innerHTML = jobs.map(j => {
+                const ago = j.started_at ? Math.round((Date.now() - j.started_at) / 60000) + ' min ago' : '';
+                const color = statusColor[j.status] || 'var(--text)';
+                return '<tr>'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(j.input.name) + ' <span style="color:var(--text-muted);font-size:0.75rem">(' + esc(j.input.voice_id) + ')</span></td>'
+                    + '<td style="padding:0.35rem 0.5rem;color:var(--text-muted)">' + esc(ago) + '</td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem;color:' + color + '">' + esc(j.status) + '</td>'
+                    + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap"><button type="button" class="btn btn-ghost btn-sm" onclick="reopenTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">View</button></td>'
+                    + '</tr>';
+            }).join('');
+        }
+
+        function reopenTrainJob(jobId, name) {
+            _trainCurrentJobId = jobId;
+            _trainEventCursor = 0;
+            document.getElementById('trainVoiceForm').classList.add('hidden');
+            document.getElementById('trainVoiceStatus').classList.remove('hidden');
+            document.getElementById('trainVoiceTitle').textContent = 'Training: ' + name;
+            document.getElementById('trainVoiceEvents').innerHTML = '';
+            document.getElementById('trainVoiceOverlay').classList.remove('hidden');
+            startTrainPoll();
+        }
 
         async function uploadSound(file) {
             const fileInput = document.getElementById('fileInput');

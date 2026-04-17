@@ -15,6 +15,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const statsDb = require('./lib/stats-db');
 const ttsVoiceAdmin = require('./lib/tts-voice-admin');
+const voiceTrainer = require('./lib/voice-trainer');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -3953,6 +3954,40 @@ app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (re
     } catch (e) {
         res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
+});
+
+// --- Superadmin: voice training jobs ---
+
+app.get('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
+    try {
+        const jobs = voiceTrainer.listJobs().sort((a, b) => b.started_at - a.started_at).slice(0, 50);
+        res.json({ jobs });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
+    try {
+        const job = voiceTrainer.startJob(req.body || {});
+        res.json({ ok: true, job });
+    } catch (e) {
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
+app.get('/api/superadmin/tts/train/:id', requireSuperadmin, (req, res) => {
+    try {
+        const since = parseInt(req.query.since || '0', 10);
+        const meta = voiceTrainer.getJobStatus(req.params.id);
+        const { events, lines } = voiceTrainer.getJobEvents(req.params.id, since);
+        res.json({ meta, events, next_since: lines });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) => {
+    try {
+        const meta = voiceTrainer.cancelJob(req.params.id);
+        res.json({ ok: true, meta });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 const token = (process.env.DISCORD_TOKEN || '').trim();
