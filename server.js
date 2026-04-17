@@ -4106,6 +4106,9 @@ if (!token || token === 'your_bot_token_here') {
     process.exit(1);
 }
 client.login(token);
+// Start the voice-training queue scheduler so queued/scheduled jobs get picked
+// up automatically when the GPU is free.
+try { voiceTrainer.startScheduler(); } catch (e) { console.error('[voice-trainer] scheduler failed to start:', e.message); }
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);

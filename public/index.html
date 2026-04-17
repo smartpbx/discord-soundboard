@@ -1526,10 +1526,15 @@
                         <label for="trainVoiceNotes">Notes for Claude (optional)</label>
                         <input type="text" id="trainVoiceNotes" placeholder="e.g. prefer studio podcast clips over live shows">
                     </div>
+                    <div class="field">
+                        <label for="trainVoiceScheduleAt">Schedule for (optional)</label>
+                        <input type="datetime-local" id="trainVoiceScheduleAt">
+                        <div class="field-help">Leave blank to queue immediately. Jobs run one at a time — if another is in progress, this one waits its turn.</div>
+                    </div>
 
                     <div class="footer-row">
                         <button type="button" class="btn btn-ghost" onclick="closeTrainVoiceModal()">Cancel</button>
-                        <button type="button" class="btn btn-primary" id="trainVoiceStartBtn" onclick="startTrainingJob()">Start training</button>
+                        <button type="button" class="btn btn-primary" id="trainVoiceStartBtn" onclick="startTrainingJob()">Start / queue training</button>
                     </div>
                 </div>
 
@@ -5902,7 +5907,7 @@
             document.getElementById('trainVoiceTitle').textContent = 'Train new RVC voice';
             document.getElementById('trainVoiceForm').classList.remove('hidden');
             document.getElementById('trainVoiceStatus').classList.add('hidden');
-            ['trainVoiceName','trainVoiceId','trainVoiceUrls','trainVoiceMarkers','trainVoiceNotes'].forEach(id => { document.getElementById(id).value = ''; });
+            ['trainVoiceName','trainVoiceId','trainVoiceUrls','trainVoiceMarkers','trainVoiceNotes','trainVoiceScheduleAt'].forEach(id => { document.getElementById(id).value = ''; });
             document.getElementById('trainVoiceGroup').value = 'Celebrity';
             document.getElementById('trainVoiceGender').value = 'male';
             document.getElementById('trainVoiceStartBtn').disabled = false;
@@ -5926,13 +5931,15 @@
             const urls = document.getElementById('trainVoiceUrls').value.split(/\n/).map(u => u.trim()).filter(Boolean);
             const markers = document.getElementById('trainVoiceMarkers').value.split(',').map(m => m.trim()).filter(Boolean);
             const notes = document.getElementById('trainVoiceNotes').value.trim();
+            const scheduleAtStr = document.getElementById('trainVoiceScheduleAt').value;
+            const runAfter = scheduleAtStr ? new Date(scheduleAtStr).getTime() : undefined;
 
             const btn = document.getElementById('trainVoiceStartBtn');
             btn.disabled = true; btn.textContent = 'Starting...';
 
             const res = await api('/api/superadmin/tts/train', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ voice_id: voiceId, name, group, gender, urls, speaker_markers: markers, notes }),
+                body: JSON.stringify({ voice_id: voiceId, name, group, gender, urls, speaker_markers: markers, notes, run_after: runAfter }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
@@ -6090,21 +6097,35 @@
             if (jobs.length === 0) { tbody.innerHTML = ''; empty.classList.remove('hidden'); return; }
             empty.classList.add('hidden');
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            const statusColor = { running: 'var(--accent)', completed: '#4ade80', failed: 'var(--danger)', cancelled: 'var(--text-muted)', unknown_exit: 'var(--text-muted)' };
+            const statusColor = { queued: '#f59e0b', running: 'var(--accent)', completed: '#4ade80', failed: 'var(--danger)', cancelled: 'var(--text-muted)', unknown_exit: 'var(--text-muted)' };
             tbody.innerHTML = jobs.map(j => {
-                const ago = j.started_at ? Math.round((Date.now() - j.started_at) / 60000) + ' min ago' : '';
+                const startedTs = j.started_at || j.created_at;
+                const ago = startedTs ? Math.round((Date.now() - startedTs) / 60000) + ' min ago' : '';
                 const color = statusColor[j.status] || 'var(--text)';
                 const progress = j.progress;
-                const eta = progress && j.status === 'running' ? (progress.overall_eta_seconds != null ? formatEta(progress.overall_eta_seconds) : '—') : (j.status === 'completed' ? 'done' : '—');
+                let eta = '—';
+                let phaseCell = renderPhaseCell(progress);
+                if (j.status === 'running' && progress) eta = progress.overall_eta_seconds != null ? formatEta(progress.overall_eta_seconds) : '—';
+                else if (j.status === 'completed') eta = 'done';
+                else if (j.status === 'queued' && j.run_after && j.run_after > Date.now()) {
+                    eta = 'in ' + formatEta((j.run_after - Date.now()) / 1000);
+                    phaseCell = '<span style="color:var(--text-muted);font-size:0.75rem">scheduled ' + new Date(j.run_after).toLocaleString() + '</span>';
+                } else if (j.status === 'queued') {
+                    phaseCell = '<span style="color:var(--text-muted);font-size:0.75rem">waiting for GPU</span>';
+                }
                 const canResume = (j.status === 'cancelled' || j.status === 'failed' || j.status === 'unknown_exit');
+                const canCancel = (j.status === 'running' || j.status === 'queued');
                 let actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="reopenTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">View</button>';
+                if (canCancel) {
+                    actions += ' <button type="button" class="btn btn-danger btn-sm" onclick="cancelTrainJobFromList(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">Cancel</button>';
+                }
                 if (canResume) {
                     actions += ' <button type="button" class="btn btn-primary btn-sm" onclick="resumeTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')" title="Resume from last checkpoint">Resume</button>';
                 }
                 return '<tr>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(j.input.name) + ' <span style="color:var(--text-muted);font-size:0.75rem">(' + esc(j.input.voice_id) + ')</span></td>'
                     + '<td style="padding:0.35rem 0.5rem;color:var(--text-muted)">' + esc(ago) + '</td>'
-                    + '<td style="padding:0.35rem 0.5rem">' + renderPhaseCell(progress) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + phaseCell + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + renderProgressBar(progress) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem;color:var(--text-muted)">' + esc(eta) + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem;color:' + color + '">' + esc(j.status) + '</td>'
@@ -6122,6 +6143,13 @@
             document.getElementById('trainVoiceEvents').innerHTML = '';
             document.getElementById('trainVoiceOverlay').classList.remove('hidden');
             startTrainPoll();
+        }
+
+        async function cancelTrainJobFromList(jobId, name) {
+            if (!confirm('Cancel training "' + (name || jobId) + '"? You can resume from the last checkpoint afterwards.')) return;
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
+            if (res.ok) showToast('Cancelled', 'info'); else { const d = await res.json().catch(() => ({})); showToast(d.error || 'Cancel failed', 'error'); }
+            fetchTrainJobs();
         }
 
         async function resumeTrainJob(jobId, name) {

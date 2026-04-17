@@ -34,9 +34,75 @@ from _status import phase_run, load_input, emit
 
 PHASE = "deploy"
 APPLIO_DIR = Path("/opt/Applio")
+APPLIO_LOGS = APPLIO_DIR / "logs"
 TTS_RVC_DIR = Path("/opt/discord-soundboard/tts-server/models/rvc")
 TTS_CB_DIR = Path("/opt/discord-soundboard/tts-server/models/chatterbox")
+TTS_DATASETS_DIR = Path("/opt/discord-soundboard/tts-server/models/datasets")
 TTS_URL = "http://localhost:8880"
+
+
+def archive_minimal_dataset(job_dir: Path, voice_id: str) -> Path:
+    """Copy the reusable dataset (chunks + transcripts + inputs) to a permanent
+    home under tts-server/models/datasets/<voice_id>/ so future retraining (e.g.
+    SoVITS via the same pipeline) can skip the download/cluster/extract phases.
+
+    Returns the archive path.
+    """
+    dst = TTS_DATASETS_DIR / voice_id
+    dst.mkdir(parents=True, exist_ok=True)
+    # chunks/ (the cleaned, speaker-filtered, 40 kHz mono segments)
+    chunks_src = job_dir / "chunks"
+    chunks_dst = dst / "chunks"
+    if chunks_src.exists():
+        if chunks_dst.exists():
+            shutil.rmtree(chunks_dst)
+        shutil.copytree(chunks_src, chunks_dst)
+    # transcripts, input.json, cluster_results.json — small, useful for SoVITS
+    for fname in ("transcripts", "input.json", "cluster_results.json"):
+        src = job_dir / fname
+        if not src.exists():
+            continue
+        target = dst / fname
+        if src.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(src, target)
+        else:
+            shutil.copy(src, target)
+    return dst
+
+
+def purge_transient(job_dir: Path, voice_id: str) -> dict:
+    """Delete disk-heavy transient artifacts that were only needed during this
+    training run. Safe to call only after a successful deploy — on failure we
+    leave everything intact for debugging + resume.
+
+    Returns a dict of what was freed.
+    """
+    freed = {}
+    # Applio logs/<voice_id>/ — intermediate features, sliced_audios, G_N/D_N
+    # checkpoints. Several GB per voice. We have the final .pth deployed already.
+    applio_logs = APPLIO_LOGS / voice_id
+    if applio_logs.exists():
+        freed["applio_logs"] = str(applio_logs)
+        shutil.rmtree(applio_logs)
+    # Raw YouTube downloads — re-downloadable, ~500 MB to several GB.
+    raw_dir = job_dir / "raw"
+    if raw_dir.exists():
+        freed["raw_downloads"] = str(raw_dir)
+        shutil.rmtree(raw_dir)
+    # Applio datasets symlink (points at chunks/ which we just archived elsewhere)
+    ds_link = APPLIO_DIR / "datasets" / voice_id
+    if ds_link.is_symlink() or ds_link.exists():
+        freed["applio_dataset_link"] = str(ds_link)
+        try:
+            if ds_link.is_symlink():
+                ds_link.unlink()
+            else:
+                shutil.rmtree(ds_link)
+        except OSError:
+            pass
+    return freed
 
 
 def read_tts_admin_token() -> str:
@@ -260,13 +326,22 @@ def main():
                 if ok:
                     produced.append(str(out.relative_to(job_dir)))
 
+        # 7. Archive the reusable dataset + purge transient training artifacts
+        #    (Applio intermediate features/checkpoints, raw YouTube downloads).
+        archive_dir = archive_minimal_dataset(job_dir, voice_id)
+        freed = purge_transient(job_dir, voice_id)
+        run.progress(action="archived_and_purged", archive_dir=str(archive_dir), freed=freed)
+
         run.done(
             voice_id=voice_id,
             installed_to=str(dst_dir),
             chatterbox_auto_created=cb_created,
             benchmark_files=produced,
             benchmark_dir=str(bench_dir),
-            note="skip_rvc starts False so the trained RVC is active; flip via PATCH to disable.",
+            dataset_archive=str(archive_dir),
+            purged=freed,
+            note="skip_rvc starts False so the trained RVC is active; flip via PATCH to disable. "
+                 "Dataset archived for future SoVITS retrain; transient training artifacts purged.",
         )
 
 
