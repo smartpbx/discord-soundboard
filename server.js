@@ -932,6 +932,24 @@ const ttsQueue = [];
 let ttsQueueIdCounter = 0;
 let ttsIsPlaying = false;
 
+// Serialize /synthesize requests to the TTS server: parallel generations
+// on a shared GPU garble each other, so only one synth runs at a time.
+let ttsSynthTail = Promise.resolve();
+let ttsSynthPending = 0;
+async function runTtsSynthSerially(fn) {
+    const prev = ttsSynthTail;
+    let release;
+    ttsSynthTail = new Promise((r) => { release = r; });
+    ttsSynthPending++;
+    try {
+        await prev.catch(() => {});
+        return await fn();
+    } finally {
+        ttsSynthPending--;
+        release();
+    }
+}
+
 const COMPANION_TOKEN = (process.env.COMPANION_TOKEN || '').trim();
 function injectCompanionAuth(req) {
     if (!COMPANION_TOKEN) return false;
@@ -3259,7 +3277,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.recentlyPlayed = getRecentlyPlayedFromState();
     state.volume = currentVolume;
     state.multiPlay = multiPlayEnabled;
-    state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
+    state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, synthPending: ttsSynthPending, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
     // Include all active tracks for multi-play
     if (multiPlayEnabled && activeTracks.size > 0) {
         const now = Date.now();
@@ -3615,15 +3633,18 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         }
     }
 
-    // Call TTS service
-    console.log('[TTS] synthesize voice=%s text_len=%d', voiceId, trimmed.length);
+    // Call TTS service (serialized — parallel generations on the same GPU garble).
+    console.log('[TTS] queued for synthesis voice=%s text_len=%d pending=%d', voiceId, trimmed.length, ttsSynthPending);
     let ttsRes;
     try {
-        ttsRes = await ttsFetch('/synthesize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration }),
-            timeout: 120000,
+        ttsRes = await runTtsSynthSerially(() => {
+            console.log('[TTS] synthesize voice=%s text_len=%d', voiceId, trimmed.length);
+            return ttsFetch('/synthesize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration }),
+                timeout: 120000,
+            });
         });
     } catch (e) {
         console.error('[TTS] fetch error:', e);

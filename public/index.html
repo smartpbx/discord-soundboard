@@ -5009,10 +5009,12 @@
                     const qTxt = document.getElementById('ttsQueueText');
                     const qClear = document.getElementById('ttsQueueClearBtn');
                     if (qEl && qTxt) {
-                        if (state.ttsQueue.length > 0 || state.ttsQueue.playing) {
+                        const synth = Number(state.ttsQueue.synthPending) || 0;
+                        if (state.ttsQueue.length > 0 || state.ttsQueue.playing || synth > 0) {
                             qEl.style.display = 'flex';
                             const parts = [];
                             if (state.ttsQueue.playing) parts.push('TTS playing');
+                            if (synth > 0) parts.push(synth + ' generating');
                             if (state.ttsQueue.length > 0) parts.push(state.ttsQueue.length + ' queued');
                             qTxt.textContent = parts.join(' \u2022 ');
                             if (qClear) qClear.classList.toggle('hidden', !isAdminOrSuperadmin());
