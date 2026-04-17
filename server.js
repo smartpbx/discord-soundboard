@@ -4002,6 +4002,61 @@ app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (re
     }
 });
 
+// --- Superadmin: RVC-only voice metadata (manifest entries) ---
+
+app.patch('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
+    if (!TTS_ADMIN_TOKEN) return res.status(503).json({ error: 'TTS_ADMIN_TOKEN not configured' });
+    const body = req.body || {};
+    const patch = {};
+    if (typeof body.name === 'string') patch.name = body.name;
+    if (['male', 'female', 'unknown'].includes(body.gender)) patch.gender = body.gender;
+    if (typeof body.group === 'string') patch.group = body.group;
+    if (Number.isFinite(body.transpose)) patch.transpose = Math.max(-24, Math.min(24, Math.round(body.transpose)));
+    if (Number.isFinite(body.index_rate)) patch.index_rate = Math.max(0, Math.min(1, Number(body.index_rate)));
+    if (Number.isFinite(body.protect)) patch.protect = Math.max(0, Math.min(0.5, Number(body.protect)));
+    if (typeof body.base_voice === 'string') patch.base_voice = body.base_voice;
+    try {
+        const url = TTS_API_URL.replace(/\/+$/, '') + '/voices/rvc/' + encodeURIComponent(dirId);
+        const r = await fetch(url, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': TTS_ADMIN_TOKEN },
+            body: JSON.stringify(patch),
+        });
+        const text = await r.text();
+        if (!r.ok) {
+            let detail = text;
+            try { detail = JSON.parse(text).detail || text; } catch {}
+            return res.status(r.status).json({ error: 'TTS server rejected patch: ' + detail });
+        }
+        res.json(JSON.parse(text));
+    } catch (e) {
+        res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
+    }
+});
+
+app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
+    if (!TTS_ADMIN_TOKEN) return res.status(503).json({ error: 'TTS_ADMIN_TOKEN not configured' });
+    try {
+        const url = TTS_API_URL.replace(/\/+$/, '') + '/voices/rvc/' + encodeURIComponent(dirId);
+        const r = await fetch(url, { method: 'DELETE', headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN } });
+        const text = await r.text();
+        if (!r.ok) {
+            let detail = text;
+            try { detail = JSON.parse(text).detail || text; } catch {}
+            return res.status(r.status).json({ error: 'TTS server rejected delete: ' + detail });
+        }
+        res.json(JSON.parse(text));
+    } catch (e) {
+        res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
+    }
+});
+
 // --- Superadmin: voice training jobs ---
 
 app.get('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {

@@ -1439,6 +1439,44 @@
             </div>
         </div>
 
+        <div id="editVoiceOverlay" class="voice-modal-overlay hidden">
+            <div class="voice-modal" style="width: 440px;">
+                <h3>Edit voice metadata</h3>
+                <div class="field">
+                    <label for="editVoiceIdDisplay">Voice</label>
+                    <input type="text" id="editVoiceIdDisplay" readonly style="color:var(--text-muted)">
+                </div>
+                <div class="field">
+                    <label for="editVoiceName">Display name</label>
+                    <input type="text" id="editVoiceName">
+                </div>
+                <div class="row">
+                    <div class="field" style="flex:1; min-width:140px;">
+                        <label for="editVoiceGroup">Group</label>
+                        <select id="editVoiceGroup">
+                            <option>Celebrity</option>
+                            <option>Cartoon</option>
+                            <option>Gaming</option>
+                            <option>Other</option>
+                        </select>
+                    </div>
+                    <div class="field" style="flex:1; min-width:140px;">
+                        <label for="editVoiceGender">Gender</label>
+                        <select id="editVoiceGender">
+                            <option value="male">male</option>
+                            <option value="female">female</option>
+                            <option value="unknown">unknown</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="status-line" id="editVoiceStatus"></div>
+                <div class="footer-row">
+                    <button type="button" class="btn btn-ghost" onclick="closeEditVoiceModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="editVoiceSaveBtn" onclick="saveEditedVoice()">Save</button>
+                </div>
+            </div>
+        </div>
+
         <div id="trainVoiceOverlay" class="voice-modal-overlay hidden">
             <div class="voice-modal" style="width: 640px;">
                 <h3 id="trainVoiceTitle">Train new RVC voice</h3>
@@ -5531,10 +5569,20 @@
                 const disabled = _ttsAdminDisabled.includes(v.id);
                 const isCb = v.engine === 'chatterbox';
                 const rvcOn = isCb ? (_ttsAdminRvcOverrides[v.id] ?? true) : false;
-                const actions = isCb
-                    ? '<button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Replace</button>'
-                      + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>'
-                    : '<span style="color:var(--text-muted)">--</span>';
+                const isKokoro = v.engine === 'kokoro';
+                const isRvc = v.engine === 'rvc';
+                let actions = '';
+                if (isCb) {
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Ref</button>'
+                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>';
+                } else if (isRvc) {
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
+                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteRvcVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this RVC model (Chatterbox pair if any kept intact)">Delete</button>';
+                } else {
+                    // Kokoro / gptsovits — built-in, non-editable
+                    actions = '<span style="color:var(--text-muted);font-size:0.75rem">built-in</span>';
+                }
                 let sourceLine = '';
                 if (isCb && v.source_kind) {
                     const range = (v.source_start != null && v.source_end != null) ? (' ' + v.source_start.toFixed(1) + 's–' + v.source_end.toFixed(1) + 's') : '';
@@ -5772,6 +5820,73 @@
             if (!res.ok) { showToast(data.error || 'Delete failed', 'error'); return; }
             showToast('Voice deleted.', 'success');
             fetchTtsVoicesAdmin();
+            fetchTtsStatus();
+        }
+
+        async function deleteRvcVoice(voiceId, name) {
+            if (!confirm('Delete RVC model "' + (name || voiceId) + '"? Model weights + FAISS index are wiped. Chatterbox pair (if any) stays.')) return;
+            const id = voiceId.replace(/^rvc_/, '');
+            const res = await api('/api/superadmin/tts/rvc-voice/' + encodeURIComponent(id), { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Delete failed', 'error'); return; }
+            showToast('RVC model deleted.', 'success');
+            fetchTtsVoicesAdmin();
+            fetchTtsStatus();
+        }
+
+        // --- Edit voice metadata (works for Chatterbox + RVC-only) ---
+        let _editVoiceCtx = null;
+
+        function openEditVoiceModal(voiceId, engine, name, group, gender) {
+            _editVoiceCtx = { voiceId, engine };
+            document.getElementById('editVoiceIdDisplay').value = voiceId + ' (' + engine + ')';
+            document.getElementById('editVoiceName').value = name || '';
+            document.getElementById('editVoiceGroup').value = group || 'Celebrity';
+            document.getElementById('editVoiceGender').value = ['male','female','unknown'].includes(gender) ? gender : 'unknown';
+            document.getElementById('editVoiceStatus').textContent = '';
+            document.getElementById('editVoiceSaveBtn').disabled = false;
+            document.getElementById('editVoiceOverlay').classList.remove('hidden');
+            document.getElementById('editVoiceName').focus();
+        }
+
+        function closeEditVoiceModal() {
+            document.getElementById('editVoiceOverlay').classList.add('hidden');
+            _editVoiceCtx = null;
+        }
+
+        async function saveEditedVoice() {
+            if (!_editVoiceCtx) return;
+            const { voiceId, engine } = _editVoiceCtx;
+            const name = document.getElementById('editVoiceName').value.trim();
+            const group = document.getElementById('editVoiceGroup').value;
+            const gender = document.getElementById('editVoiceGender').value;
+            if (!name) { document.getElementById('editVoiceStatus').textContent = 'Name required'; return; }
+            const btn = document.getElementById('editVoiceSaveBtn');
+            btn.disabled = true;
+            const body = JSON.stringify({ name, group, gender });
+            let url;
+            if (engine === 'chatterbox') {
+                const id = voiceId.replace(/^cb_/, '');
+                url = '/api/superadmin/tts/voice/' + encodeURIComponent(id) + '/metadata';
+            } else if (engine === 'rvc') {
+                const id = voiceId.replace(/^rvc_/, '');
+                url = '/api/superadmin/tts/rvc-voice/' + encodeURIComponent(id);
+            } else {
+                document.getElementById('editVoiceStatus').textContent = 'This voice type is not editable';
+                btn.disabled = false;
+                return;
+            }
+            const res = await api(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                document.getElementById('editVoiceStatus').textContent = data.error || 'Save failed';
+                btn.disabled = false;
+                return;
+            }
+            showToast('Voice updated.', 'success');
+            closeEditVoiceModal();
+            fetchTtsVoicesAdmin();
+            fetchTtsStatus();
         }
 
         document.getElementById('voiceModalFile').addEventListener('change', () => { _voiceModalSourceRef = null; });

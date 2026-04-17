@@ -393,6 +393,109 @@ def delete_chatterbox_voice(voice_id: str, x_admin_token: Optional[str] = Header
 
 
 # ---------------------------------------------------------------------------
+# RVC voice metadata (manifest entry) editing
+# ---------------------------------------------------------------------------
+
+RVC_MODELS_DIR = os.path.join(os.path.dirname(__file__), "models", "rvc")
+RVC_MANIFEST_PATH = os.path.join(RVC_MODELS_DIR, "manifest.json")
+
+
+def _load_rvc_manifest() -> list:
+    if not os.path.exists(RVC_MANIFEST_PATH):
+        return []
+    with open(RVC_MANIFEST_PATH) as f:
+        data = json.load(f)
+    return data if isinstance(data, list) else []
+
+
+def _save_rvc_manifest(entries: list):
+    tmp = RVC_MANIFEST_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(entries, f, indent=2)
+    os.replace(tmp, RVC_MANIFEST_PATH)
+
+
+class RvcMetadataPatch(BaseModel):
+    name: Optional[str] = None
+    gender: Optional[str] = None
+    group: Optional[str] = None
+    transpose: Optional[int] = Field(None, ge=-24, le=24)
+    index_rate: Optional[float] = Field(None, ge=0.0, le=1.0)
+    protect: Optional[float] = Field(None, ge=0.0, le=0.5)
+    base_voice: Optional[str] = None
+
+
+@app.patch("/voices/rvc/{voice_id}")
+def patch_rvc_voice(
+    voice_id: str,
+    patch: RvcMetadataPatch,
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Update an RVC voice's manifest entry. Use for rename/regroup/pitch tuning."""
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+
+    entries = _load_rvc_manifest()
+    found = None
+    for e in entries:
+        if e.get("id") == dir_id:
+            found = e
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Voice not in manifest: {dir_id}")
+
+    if patch.name is not None:
+        found["name"] = str(patch.name).strip()[:80] or dir_id
+    if patch.gender is not None and patch.gender in ("male", "female", "unknown"):
+        found["gender"] = patch.gender
+    if patch.group is not None:
+        found["group"] = str(patch.group).strip()[:40] or "Celebrity"
+    if patch.transpose is not None:
+        found["transpose"] = int(patch.transpose)
+    if patch.index_rate is not None:
+        found["index_rate"] = round(float(patch.index_rate), 3)
+    if patch.protect is not None:
+        found["protect"] = round(float(patch.protect), 3)
+    if patch.base_voice is not None:
+        found["base_voice"] = str(patch.base_voice).strip()[:40]
+
+    _save_rvc_manifest(entries)
+    # RVC voices re-read manifest on next call; no engine cache to invalidate here,
+    # but invalidating Chatterbox in case the voice happens to be paired forces
+    # the /voices endpoint to reflect changes immediately.
+    chatterbox_engine.invalidate_voice(f"cb_{dir_id}")
+    log.info("RVC voice metadata patched: %s (%s)", dir_id, patch.model_dump(exclude_unset=True))
+    return {"ok": True, "entry": found}
+
+
+@app.delete("/voices/rvc/{voice_id}")
+def delete_rvc_voice(voice_id: str, x_admin_token: Optional[str] = Header(None)):
+    """Remove an RVC voice: delete model files + drop manifest entry.
+
+    Does NOT touch the paired cb_<voice_id> Chatterbox voice — those must be
+    deleted separately. After this, the Chatterbox voice (if any) continues
+    to work but any attempt to use RVC refinement on it will silently skip.
+    """
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+
+    entries = _load_rvc_manifest()
+    before = len(entries)
+    entries = [e for e in entries if e.get("id") != dir_id]
+    if len(entries) == before:
+        raise HTTPException(status_code=404, detail=f"Voice not in manifest: {dir_id}")
+    _save_rvc_manifest(entries)
+
+    voice_dir = os.path.join(RVC_MODELS_DIR, dir_id)
+    if os.path.isdir(voice_dir):
+        shutil.rmtree(voice_dir)
+
+    chatterbox_engine.invalidate_voice(f"cb_{dir_id}")
+    log.info("RVC voice deleted: %s", dir_id)
+    return {"deleted": f"rvc_{dir_id}"}
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
