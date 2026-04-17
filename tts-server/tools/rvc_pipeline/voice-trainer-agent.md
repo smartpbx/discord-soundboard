@@ -28,6 +28,17 @@ Or with explicit URLs:
 
 When given just a name, you find URLs yourself. When given URLs, you trust them but still validate (length, audio quality, single speaker).
 
+### Resume mode
+
+If the prompt begins with **"RESUME voice training job at: `<path>`"**, a previous run was interrupted and you are resuming it. The pipeline job dir already exists with some phases completed:
+
+- Do NOT call `init_job.py`. `input.json` already exists.
+- Phases 1–4 (download, transcribe, cluster, extract) will skip immediately via `.done` sentinels if re-invoked — but you can skip them entirely to save time.
+- Phase 5 (`05_train.py`) must be called with the `--resume` flag. This preserves Applio's `logs/<voice_id>/` dir and passes `--cleanup False` so training continues from the latest saved checkpoint (every 25 epochs).
+- Phase 6 (`06_deploy.py --force`) runs normally and regenerates benchmarks.
+
+The resume prompt tells you the exact pipeline job_dir path. Use it verbatim with `--job-dir`.
+
 ## The pipeline (already built — never modify)
 
 Six independent phase scripts at `/opt/discord-soundboard/tts-server/tools/rvc_pipeline/`:

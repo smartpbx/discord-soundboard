@@ -88,6 +88,9 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--keep-tts-running", action="store_true",
                     help="Don't stop TTS server (only safe if dataset is tiny or you have a second GPU)")
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume training from the latest Applio checkpoint. Preserves logs/<voice_id>/ "
+                         "and passes cleanup=False to Applio so it continues instead of starting fresh.")
     args = ap.parse_args()
 
     job_dir = args.job_dir
@@ -122,10 +125,12 @@ def main():
         else:
             ds_link.symlink_to(chunks_src)
 
-        # Pre-clean Applio logs dir for this voice (avoid resuming stale failed run)
+        # Pre-clean Applio logs dir for this voice (avoid resuming stale failed run).
+        # On --resume, preserve the dir so Applio can pick up the latest checkpoint.
         logs_dir = APPLIO_LOGS / voice_id
-        if logs_dir.exists():
+        if logs_dir.exists() and not args.resume:
             shutil.rmtree(logs_dir)
+        resume_mode = bool(args.resume and logs_dir.exists() and any(logs_dir.glob("G_*.pth")))
 
         train_log = job_dir / "train.log"
         train_log.write_text("")  # truncate
@@ -134,39 +139,45 @@ def main():
             stop_tts(run)
 
         try:
-            # Phase 5a: preprocess
-            run.progress(sub_phase="preprocess")
-            rc = run_applio([
-                str(APPLIO_PY), "core.py", "preprocess",
-                "--model_name", voice_id,
-                "--dataset_path", str(ds_link),
-                "--sample_rate", str(sample_rate),
-                "--cpu_cores", "8",
-                "--cut_preprocess", "Automatic",
-                "--process_effects", "True",
-                "--noise_reduction", "False",
-                "--noise_reduction_strength", "0.0",
-                "--chunk_len", "3.0",
-                "--overlap_len", "0.3",
-                "--normalization_mode", "none",
-            ], train_log)
-            if rc != 0:
-                raise RuntimeError(f"Applio preprocess failed (rc={rc}); see {train_log}")
+            # Phase 5a: preprocess — skip when resuming with a prepared dataset already on disk
+            if resume_mode and (logs_dir / "sliced_audios_16k").exists():
+                run.progress(sub_phase="preprocess_skipped_resume")
+            else:
+                run.progress(sub_phase="preprocess")
+                rc = run_applio([
+                    str(APPLIO_PY), "core.py", "preprocess",
+                    "--model_name", voice_id,
+                    "--dataset_path", str(ds_link),
+                    "--sample_rate", str(sample_rate),
+                    "--cpu_cores", "8",
+                    "--cut_preprocess", "Automatic",
+                    "--process_effects", "True",
+                    "--noise_reduction", "False",
+                    "--noise_reduction_strength", "0.0",
+                    "--chunk_len", "3.0",
+                    "--overlap_len", "0.3",
+                    "--normalization_mode", "none",
+                ], train_log)
+                if rc != 0:
+                    raise RuntimeError(f"Applio preprocess failed (rc={rc}); see {train_log}")
 
-            # Phase 5b: extract
-            run.progress(sub_phase="extract")
-            rc = run_applio([
-                str(APPLIO_PY), "core.py", "extract",
-                "--model_name", voice_id,
-                "--f0_method", "rmvpe",
-                "--cpu_cores", "8",
-                "--gpu", "0",
-                "--sample_rate", str(sample_rate),
-                "--embedder_model", "contentvec",
-                "--include_mutes", "2",
-            ], train_log)
-            if rc != 0:
-                raise RuntimeError(f"Applio extract failed (rc={rc})")
+            # Phase 5b: extract — skip when resuming with features already extracted
+            if resume_mode and (logs_dir / "extracted").exists():
+                run.progress(sub_phase="extract_skipped_resume")
+            else:
+                run.progress(sub_phase="extract")
+                rc = run_applio([
+                    str(APPLIO_PY), "core.py", "extract",
+                    "--model_name", voice_id,
+                    "--f0_method", "rmvpe",
+                    "--cpu_cores", "8",
+                    "--gpu", "0",
+                    "--sample_rate", str(sample_rate),
+                    "--embedder_model", "contentvec",
+                    "--include_mutes", "2",
+                ], train_log)
+                if rc != 0:
+                    raise RuntimeError(f"Applio extract failed (rc={rc})")
 
             # Phase 5c: train (long-running)
             import threading
@@ -178,7 +189,9 @@ def main():
             )
             tailer.start()
 
-            run.progress(sub_phase="training", epoch=0, total_epochs=total_epoch)
+            run.progress(sub_phase="training", epoch=0, total_epochs=total_epoch, resume=resume_mode)
+            # When resuming, set --cleanup False so Applio loads the latest G_N.pth / D_N.pth
+            # checkpoints instead of wiping them and starting from scratch.
             rc = run_applio([
                 str(APPLIO_PY), "core.py", "train",
                 "--model_name", voice_id,
@@ -193,7 +206,7 @@ def main():
                 "--pretrained", "True",
                 "--overtraining_detector", "True",
                 "--overtraining_threshold", "50",
-                "--cleanup", "True",
+                "--cleanup", "False" if resume_mode else "True",
                 "--cache_data_in_gpu", "True",
                 "--index_algorithm", "Auto",
             ], train_log)

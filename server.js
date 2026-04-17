@@ -4093,6 +4093,13 @@ app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) =
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+app.post('/api/superadmin/tts/train/:id/resume', requireSuperadmin, (req, res) => {
+    try {
+        const meta = voiceTrainer.resumeJob(req.params.id);
+        res.json({ ok: true, meta });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 const token = (process.env.DISCORD_TOKEN || '').trim();
 if (!token || token === 'your_bot_token_here') {
     console.error('DISCORD_TOKEN is missing or still the placeholder. Set it in .env from Discord Developer Portal → Your App → Bot → Token');
