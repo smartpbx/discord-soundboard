@@ -16,6 +16,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBe
 const statsDb = require('./lib/stats-db');
 const ttsVoiceAdmin = require('./lib/tts-voice-admin');
 const voiceTrainer = require('./lib/voice-trainer');
+const sunoGen = require('./lib/suno-gen');
 
 const SOUNDS_DIR = path.join(__dirname, 'sounds');
 const PENDING_DIR = path.join(SOUNDS_DIR, 'pending');
@@ -293,6 +294,55 @@ function setTtsCooldownSec(role, sec) {
     const d = loadGuestData();
     d['ttsCooldownSec_' + role] = Number(sec) >= 0 ? Number(sec) : 0;
     saveGuestData(d);
+}
+
+// --- Suno song-generation settings (stored in guest.json) ---
+function getSunoEnabled() {
+    const d = loadGuestData();
+    return d.sunoEnabled === true;
+}
+function setSunoEnabled(v) {
+    const d = loadGuestData();
+    d.sunoEnabled = !!v;
+    saveGuestData(d);
+}
+function getSunoDailyLimit(role) {
+    const d = loadGuestData();
+    const defaults = { guest: 0, user: 0, admin: 5, superadmin: 50 };
+    const key = 'sunoDailyLimit_' + role;
+    const n = Number(d[key]);
+    return Number.isFinite(n) && n >= 0 ? n : (defaults[role] ?? 0);
+}
+function setSunoDailyLimit(role, n) {
+    const d = loadGuestData();
+    d['sunoDailyLimit_' + role] = Number(n) >= 0 ? Number(n) : 0;
+    saveGuestData(d);
+}
+// Usage counter shape in guest.json: { sunoUsage: { "YYYY-MM-DD": { "<username>": N, ... } } }
+function sunoTodayKey() { return new Date().toISOString().slice(0, 10); }
+function getSunoUsageToday(username) {
+    const d = loadGuestData();
+    const u = d.sunoUsage && d.sunoUsage[sunoTodayKey()];
+    return (u && u[username]) || 0;
+}
+function incrementSunoUsage(username) {
+    const d = loadGuestData();
+    d.sunoUsage = d.sunoUsage && typeof d.sunoUsage === 'object' ? d.sunoUsage : {};
+    const today = sunoTodayKey();
+    // Prune yesterday+ older entries so the object doesn't grow unbounded.
+    for (const k of Object.keys(d.sunoUsage)) if (k < today) delete d.sunoUsage[k];
+    d.sunoUsage[today] = d.sunoUsage[today] || {};
+    d.sunoUsage[today][username] = (d.sunoUsage[today][username] || 0) + 1;
+    saveGuestData(d);
+    return d.sunoUsage[today][username];
+}
+function decrementSunoUsage(username) {
+    const d = loadGuestData();
+    const today = sunoTodayKey();
+    if (d.sunoUsage && d.sunoUsage[today] && d.sunoUsage[today][username] > 0) {
+        d.sunoUsage[today][username] -= 1;
+        saveGuestData(d);
+    }
 }
 
 // --- URL streaming settings (per-role enable + max duration) ---
@@ -1417,18 +1467,30 @@ app.get('/api/sounds', requireAuth, (req, res) => {
         const ordered = order.filter(f => audioFiles.includes(f));
         const rest = audioFiles.filter(f => !orderSet.has(f));
         const sorted = [...ordered, ...rest];
-        const list = sorted.map(filename => ({
-            filename,
-            displayName: getDisplayName(meta, filename),
-            duration: getDuration(meta, filename),
-            tags: getTags(meta, filename),
-            color: getColor(meta, filename),
-            volume: getSoundVolume(meta, filename),
-            startTime: getSoundStartTime(meta, filename),
-            endTime: getSoundEndTime(meta, filename),
-            stopOthers: getSoundStopOthers(meta, filename),
-            tts: getSoundTts(meta, filename),
-        }));
+        const list = sorted.map(filename => {
+            const m = meta[filename];
+            const suno = (m && typeof m === 'object' && m.suno && typeof m.suno === 'object') ? m.suno : null;
+            return {
+                filename,
+                displayName: getDisplayName(meta, filename),
+                duration: getDuration(meta, filename),
+                tags: getTags(meta, filename),
+                color: getColor(meta, filename),
+                volume: getSoundVolume(meta, filename),
+                startTime: getSoundStartTime(meta, filename),
+                endTime: getSoundEndTime(meta, filename),
+                stopOthers: getSoundStopOthers(meta, filename),
+                tts: getSoundTts(meta, filename),
+                suno: suno ? {
+                    model: suno.model || null,
+                    style: suno.style || null,
+                    cover: suno.cover || null,
+                    title: suno.title || null,
+                    // Keep big fields off the list response; frontend fetches full meta on demand
+                    has_lyrics: !!suno.lyrics,
+                } : null,
+            };
+        });
         const tagOrder = getTagOrder(meta);
         const hidden = getHiddenTags(meta);
         const allTags = getAllTagsFromSounds(meta);
@@ -1443,6 +1505,22 @@ app.patch('/api/sounds/order', requireAdmin, (req, res) => {
     const safe = order.filter(f => typeof f === 'string' && /\.(mp3|wav|ogg)$/i.test(f));
     setSoundOrder(safe);
     res.json({ order: safe });
+});
+
+app.get('/api/sounds/cover/:cover', requireAuth, (req, res) => {
+    // Cover images for saved Suno songs live under sounds/covers/*.jpg. Only
+    // serve files that stay within that subdir (no traversal).
+    const raw = req.params.cover;
+    const safeName = path.basename(raw);
+    if (!safeName || !/\.(jpg|jpeg|png|webp)$/i.test(safeName)) return res.status(400).send('Invalid cover');
+    const coversDir = path.join(SOUNDS_DIR, 'covers');
+    const filePath = path.join(coversDir, safeName);
+    if (!path.resolve(filePath).startsWith(path.resolve(coversDir)) || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+    const ext = path.extname(safeName).toLowerCase();
+    const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' }[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    fs.createReadStream(filePath).pipe(res);
 });
 
 app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
@@ -1733,6 +1811,22 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.ttsDisabledVoices = getTtsDisabledVoices();
         out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides();
         out.ttsMaxQueueSize = getTtsMaxQueueSize();
+        // Suno settings (superadmin)
+        out.sunoEnabled = getSunoEnabled();
+        out.sunoAvailable = !!(process.env.SUNO_API_KEY || '').trim();
+        out.sunoDailyLimit = { guest: getSunoDailyLimit('guest'), user: getSunoDailyLimit('user'), admin: getSunoDailyLimit('admin'), superadmin: getSunoDailyLimit('superadmin') };
+    }
+    // Suno: per-role availability for all users
+    {
+        const role = req.session.user.role;
+        const limit = getSunoDailyLimit(role);
+        const used = getSunoUsageToday(req.session.user.username);
+        out.sunoSelf = {
+            available: getSunoEnabled() && !!(process.env.SUNO_API_KEY || '').trim() && limit > 0,
+            limit,
+            used_today: used,
+            remaining: Math.max(0, limit - used),
+        };
     }
     // TTS availability for all roles
     out.ttsEnabled = getTtsEnabled();
@@ -1827,6 +1921,15 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (Array.isArray(ttsDisabledVoices)) { setTtsDisabledVoices(ttsDisabledVoices); out.ttsDisabledVoices = getTtsDisabledVoices(); }
         if (ttsVoiceRvcOverrides && typeof ttsVoiceRvcOverrides === 'object' && !Array.isArray(ttsVoiceRvcOverrides)) { setTtsVoiceRvcOverrides(ttsVoiceRvcOverrides); out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides(); }
         if (typeof ttsMaxQueueSize === 'number') { setTtsMaxQueueSize(ttsMaxQueueSize); out.ttsMaxQueueSize = getTtsMaxQueueSize(); }
+        // Suno settings
+        const { sunoEnabled, sunoDailyLimit } = req.body;
+        if (typeof sunoEnabled === 'boolean') { setSunoEnabled(sunoEnabled); out.sunoEnabled = sunoEnabled; }
+        if (sunoDailyLimit && typeof sunoDailyLimit === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof sunoDailyLimit[r] === 'number' && sunoDailyLimit[r] >= 0) setSunoDailyLimit(r, sunoDailyLimit[r]);
+            }
+            out.sunoDailyLimit = { guest: getSunoDailyLimit('guest'), user: getSunoDailyLimit('user'), admin: getSunoDailyLimit('admin'), superadmin: getSunoDailyLimit('superadmin') };
+        }
         // URL streaming settings
         const { urlStreamEnabled, urlStreamMaxDurationSec } = req.body;
         if (urlStreamEnabled && typeof urlStreamEnabled === 'object') {
@@ -4055,6 +4158,164 @@ app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, r
     } catch (e) {
         res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
+});
+
+// --- Suno song generation ---
+
+function requireSunoAllowed(req, res, next) {
+    if (!getSunoEnabled()) return res.status(403).json({ error: 'Song generation is disabled.' });
+    const role = req.session.user.role;
+    const limit = getSunoDailyLimit(role);
+    if (limit <= 0) return res.status(403).json({ error: 'Your role cannot generate songs.' });
+    const used = getSunoUsageToday(req.session.user.username);
+    if (used >= limit) return res.status(429).json({ error: `Daily Suno limit reached (${used}/${limit}). Try again tomorrow.`, used, limit });
+    req._sunoLimit = { used, limit };
+    next();
+}
+
+app.get('/api/suno/config', requireAuth, (req, res) => {
+    const role = req.session.user.role;
+    const username = req.session.user.username;
+    res.json({
+        enabled: getSunoEnabled() && !!(process.env.SUNO_API_KEY || '').trim(),
+        limit: getSunoDailyLimit(role),
+        used_today: getSunoUsageToday(username),
+    });
+});
+
+app.get('/api/suno/credits', requireAuth, async (req, res) => {
+    try {
+        const credits = await sunoGen.getCredits();
+        res.json({ credits });
+    } catch (e) { res.status(e.status || 502).json({ error: e.message }); }
+});
+
+app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res) => {
+    const { title, lyrics, style, model, instrumental, customMode } = req.body || {};
+    try {
+        const taskId = await sunoGen.generateSong({
+            title: typeof title === 'string' ? title : null,
+            lyrics: typeof lyrics === 'string' ? lyrics : null,
+            style: typeof style === 'string' ? style : null,
+            model: typeof model === 'string' ? model : 'V5_5',
+            instrumental: !!instrumental,
+            customMode: customMode !== false,
+        });
+        const used = incrementSunoUsage(req.session.user.username);
+        try { statsDb.logAdminAction(req.session.user.username, req.session.user.role, 'suno_generate', taskId, JSON.stringify({ style, model, instrumental })); } catch {}
+        res.json({ ok: true, taskId, used_today: used, limit: req._sunoLimit.limit });
+    } catch (e) {
+        res.status(e.status || 502).json({ error: e.message });
+    }
+});
+
+app.get('/api/suno/status/:taskId', requireAuth, async (req, res) => {
+    const taskId = req.params.taskId;
+    try {
+        // If we've already ingested, don't re-poll Suno — return cached meta.
+        const cached = sunoGen.getStagingMeta(taskId);
+        if (cached && cached.tracks && cached.tracks.length && cached.tracks.some(t => t.audio_bytes)) {
+            return res.json({ status: 'SUCCESS', tracks: cached.tracks });
+        }
+        const payload = await sunoGen.getSongStatus(taskId);
+        const status = (payload && (payload.status || (payload.response && payload.response.status))) || 'PENDING';
+        // On completion, download assets into staging. Safe to call multiple times — re-uses existing files.
+        if (String(status).toUpperCase() === 'SUCCESS' || String(status).toUpperCase() === 'COMPLETE') {
+            await sunoGen.ingestCompletedTask(taskId, payload);
+        }
+        const meta = sunoGen.getStagingMeta(taskId);
+        res.json({ status, tracks: meta && meta.tracks || sunoGen.extractTracks(payload).map((t, i) => ({ slot: i, ...t })) });
+    } catch (e) {
+        res.status(e.status || 502).json({ error: e.message });
+    }
+});
+
+app.get('/api/suno/preview/:taskId/:slot', requireAuth, (req, res) => {
+    const p = sunoGen.getSlotAudioPath(req.params.taskId, parseInt(req.params.slot, 10));
+    if (!p) return res.status(404).json({ error: 'Audio not ready' });
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(p).pipe(res);
+});
+
+app.get('/api/suno/cover/:taskId/:slot', requireAuth, (req, res) => {
+    const p = sunoGen.getSlotCoverPath(req.params.taskId, parseInt(req.params.slot, 10));
+    if (!p) return res.status(404).json({ error: 'Cover not ready' });
+    res.setHeader('Content-Type', 'image/jpeg');
+    fs.createReadStream(p).pipe(res);
+});
+
+app.post('/api/suno/save/:taskId', requireAuth, (req, res) => {
+    const taskId = req.params.taskId;
+    const slot = parseInt((req.body && req.body.slot) || 0, 10);
+    const meta = sunoGen.getStagingMeta(taskId);
+    if (!meta) return res.status(404).json({ error: 'Staging not found — try again after generation completes.' });
+    const track = meta.tracks && meta.tracks[slot];
+    const audioPath = sunoGen.getSlotAudioPath(taskId, slot);
+    if (!track || !audioPath) return res.status(404).json({ error: 'Slot audio missing' });
+
+    const userDisplay = (req.body && typeof req.body.displayName === 'string') ? req.body.displayName.trim() : '';
+    const displayName = userDisplay.slice(0, 100) || track.title || 'Generated song';
+    const tagsInput = req.body && Array.isArray(req.body.tags) ? req.body.tags.filter(t => typeof t === 'string') : [];
+    const tags = Array.from(new Set(['AI-song', ...tagsInput])).slice(0, 10);
+    const stylePrompt = (req.body && typeof req.body.style === 'string') ? req.body.style : (track.tags || null);
+    const lyricsText = (req.body && typeof req.body.lyrics === 'string') ? req.body.lyrics : (track.lyrics || null);
+    const modelUsed = (req.body && typeof req.body.model === 'string') ? req.body.model : 'V5_5';
+
+    const sanitized = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'song';
+    const stamp = Date.now();
+    const filename = `${sanitized}-${stamp}.mp3`;
+    const dstAudio = path.join(SOUNDS_DIR, filename);
+    fs.copyFileSync(audioPath, dstAudio);
+
+    let coverRel = null;
+    const coverPath = sunoGen.getSlotCoverPath(taskId, slot);
+    if (coverPath) {
+        const coversDir = path.join(SOUNDS_DIR, 'covers');
+        if (!fs.existsSync(coversDir)) fs.mkdirSync(coversDir, { recursive: true });
+        const coverFile = `${sanitized}-${stamp}.jpg`;
+        fs.copyFileSync(coverPath, path.join(coversDir, coverFile));
+        coverRel = 'covers/' + coverFile;
+    }
+
+    const sounds = loadSoundsMeta();
+    sounds[filename] = {
+        displayName,
+        tags,
+        duration: track.duration || null,
+        suno: {
+            taskId,
+            slot,
+            model: modelUsed,
+            title: track.title || null,
+            style: stylePrompt,
+            lyrics: lyricsText,
+            cover: coverRel,
+            video_url: track.video_url || null,
+            suno_audio_id: track.id || null,
+            generated_at: stamp,
+            saved_by: req.session.user.username,
+        },
+    };
+    saveSoundsMeta(sounds);
+
+    res.json({ ok: true, filename, cover: coverRel, entry: sounds[filename] });
+});
+
+app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
+    // Optional: refund the day's usage counter if user cancels early.
+    if (req.query.refund === '1') decrementSunoUsage(req.session.user.username);
+    try { sunoGen.deleteStaging(req.params.taskId); } catch {}
+    res.json({ ok: true });
+});
+
+// Full suno metadata for one saved sound (used by the "regenerate" flow).
+app.get('/api/suno/sound/:filename', requireAuth, (req, res) => {
+    const safe = path.basename(req.params.filename);
+    const meta = loadSoundsMeta();
+    const m = meta[safe];
+    if (!m || typeof m !== 'object' || !m.suno) return res.status(404).json({ error: 'No suno metadata for this sound' });
+    res.json({ filename: safe, suno: m.suno, displayName: m.displayName || safe });
 });
 
 // --- Superadmin: voice training jobs ---

@@ -827,6 +827,7 @@
                 <div class="sounds-header-actions">
                     <button type="button" class="tts-toggle-btn hidden" id="ttsToggleBtn" onclick="toggleTtsSection()" title="Text-to-Speech">🗣 TTS</button>
                     <button type="button" class="tts-toggle-btn hidden" id="urlStreamToggleBtn" onclick="toggleUrlStreamSection()" title="Stream from URL">🔗 URL</button>
+                    <button type="button" class="tts-toggle-btn hidden" id="sunoToggleBtn" onclick="openSunoModal()" title="Generate a song with Suno">🎵 Song</button>
                     <button type="button" class="btn upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound"><span class="upload-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span> Upload</button>
                     <div class="sounds-options-wrap">
                     <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
@@ -930,6 +931,7 @@
                     <button type="button" class="btn btn-ghost btn-sm admin-only hidden" id="soundPanelDuplicateBtn" onclick="duplicateSoundPanel()" title="Duplicate this sound so you can set different trim points">Duplicate</button>
                     <button type="button" class="btn btn-ghost btn-sm admin-only hidden" id="soundPanelNormalizeBtn" onclick="normalizeSoundPanel()" title="Normalize volume using loudnorm (modifies the file)">Normalize</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="soundPanelDownloadBtn" onclick="downloadSoundPanel()" title="Download sound file">Download</button>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="soundPanelRegenSunoBtn" onclick="regenerateSunoSound()" title="Re-generate this Suno song with tweaked lyrics/style">🎵 Regenerate</button>
                     <button type="button" class="btn btn-danger btn-sm superadmin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
                 </div>
             </div>
@@ -1070,6 +1072,31 @@
                         </label>
                     </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Suno Song Generation</div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Generate full songs (with lyrics + cover art) via the Suno API. Each generation costs ~12 credits (~$0.06) against your sunoapi.org pool. Credits visible below.</p>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                        <input type="checkbox" id="sunoEnabledToggle" onchange="setSunoEnabledSetting(this.checked)">
+                        <span>Enable Song generation</span>
+                    </label>
+                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>User daily:</span>
+                            <input type="number" id="sunoDailyLimitUserInput" min="0" max="999" value="0" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('user', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Admin daily:</span>
+                            <input type="number" id="sunoDailyLimitAdminInput" min="0" max="999" value="5" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('admin', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Superadmin daily:</span>
+                            <input type="number" id="sunoDailyLimitSuperadminInput" min="0" max="999" value="50" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('superadmin', this.value)">
+                        </label>
+                        <span style="font-size:0.85rem;color:var(--text-muted);" id="sunoCreditsDisplay">Credits: —</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshSunoCreditsDisplay()" title="Refresh">↻</button>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set daily limit to 0 to disable for that role. Guests never have access. Requires <code>SUNO_API_KEY</code> in server env.</p>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">URL Streaming (YouTube / TikTok / etc.)</div>
@@ -1473,6 +1500,58 @@
                 <div class="footer-row">
                     <button type="button" class="btn btn-ghost" onclick="closeEditVoiceModal()">Cancel</button>
                     <button type="button" class="btn btn-primary" id="editVoiceSaveBtn" onclick="saveEditedVoice()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="sunoOverlay" class="voice-modal-overlay hidden">
+            <div class="voice-modal" style="width: 640px;">
+                <h3 id="sunoTitle">Generate song with Suno</h3>
+                <div id="sunoMeta" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;"></div>
+
+                <div id="sunoForm">
+                    <div class="field">
+                        <label for="sunoTitleInput">Title (optional)</label>
+                        <input type="text" id="sunoTitleInput" placeholder="e.g. Midnight Drive">
+                    </div>
+                    <div class="field">
+                        <label for="sunoStyleInput">Style / genre</label>
+                        <input type="text" id="sunoStyleInput" placeholder="e.g. dark synthwave, heavy bass, 140 BPM, male vocals">
+                        <div class="field-help">Free-text description of genre, mood, tempo, instrumentation, vocal style.</div>
+                    </div>
+                    <div class="field">
+                        <label for="sunoLyricsInput">Lyrics</label>
+                        <textarea id="sunoLyricsInput" rows="10" placeholder="Full lyrics (no length cap). Use line breaks for structure. Wrap sections in [Verse 1] / [Chorus] / etc." style="width:100%;padding:0.45rem 0.55rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.9rem;font-family:inherit;resize:vertical;"></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="field" style="flex:1;min-width:120px;">
+                            <label for="sunoModelSelect">Model</label>
+                            <select id="sunoModelSelect">
+                                <option value="V5_5">V5.5 (latest)</option>
+                                <option value="V5">V5</option>
+                                <option value="V4_5PLUS">V4.5 Plus</option>
+                                <option value="V4_5">V4.5</option>
+                                <option value="V4">V4</option>
+                            </select>
+                        </div>
+                        <div class="field" style="display:flex;align-items:center;gap:0.4rem;padding-bottom:0.55rem;">
+                            <input type="checkbox" id="sunoInstrumental" style="accent-color:var(--accent);">
+                            <label for="sunoInstrumental" style="margin:0;">Instrumental (no vocals)</label>
+                        </div>
+                    </div>
+                    <div class="footer-row">
+                        <button type="button" class="btn btn-ghost" onclick="closeSunoModal()">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="sunoGenerateBtn" onclick="submitSunoGen()">Generate</button>
+                    </div>
+                </div>
+
+                <div id="sunoStatus" class="hidden">
+                    <div class="status-line" id="sunoStatusLine"></div>
+                    <div id="sunoTracksList" style="margin-top:0.75rem;"></div>
+                    <div class="footer-row">
+                        <button type="button" class="btn btn-ghost" onclick="backToSunoForm()">Back to form</button>
+                        <button type="button" class="btn btn-danger" id="sunoDiscardBtn" onclick="discardSuno()">Discard all</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2669,6 +2748,13 @@
                     const a = document.getElementById('ttsCooldownSecAdminInput'); if (a && d.ttsCooldownSec.admin !== undefined) a.value = d.ttsCooldownSec.admin;
                 }
                 if (d.ttsMaxQueueSize !== undefined) { const q = document.getElementById('ttsMaxQueueSizeInput'); if (q) q.value = d.ttsMaxQueueSize; }
+                if (d.sunoEnabled !== undefined) { const s = document.getElementById('sunoEnabledToggle'); if (s) s.checked = d.sunoEnabled === true; }
+                if (d.sunoDailyLimit) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('sunoDailyLimit' + r.charAt(0).toUpperCase() + r.slice(1) + 'Input');
+                        if (el && d.sunoDailyLimit[r] !== undefined) el.value = d.sunoDailyLimit[r];
+                    }
+                }
                 const an = document.getElementById('autoNormalizeUploadsToggle');
                 if (an && d.autoNormalizeUploads !== undefined) an.checked = d.autoNormalizeUploads === true;
                 if (d.urlStreamEnabled) {
@@ -3187,6 +3273,32 @@
             const n = parseInt(val, 10);
             if (!Number.isFinite(n) || n < 1) return;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsMaxQueueSize: n }) });
+        }
+
+        async function setSunoEnabledSetting(enabled) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sunoEnabled: !!enabled }) });
+            refreshSunoCreditsDisplay();
+            fetchSettings();
+        }
+
+        async function setSunoDailyLimitSetting(role, val) {
+            const n = parseInt(val, 10);
+            if (!Number.isFinite(n) || n < 0) return;
+            const body = { sunoDailyLimit: {} };
+            body.sunoDailyLimit[role] = n;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            fetchSettings();
+        }
+
+        async function refreshSunoCreditsDisplay() {
+            const el = document.getElementById('sunoCreditsDisplay');
+            if (!el) return;
+            el.textContent = 'Credits: loading...';
+            try {
+                const r = await api('/api/suno/credits');
+                const d = await r.json();
+                el.textContent = r.ok ? ('Credits: ' + d.credits) : ('Credits error: ' + (d.error || r.status));
+            } catch (e) { el.textContent = 'Credits error: ' + e.message; }
         }
 
         async function fetchGuestHistory() {
@@ -4101,6 +4213,9 @@
                     delete ttsRow.dataset.voiceId;
                 }
             }
+            // Suno regenerate button — visible only if this sound was Suno-generated
+            const regenBtn = document.getElementById('soundPanelRegenSunoBtn');
+            if (regenBtn) regenBtn.classList.toggle('hidden', !(s && s.suno));
             const overlay = document.getElementById('soundPanelOverlay');
             if (overlay) overlay.classList.remove('hidden');
             setupTagsAutocomplete(tagsEl);
@@ -5435,6 +5550,14 @@
             if (btn && settings) {
                 btn.classList.toggle('hidden', !(settings.ttsAvailable && settings.ttsEnabled && ttsMaxLen > 0));
             }
+            const sunoBtn = document.getElementById('sunoToggleBtn');
+            if (sunoBtn && settings) {
+                const sunoAvail = settings.sunoSelf && settings.sunoSelf.available;
+                sunoBtn.classList.toggle('hidden', !sunoAvail);
+                if (sunoAvail) {
+                    sunoBtn.title = 'Generate a song with Suno (' + (settings.sunoSelf.remaining) + '/' + (settings.sunoSelf.limit) + ' today)';
+                }
+            }
         }
 
         // --- TTS Voice Management (superadmin) ---
@@ -6161,6 +6284,199 @@
             // Open the new job for live status
             reopenTrainJob(data.meta.id, name);
             fetchTrainJobs();
+        }
+
+        // --- Suno song generation ---
+        let _sunoTaskId = null;
+        let _sunoPollTimer = null;
+        let _sunoPrefill = null;     // set when user clicks "Regenerate" on an existing saved song
+
+        function openSunoModal(prefill) {
+            _sunoPrefill = prefill || null;
+            _sunoTaskId = null;
+            stopSunoPoll();
+            document.getElementById('sunoTitle').textContent = prefill ? 'Regenerate song' : 'Generate song with Suno';
+            document.getElementById('sunoForm').classList.remove('hidden');
+            document.getElementById('sunoStatus').classList.add('hidden');
+            document.getElementById('sunoTracksList').innerHTML = '';
+            document.getElementById('sunoStatusLine').textContent = '';
+            document.getElementById('sunoGenerateBtn').disabled = false;
+            document.getElementById('sunoGenerateBtn').textContent = 'Generate';
+
+            const tIn = document.getElementById('sunoTitleInput');
+            const sIn = document.getElementById('sunoStyleInput');
+            const lIn = document.getElementById('sunoLyricsInput');
+            const mIn = document.getElementById('sunoModelSelect');
+            const iIn = document.getElementById('sunoInstrumental');
+            if (prefill) {
+                tIn.value = prefill.title || '';
+                sIn.value = prefill.style || '';
+                lIn.value = prefill.lyrics || '';
+                mIn.value = prefill.model || 'V5_5';
+                iIn.checked = !prefill.lyrics;   // best-effort — user can toggle
+            } else {
+                tIn.value = '';
+                sIn.value = '';
+                lIn.value = '';
+                mIn.value = 'V5_5';
+                iIn.checked = false;
+            }
+            document.getElementById('sunoOverlay').classList.remove('hidden');
+            refreshSunoMeta();
+            setTimeout(() => sIn.focus(), 50);
+        }
+
+        function closeSunoModal() {
+            stopSunoPoll();
+            document.getElementById('sunoOverlay').classList.add('hidden');
+        }
+
+        function backToSunoForm() {
+            stopSunoPoll();
+            document.getElementById('sunoForm').classList.remove('hidden');
+            document.getElementById('sunoStatus').classList.add('hidden');
+        }
+
+        async function refreshSunoMeta() {
+            const metaEl = document.getElementById('sunoMeta');
+            try {
+                const cfg = await api('/api/suno/config').then(r => r.json());
+                const cr = await api('/api/suno/credits').then(r => r.ok ? r.json() : { credits: '?' });
+                metaEl.textContent = 'Remaining Suno credits: ' + cr.credits + ' · You have used ' + (cfg.used_today || 0) + '/' + (cfg.limit || 0) + ' today';
+            } catch (e) {
+                metaEl.textContent = '';
+            }
+        }
+
+        async function submitSunoGen() {
+            const title = document.getElementById('sunoTitleInput').value.trim();
+            const style = document.getElementById('sunoStyleInput').value.trim();
+            const lyrics = document.getElementById('sunoLyricsInput').value;
+            const model = document.getElementById('sunoModelSelect').value;
+            const instrumental = document.getElementById('sunoInstrumental').checked;
+
+            if (!style) { showToast('Style / genre is required', 'error'); return; }
+            if (!instrumental && !lyrics.trim()) { showToast('Provide lyrics, or tick Instrumental', 'error'); return; }
+
+            const btn = document.getElementById('sunoGenerateBtn');
+            btn.disabled = true; btn.textContent = 'Submitting...';
+            const res = await api('/api/suno/generate', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, lyrics, style, model, instrumental, customMode: true }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                showToast(data.error || 'Failed to start generation', 'error');
+                btn.disabled = false; btn.textContent = 'Generate';
+                return;
+            }
+            _sunoTaskId = data.taskId;
+            document.getElementById('sunoForm').classList.add('hidden');
+            document.getElementById('sunoStatus').classList.remove('hidden');
+            document.getElementById('sunoStatusLine').textContent = 'Queued — Suno is generating. Usually 30–120 seconds.';
+            document.getElementById('sunoTracksList').innerHTML = '';
+            startSunoPoll();
+            refreshSunoMeta();
+        }
+
+        function startSunoPoll() { stopSunoPoll(); _sunoPollTimer = setInterval(pollSunoStatus, 5000); pollSunoStatus(); }
+        function stopSunoPoll() { if (_sunoPollTimer) { clearInterval(_sunoPollTimer); _sunoPollTimer = null; } }
+
+        async function pollSunoStatus() {
+            if (!_sunoTaskId) return;
+            const res = await api('/api/suno/status/' + encodeURIComponent(_sunoTaskId));
+            if (!res.ok) return;
+            const data = await res.json();
+            const line = document.getElementById('sunoStatusLine');
+            const st = (data.status || 'PENDING').toUpperCase();
+            if (st === 'SUCCESS' || st === 'COMPLETE') {
+                line.textContent = 'Ready — pick a variant to save.';
+                line.classList.remove('error'); line.classList.add('success');
+                renderSunoTracks(data.tracks || []);
+                stopSunoPoll();
+            } else if (st === 'ERROR' || st === 'FAIL' || st === 'FAILED' || st === 'CREATE_TASK_FAILED' || st === 'GENERATE_AUDIO_FAILED' || st === 'SENSITIVE_WORD_ERROR') {
+                line.textContent = 'Suno reports: ' + st + '. Try different lyrics / style.';
+                line.classList.add('error');
+                stopSunoPoll();
+            } else {
+                line.textContent = 'Still generating (' + st + ')... polling every 5s.';
+            }
+        }
+
+        function renderSunoTracks(tracks) {
+            const box = document.getElementById('sunoTracksList');
+            if (!tracks || !tracks.length) { box.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem;">No tracks returned.</div>'; return; }
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            box.innerHTML = tracks.map((t) => {
+                const slot = t.slot != null ? t.slot : 0;
+                const hasAudio = t.audio_bytes || t.audio_ready;
+                const coverUrl = '/api/suno/cover/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+                const audioUrl = '/api/suno/preview/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+                const title = t.title || ('Variant ' + (slot + 1));
+                const tags = t.tags || '';
+                const dur = t.duration ? Math.round(t.duration) + 's' : '';
+                return '<div style="display:flex;gap:0.75rem;padding:0.5rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:0.5rem;">'
+                    + '<img src="' + coverUrl + '" alt="cover" style="width:80px;height:80px;border-radius:var(--radius-sm);object-fit:cover;background:var(--surface);" onerror="this.style.display=\'none\'">'
+                    + '<div style="flex:1;display:flex;flex-direction:column;gap:0.35rem;min-width:0;">'
+                    +   '<div style="font-weight:500;">' + esc(title) + ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">' + esc(tags) + (dur ? ' · ' + esc(dur) : '') + '</span></div>'
+                    +   (hasAudio ? '<audio controls src="' + audioUrl + '" style="width:100%;"></audio>' : '<span style="color:var(--text-muted);font-size:0.8rem;">Audio not yet downloaded</span>')
+                    +   '<div style="display:flex;gap:0.4rem;">'
+                    +     '<button type="button" class="btn btn-primary btn-sm" onclick="saveSunoSlot(' + slot + ')">Save</button>'
+                    +     '<button type="button" class="btn btn-ghost btn-sm" onclick="openSunoLyrics(' + slot + ')" title="Show full lyrics">Lyrics</button>'
+                    +   '</div>'
+                    + '</div>'
+                    + '</div>';
+            }).join('');
+            // Stash track data globally so saveSunoSlot/openSunoLyrics can read it
+            window._sunoTracks = tracks;
+        }
+
+        function openSunoLyrics(slot) {
+            const t = (window._sunoTracks || [])[slot];
+            const text = t && t.lyrics ? t.lyrics : '(no lyrics returned)';
+            alert(text);
+        }
+
+        async function saveSunoSlot(slot) {
+            const t = (window._sunoTracks || [])[slot];
+            const fallbackName = document.getElementById('sunoTitleInput').value.trim() || (t && t.title) || '';
+            const dn = prompt('Save this variant as a sound. Display name:', fallbackName);
+            if (dn == null) return;
+            const style = document.getElementById('sunoStyleInput').value.trim();
+            const lyrics = document.getElementById('sunoLyricsInput').value;
+            const model = document.getElementById('sunoModelSelect').value;
+            const res = await api('/api/suno/save/' + encodeURIComponent(_sunoTaskId), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ slot, displayName: dn, tags: ['AI-song'], style, lyrics, model }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Save failed', 'error'); return; }
+            showToast('Saved as ' + data.filename, 'success');
+            fetchSounds();
+        }
+
+        async function regenerateSunoSound() {
+            const nameEl = document.getElementById('soundPanelName');
+            const filename = nameEl && nameEl.dataset.filename;
+            if (!filename) return;
+            const res = await api('/api/suno/sound/' + encodeURIComponent(filename));
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Could not load suno metadata', 'error'); return; }
+            closeSoundPanel();
+            openSunoModal({
+                title: data.suno.title || data.displayName || '',
+                style: data.suno.style || '',
+                lyrics: data.suno.lyrics || '',
+                model: data.suno.model || 'V5_5',
+            });
+        }
+
+        async function discardSuno() {
+            if (!_sunoTaskId) return closeSunoModal();
+            if (!confirm('Discard all variants from this generation? Files are deleted; credits were already spent.')) return;
+            await api('/api/suno/discard/' + encodeURIComponent(_sunoTaskId), { method: 'DELETE' });
+            _sunoTaskId = null;
+            closeSunoModal();
         }
 
         async function uploadSound(file) {
