@@ -4007,7 +4007,8 @@ app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (re
 app.get('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
     try {
         const jobs = voiceTrainer.listJobs().sort((a, b) => b.started_at - a.started_at).slice(0, 50);
-        res.json({ jobs });
+        const jobsWithProgress = jobs.map(j => ({ ...j, progress: voiceTrainer.computeProgress(j.id) }));
+        res.json({ jobs: jobsWithProgress });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4025,7 +4026,8 @@ app.get('/api/superadmin/tts/train/:id', requireSuperadmin, (req, res) => {
         const since = parseInt(req.query.since || '0', 10);
         const meta = voiceTrainer.getJobStatus(req.params.id);
         const { events, lines } = voiceTrainer.getJobEvents(req.params.id, since);
-        res.json({ meta, events, next_since: lines });
+        const progress = voiceTrainer.computeProgress(req.params.id);
+        res.json({ meta, events, progress, next_since: lines });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 

@@ -1305,6 +1305,9 @@
                             <thead><tr>
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">Voice</th>
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">Started</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem; min-width: 8rem;">Phase</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem; min-width: 10rem;">Progress</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">ETA</th>
                                 <th style="text-align:center; padding: 0.35rem 0.5rem;">Status</th>
                                 <th style="text-align:right; padding: 0.35rem 0.5rem;">Actions</th>
                             </tr></thead>
@@ -1495,6 +1498,16 @@
                 <div id="trainVoiceStatus" class="hidden">
                     <div class="status-line" id="trainVoiceStatusLine"></div>
                     <div id="trainVoiceMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem;"></div>
+                    <div id="trainVoiceProgressPanel" style="margin-top:0.6rem;">
+                        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.4rem;">
+                            <span id="trainVoicePhaseLabel" style="font-size:0.85rem;color:var(--text);"></span>
+                            <span id="trainVoiceEtaLabel" style="font-size:0.75rem;color:var(--text-muted);margin-left:auto;"></span>
+                        </div>
+                        <div style="height:10px;background:var(--surface-hover);border:1px solid var(--border);border-radius:5px;overflow:hidden;">
+                            <div id="trainVoiceProgressFill" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s ease;"></div>
+                        </div>
+                        <div id="trainVoiceTrainingDetail" style="font-size:0.75rem;color:var(--text-muted);margin-top:0.3rem;"></div>
+                    </div>
                     <div id="trainVoiceEvents" style="margin-top:0.75rem; max-height:340px; overflow-y:auto; padding:0.5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); font-family:ui-monospace,monospace; font-size:0.8rem; line-height:1.4;"></div>
                     <div class="footer-row">
                         <button type="button" class="btn btn-ghost" onclick="closeTrainVoiceModal()">Close (job keeps running)</button>
@@ -5819,6 +5832,10 @@
             document.getElementById('trainVoiceTitle').textContent = 'Training: ' + data.job.input.name;
             document.getElementById('trainVoiceMeta').textContent = 'Job id: ' + data.job.id + ' · started ' + new Date(data.job.started_at).toLocaleTimeString();
             document.getElementById('trainVoiceEvents').innerHTML = '';
+            document.getElementById('trainVoiceProgressFill').style.width = '0%';
+            document.getElementById('trainVoicePhaseLabel').textContent = 'Initializing...';
+            document.getElementById('trainVoiceEtaLabel').textContent = '';
+            document.getElementById('trainVoiceTrainingDetail').textContent = '';
             startTrainPoll();
         }
 
@@ -5839,6 +5856,30 @@
             const data = await res.json();
             const meta = data.meta;
             document.getElementById('trainVoiceStatusLine').textContent = 'Status: ' + meta.status + (meta.exit_code != null ? ' (exit ' + meta.exit_code + ')' : '');
+            const progress = data.progress;
+            if (progress) {
+                const phaseLabel = document.getElementById('trainVoicePhaseLabel');
+                const fill = document.getElementById('trainVoiceProgressFill');
+                const etaLabel = document.getElementById('trainVoiceEtaLabel');
+                const detailEl = document.getElementById('trainVoiceTrainingDetail');
+                const phaseText = progress.current_phase ? ('Phase: ' + progress.current_phase) : 'Initializing...';
+                phaseLabel.textContent = phaseText + ' · ' + (progress.overall_percentage || 0) + '% overall';
+                fill.style.width = (progress.overall_percentage || 0) + '%';
+                if (meta.status === 'running' && progress.overall_eta_seconds != null) {
+                    etaLabel.textContent = 'ETA: ' + formatEta(progress.overall_eta_seconds);
+                } else if (meta.status === 'completed') {
+                    etaLabel.textContent = 'done';
+                } else {
+                    etaLabel.textContent = '';
+                }
+                if (progress.training) {
+                    const t = progress.training;
+                    const trainEta = formatEta(t.eta_seconds);
+                    detailEl.textContent = 'Epoch ' + t.current_epoch + '/' + t.total_epochs + ' · step ' + t.current_step + ' · ' + t.sec_per_epoch + 's/epoch · loss ' + t.current_loss.toFixed(2) + ' (best ' + t.lowest_loss.toFixed(2) + ') · training ETA ' + trainEta;
+                } else {
+                    detailEl.textContent = progress.completed_phases && progress.completed_phases.length ? ('Completed phases: ' + progress.completed_phases.join(', ')) : '';
+                }
+            }
             const eventsBox = document.getElementById('trainVoiceEvents');
             for (const evt of data.events || []) {
                 const line = document.createElement('div');
@@ -5883,6 +5924,36 @@
             pollTrainStatus();
         }
 
+        function formatEta(seconds) {
+            if (seconds == null) return '—';
+            if (seconds <= 0) return 'done';
+            if (seconds < 60) return Math.round(seconds) + 's';
+            if (seconds < 3600) return Math.round(seconds / 60) + 'm';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.round((seconds % 3600) / 60);
+            return h + 'h ' + m + 'm';
+        }
+
+        function renderPhaseCell(progress) {
+            if (!progress) return '<span style="color:var(--text-muted)">—</span>';
+            const phase = progress.current_phase || '—';
+            if (phase === 'train' && progress.training) {
+                return 'train <span style="color:var(--text-muted);font-size:0.75rem">ep ' + progress.training.current_epoch + '/' + progress.training.total_epochs + '</span>';
+            }
+            return phase;
+        }
+
+        function renderProgressBar(progress) {
+            if (!progress) return '';
+            const pct = progress.overall_percentage || 0;
+            return '<div style="display:flex;align-items:center;gap:0.35rem;">'
+                + '<div style="flex:1;height:6px;background:var(--surface-hover);border-radius:3px;overflow:hidden;min-width:5rem;">'
+                + '<div style="width:' + pct + '%;height:100%;background:var(--accent);"></div>'
+                + '</div>'
+                + '<span style="font-size:0.75rem;color:var(--text-muted);min-width:2.5rem;text-align:right;">' + pct + '%</span>'
+                + '</div>';
+        }
+
         async function fetchTrainJobs() {
             const res = await api('/api/superadmin/tts/train');
             if (!res.ok) return;
@@ -5898,9 +5969,14 @@
             tbody.innerHTML = jobs.map(j => {
                 const ago = j.started_at ? Math.round((Date.now() - j.started_at) / 60000) + ' min ago' : '';
                 const color = statusColor[j.status] || 'var(--text)';
+                const progress = j.progress;
+                const eta = progress && j.status === 'running' ? formatEta(progress.overall_eta_seconds) : (j.status === 'completed' ? 'done' : '—');
                 return '<tr>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(j.input.name) + ' <span style="color:var(--text-muted);font-size:0.75rem">(' + esc(j.input.voice_id) + ')</span></td>'
                     + '<td style="padding:0.35rem 0.5rem;color:var(--text-muted)">' + esc(ago) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + renderPhaseCell(progress) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + renderProgressBar(progress) + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem;color:var(--text-muted)">' + esc(eta) + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem;color:' + color + '">' + esc(j.status) + '</td>'
                     + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap"><button type="button" class="btn btn-ghost btn-sm" onclick="reopenTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">View</button></td>'
                     + '</tr>';
