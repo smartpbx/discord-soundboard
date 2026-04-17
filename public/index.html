@@ -5984,15 +5984,24 @@
                     etaLabel.textContent = 'ETA: ' + formatEta(progress.overall_eta_seconds);
                 } else if (meta.status === 'completed') {
                     etaLabel.textContent = 'done';
+                } else if (meta.status === 'running') {
+                    etaLabel.textContent = 'ETA: — (waiting for training phase)';
                 } else {
                     etaLabel.textContent = '';
                 }
-                if (progress.training) {
+                const isTrainingNow = progress.current_phase === 'train' || (progress.completed_phases && progress.completed_phases.includes('train'));
+                if (isTrainingNow && progress.training) {
                     const t = progress.training;
                     const trainEta = formatEta(t.eta_seconds);
                     detailEl.textContent = 'Epoch ' + t.current_epoch + '/' + t.total_epochs + ' · step ' + t.current_step + ' · ' + t.sec_per_epoch + 's/epoch · loss ' + t.current_loss.toFixed(2) + ' (best ' + t.lowest_loss.toFixed(2) + ') · training ETA ' + trainEta;
+                } else if (progress.completed_phases && progress.completed_phases.length) {
+                    const parts = progress.completed_phases.map(p => {
+                        const d = progress.phase_durations && progress.phase_durations[p];
+                        return d ? (p + ' ' + formatEta(d)) : p;
+                    });
+                    detailEl.textContent = 'Completed: ' + parts.join(' · ');
                 } else {
-                    detailEl.textContent = progress.completed_phases && progress.completed_phases.length ? ('Completed phases: ' + progress.completed_phases.join(', ')) : '';
+                    detailEl.textContent = '';
                 }
             }
             const eventsBox = document.getElementById('trainVoiceEvents');
@@ -6052,7 +6061,8 @@
         function renderPhaseCell(progress) {
             if (!progress) return '<span style="color:var(--text-muted)">—</span>';
             const phase = progress.current_phase || '—';
-            if (phase === 'train' && progress.training) {
+            const trainingLive = phase === 'train' && progress.training;
+            if (trainingLive) {
                 return 'train <span style="color:var(--text-muted);font-size:0.75rem">ep ' + progress.training.current_epoch + '/' + progress.training.total_epochs + '</span>';
             }
             return phase;
