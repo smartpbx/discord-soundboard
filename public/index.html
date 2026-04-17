@@ -2768,26 +2768,32 @@
             document.getElementById('urlStreamTitle').textContent = (d.title || '(no title)') + (d.uploader ? ' — ' + d.uploader : '') + ' · ' + _fmtTime(d.duration);
             document.getElementById('urlStreamPreviewArea').classList.remove('hidden');
             _urlStreamSyncTrimInputs();
-            _urlStreamSetInfo('Preview ready.');
-            // Load the audio into the local <audio> element AND decode to peaks for the canvas.
+            _urlStreamSetInfo('Decoding audio…');
             const audio = document.getElementById('urlStreamLocalAudio');
             const previewUrl = '/api/stream-url/preview/' + encodeURIComponent(d.previewId) + '/audio';
-            audio.src = previewUrl;
-            audio.ontimeupdate = () => _urlStreamDrawWaveform();
+            audio.ontimeupdate = () => {
+                if (_urlStreamTrim.end != null && audio.currentTime >= _urlStreamTrim.end) {
+                    audio.pause();
+                    audio.currentTime = _urlStreamTrim.end;
+                    const b = document.getElementById('urlStreamLocalPlayBtn'); if (b) b.textContent = '▶';
+                }
+                _urlStreamDrawWaveform();
+            };
             audio.onended = () => { const b = document.getElementById('urlStreamLocalPlayBtn'); if (b) b.textContent = '▶'; };
-            await _urlStreamDecodePeaks(previewUrl);
-            _urlStreamDrawWaveform();
-        }
-
-        async function _urlStreamDecodePeaks(previewUrl) {
+            _urlStreamDrawWaveform(); // draw placeholder
+            // Single fetch: share the ArrayBuffer between the <audio> element (via Blob URL)
+            // and AudioContext.decodeAudioData — avoids a redundant download.
             try {
-                const res = await fetch(previewUrl, { credentials: CREDENTIALS });
-                if (!res.ok) return;
-                const buf = await res.arrayBuffer();
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                const decoded = await ctx.decodeAudioData(buf);
+                const fetchRes = await fetch(previewUrl, { credentials: CREDENTIALS });
+                if (!fetchRes.ok) throw new Error('fetch failed');
+                const buf = await fetchRes.arrayBuffer();
+                const blob = new Blob([buf], { type: 'audio/wav' });
+                audio.src = URL.createObjectURL(blob);
+                const ac = new (window.AudioContext || window.webkitAudioContext)();
+                const decoded = await ac.decodeAudioData(buf.slice(0));
                 const ch = decoded.getChannelData(0);
-                const bars = 400;
+                // High-res peaks — one bar per ~1.5 CSS pixels at 1920 wide is plenty.
+                const bars = Math.min(2400, Math.max(400, Math.floor(ch.length / 200)));
                 const step = Math.max(1, Math.floor(ch.length / bars));
                 const peaks = [];
                 for (let i = 0; i < bars; i++) {
@@ -2804,7 +2810,13 @@
                     _urlStreamPreview.duration = decoded.duration || _urlStreamPreview.duration;
                     if (!_urlStreamTrim.end || _urlStreamTrim.end > _urlStreamPreview.duration) _urlStreamTrim.end = _urlStreamPreview.duration;
                 }
-            } catch (e) { /* decode can fail on huge files or odd codecs; canvas just stays empty */ }
+                _urlStreamSyncTrimInputs();
+                _urlStreamDrawWaveform();
+                _urlStreamSetInfo('Preview ready.');
+            } catch (e) {
+                _urlStreamSetInfo('Preview audio loaded (waveform decoding failed — scrubbing still works).');
+                audio.src = previewUrl;
+            }
         }
 
         function _urlStreamDrawWaveform() {
@@ -2822,17 +2834,23 @@
             const peaks = p.peaks;
             const mid = h / 2;
             if (peaks && peaks.length) {
-                const barW = Math.max(1, w / peaks.length);
+                const barW = w / peaks.length;
+                const gap = barW > 3 ? 0.5 : 0; // only show gap when bars are thick enough
                 ctx.fillStyle = '#ec4899';
                 peaks.forEach((peak, i) => {
-                    const x = Math.floor(i * barW);
+                    const x = i * barW;
                     const top = mid + peak.min * (mid - 2);
                     const bottom = mid + peak.max * (mid - 2);
-                    ctx.fillRect(x, top, Math.max(1, barW - 0.5), Math.max(1, bottom - top));
+                    ctx.fillRect(x, top, Math.max(1, barW - gap), Math.max(1, bottom - top));
                 });
             } else {
                 ctx.fillStyle = 'rgba(255,255,255,0.15)';
                 ctx.fillRect(0, mid - 1, w, 2);
+                ctx.fillStyle = 'rgba(236,72,153,0.5)';
+                ctx.font = (12 * (window.devicePixelRatio || 1)) + 'px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Decoding waveform…', w / 2, mid);
             }
             const dur = p.duration || 1;
             // Dim outside-of-trim zones.
@@ -2895,8 +2913,8 @@
             const b = document.getElementById('urlStreamLocalPlayBtn');
             if (!a || !a.src) return;
             if (a.paused) {
-                // Start from trimStart if we're outside the trim range.
-                if (a.currentTime < _urlStreamTrim.start || a.currentTime >= _urlStreamTrim.end) a.currentTime = _urlStreamTrim.start;
+                // Always restart from trim start so the button is a quick 'play this clip'.
+                a.currentTime = _urlStreamTrim.start || 0;
                 a.play();
                 if (b) b.textContent = '⏸';
             } else {
