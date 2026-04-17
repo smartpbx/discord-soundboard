@@ -643,6 +643,7 @@
                     <div class="header-menu-user">Logged in as <span id="currentUsername">—</span> <span id="currentRole">(admin)</span></div>
                     <button type="button" class="header-menu-item" id="headerMenuTheme" onclick="toggleTheme(); updateHeaderMenuThemeLabel();">Theme: <span id="headerMenuThemeLabel">Dark</span></button>
                     <button type="button" class="header-menu-item user-only hidden" id="headerMenuChangePassword" onclick="openChangePasswordModal(); closeHeaderMenu();">Change password</button>
+                    <button type="button" class="header-menu-item hidden" id="headerMenuEntranceExit" onclick="openEntranceExitModal(); closeHeaderMenu();">Entrance / exit sounds</button>
                     <button type="button" class="header-menu-item" onclick="openShortcuts(); closeHeaderMenu();">Keyboard shortcuts</button>
                     <button type="button" class="header-menu-item" onclick="logout(); closeHeaderMenu();">Log out</button>
                     <button type="button" class="header-menu-item superadmin-only hidden" id="headerMenuSuperadmin" onclick="switchMainTab('superadmin'); closeHeaderMenu();">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
@@ -916,6 +917,7 @@
                 <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation<span class="tab-badge hidden" id="superadminTabModerationBadge">0</span></button>
                 <button type="button" class="superadmin-tab" data-panel="activity" onclick="switchSuperadminTab('activity')">Activity</button>
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
+                <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Entrance / Exit</button>
             </div>
 
             <div id="superadminPanelAccess" class="superadmin-panel active">
@@ -1222,6 +1224,37 @@
                     <div id="ttsVoicesEmpty" class="pending-empty hidden" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No voices available</div>
                 </div>
             </div>
+
+            <div id="superadminPanelEntranceExit" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Global</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="entranceExitGlobalToggle" onchange="setEntranceExitGlobal(this.checked)">
+                        <span>Enable entrance / exit sounds for linked users</span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When a linked Discord user joins or leaves the bot's current voice channel, their chosen sound plays as if they pressed it themselves — role hierarchy still applies.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Linked Users</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchEntranceExitAdmin()">Refresh</button>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Pick a Discord user from the dropdown (members currently in a voice channel the bot can see) or paste a snowflake ID. Then set their entrance and exit sounds — or let them pick their own.</p>
+                    <div style="overflow-x:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">User</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Discord user</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Entrance</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Exit</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;">Enabled</th>
+                            </tr></thead>
+                            <tbody id="entranceExitBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
         </div>
 
@@ -1326,6 +1359,26 @@
                 <div>
                     <button type="button" class="btn btn-primary" onclick="submitChangePassword()">Change password</button>
                     <button type="button" class="btn btn-ghost" id="changePasswordCancelBtn" onclick="closeChangePasswordModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="entranceExitOverlay" class="change-password-overlay hidden">
+            <div class="change-password-modal" style="min-width: 360px;">
+                <h3>Entrance / exit sounds</h3>
+                <div id="entranceExitBody2">
+                    <p id="eeLinkStatus" style="font-size:0.85rem; color:var(--text-muted); margin:0 0 0.75rem;"></p>
+                    <div id="eeControls" style="display:none;">
+                        <label for="eeEntranceSelect">Entrance sound</label>
+                        <select id="eeEntranceSelect" style="width:100%; padding:0.4rem; margin-bottom:0.75rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);"></select>
+                        <label for="eeExitSelect">Exit sound</label>
+                        <select id="eeExitSelect" style="width:100%; padding:0.4rem; margin-bottom:0.75rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);"></select>
+                        <p id="eeGlobalWarning" style="font-size:0.8rem; color:var(--danger); margin:0 0 0.5rem; display:none;">The feature is globally disabled by a superadmin — your picks are saved but won't play.</p>
+                    </div>
+                </div>
+                <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.5rem;">
+                    <button type="button" class="btn btn-primary" id="eeSaveBtn" onclick="saveEntranceExit()" style="display:none;">Save</button>
+                    <button type="button" class="btn btn-ghost" onclick="closeEntranceExitModal()">Close</button>
                 </div>
             </div>
         </div>
@@ -1937,6 +1990,7 @@
             if (panelId === 'ttsVoices') fetchTtsVoicesAdmin();
             if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
             if (panelId === 'guests') { fetchCooldownOverrides(); }
+            if (panelId === 'entranceExit') fetchEntranceExitAdmin();
         }
 
         function clearAuditFilters() {
@@ -2074,6 +2128,59 @@
         function closeChangePasswordModal() {
             document.getElementById('changePasswordOverlay').classList.add('hidden');
         }
+
+        async function openEntranceExitModal() {
+            const overlay = document.getElementById('entranceExitOverlay');
+            overlay.classList.remove('hidden');
+            const status = document.getElementById('eeLinkStatus');
+            const controls = document.getElementById('eeControls');
+            const saveBtn = document.getElementById('eeSaveBtn');
+            const warning = document.getElementById('eeGlobalWarning');
+            status.textContent = 'Loading…';
+            controls.style.display = 'none';
+            saveBtn.style.display = 'none';
+            const res = await api('/api/me/entrance-exit');
+            if (!res || !res.ok) { status.textContent = 'Failed to load settings.'; return; }
+            const data = await res.json();
+            if (!data.discordId) {
+                status.textContent = 'Your account is not linked to a Discord user yet. Ask a superadmin to link you before you can pick sounds.';
+                return;
+            }
+            status.textContent = 'Linked to Discord ID ' + data.discordId + '.';
+            controls.style.display = '';
+            saveBtn.style.display = '';
+            warning.style.display = data.globalEnabled ? 'none' : '';
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const options = '<option value="">— none —</option>' + soundsList.map(s => {
+                const fn = s.filename || s;
+                const dn = s.displayName || fn;
+                return '<option value="' + esc(fn) + '">' + esc(dn) + '</option>';
+            }).join('');
+            const ent = document.getElementById('eeEntranceSelect');
+            const ext = document.getElementById('eeExitSelect');
+            ent.innerHTML = options;
+            ext.innerHTML = options;
+            ent.value = data.entranceSound || '';
+            ext.value = data.exitSound || '';
+        }
+        function closeEntranceExitModal() {
+            document.getElementById('entranceExitOverlay').classList.add('hidden');
+        }
+        async function saveEntranceExit() {
+            const entrance = document.getElementById('eeEntranceSelect').value || null;
+            const exit = document.getElementById('eeExitSelect').value || null;
+            const res = await api('/api/me/entrance-exit', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entranceSound: entrance, exitSound: exit }),
+            });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                alert(err.error || 'Failed to save');
+                return;
+            }
+            closeEntranceExitModal();
+        }
         async function submitChangePassword() {
             const cur = document.getElementById('changePasswordCurrent').value;
             const newPw = document.getElementById('changePasswordNew').value;
@@ -2126,6 +2233,8 @@
                 if ((user && user.role) === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); }
                 updateUploadCardVisibility();
                 if (user && user.mustChangePassword === true && user.role === 'user') openChangePasswordModal(true);
+                const eeBtn = document.getElementById('headerMenuEntranceExit');
+                if (eeBtn) eeBtn.classList.toggle('hidden', user.role === 'guest');
                 return true;
             }
             showLogin();
@@ -4754,6 +4863,122 @@
         // --- TTS Voice Management (superadmin) ---
         let _ttsAdminDisabled = [];
         let _ttsAdminRvcOverrides = {};
+
+        // ---------------- Entrance / exit sounds (superadmin) ----------------
+        let _discordMembersCache = [];
+        async function fetchEntranceExitAdmin() {
+            const [cfgRes, membersRes] = await Promise.all([
+                api('/api/superadmin/entrance-exit'),
+                api('/api/superadmin/discord-members'),
+            ]);
+            if (!cfgRes || !cfgRes.ok) return;
+            const cfg = await cfgRes.json();
+            const membersData = (membersRes && membersRes.ok) ? await membersRes.json() : { members: [] };
+            _discordMembersCache = Array.isArray(membersData.members) ? membersData.members : [];
+            const toggle = document.getElementById('entranceExitGlobalToggle');
+            if (toggle) toggle.checked = cfg.globalEnabled === true;
+            renderEntranceExitRows(cfg.users || []);
+        }
+
+        function renderEntranceExitRows(users) {
+            const tbody = document.getElementById('entranceExitBody');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const soundOptions = soundsList.map(s => {
+                const fn = s.filename || s;
+                const dn = s.displayName || fn;
+                return '<option value="' + esc(fn) + '">' + esc(dn) + '</option>';
+            }).join('');
+            const memberOptions = _discordMembersCache.map(m =>
+                '<option value="' + esc(m.id) + '">' + esc(m.displayName || m.username || m.id) + (m.channelName ? ' — ' + esc(m.channelName) : '') + '</option>'
+            ).join('');
+            tbody.innerHTML = users.map(u => {
+                const idVal = u.discordId || '';
+                const entSel = u.entranceSound || '';
+                const exitSel = u.exitSound || '';
+                return '<tr data-un="' + esc(u.username) + '">'
+                    + '<td style="padding: 0.35rem 0.5rem;">' + esc(u.username) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; color: var(--text-muted);">' + esc(u.role) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">'
+                        + '<div style="display:flex; gap:0.25rem; align-items:center; flex-wrap:wrap;">'
+                        + '<input type="text" class="ee-discord-id" value="' + esc(idVal) + '" placeholder="snowflake ID" style="width: 11rem; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: monospace; font-size: 0.8rem;">'
+                        + (memberOptions ? '<select class="ee-discord-pick" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;"><option value="">— pick member —</option>' + memberOptions + '</select>' : '')
+                        + '<button type="button" class="btn btn-primary btn-sm ee-save-id">Save</button>'
+                        + (idVal ? '<button type="button" class="btn btn-ghost btn-sm ee-clear-id">Unlink</button>' : '')
+                        + '</div>'
+                    + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">'
+                        + '<select class="ee-entrance" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; min-width: 10rem;">'
+                        + '<option value="">— none —</option>' + soundOptions + '</select>'
+                    + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">'
+                        + '<select class="ee-exit" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; min-width: 10rem;">'
+                        + '<option value="">— none —</option>' + soundOptions + '</select>'
+                    + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; text-align:center;">'
+                        + '<input type="checkbox" class="ee-enabled"' + (u.disabled ? '' : ' checked') + '>'
+                    + '</td>'
+                    + '</tr>';
+            }).join('');
+            // Set current values for selects (can't use selected attr on dynamic values)
+            users.forEach(u => {
+                const row = tbody.querySelector('tr[data-un="' + CSS.escape(u.username) + '"]');
+                if (!row) return;
+                const entSel = row.querySelector('.ee-entrance');
+                const exitSel = row.querySelector('.ee-exit');
+                if (entSel) entSel.value = u.entranceSound || '';
+                if (exitSel) exitSel.value = u.exitSound || '';
+            });
+            // Wire handlers
+            tbody.querySelectorAll('tr').forEach(row => {
+                const un = row.dataset.un;
+                row.querySelector('.ee-discord-pick')?.addEventListener('change', (e) => {
+                    const idInput = row.querySelector('.ee-discord-id');
+                    if (idInput && e.target.value) idInput.value = e.target.value;
+                });
+                row.querySelector('.ee-save-id')?.addEventListener('click', async () => {
+                    const id = (row.querySelector('.ee-discord-id')?.value || '').trim();
+                    await patchEntranceExitUser(un, { discordId: id || null });
+                });
+                row.querySelector('.ee-clear-id')?.addEventListener('click', async () => {
+                    await patchEntranceExitUser(un, { discordId: null });
+                });
+                row.querySelector('.ee-entrance')?.addEventListener('change', async (e) => {
+                    await patchEntranceExitUser(un, { entranceSound: e.target.value || null });
+                });
+                row.querySelector('.ee-exit')?.addEventListener('change', async (e) => {
+                    await patchEntranceExitUser(un, { exitSound: e.target.value || null });
+                });
+                row.querySelector('.ee-enabled')?.addEventListener('change', async (e) => {
+                    await patchEntranceExitUser(un, { disabled: !e.target.checked });
+                });
+            });
+        }
+
+        async function patchEntranceExitUser(username, patch) {
+            const res = await api('/api/superadmin/entrance-exit/' + encodeURIComponent(username), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                alert(err.error || 'Failed to update entrance/exit settings');
+            }
+            fetchEntranceExitAdmin();
+        }
+
+        async function setEntranceExitGlobal(enabled) {
+            const res = await api('/api/superadmin/entrance-exit-config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ globalEnabled: !!enabled }),
+            });
+            if (!res || !res.ok) {
+                alert('Failed to update global toggle');
+                fetchEntranceExitAdmin();
+            }
+        }
 
         async function fetchTtsVoicesAdmin() {
             const res = await api('/api/tts/status');

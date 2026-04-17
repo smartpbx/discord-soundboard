@@ -25,6 +25,7 @@ const PENDING_META_PATH = path.join(DATA_DIR, 'pending.json');
 const SERVER_STATE_PATH = path.join(DATA_DIR, 'state.json');
 const USERS_JSON_PATH = path.join(DATA_DIR, 'users.json');
 const PENDING_USERS_PATH = path.join(DATA_DIR, 'pending-users.json');
+const DISCORD_LINKS_PATH = path.join(DATA_DIR, 'discord-links.json');
 const TTS_RECENTS_DIR = path.join(DATA_DIR, 'tts-recents');
 if (!fs.existsSync(TTS_RECENTS_DIR)) fs.mkdirSync(TTS_RECENTS_DIR, { recursive: true });
 const TTS_RECENTS_PER_USER = 5;
@@ -819,6 +820,63 @@ function updateOwnPassword(username, currentPassword, newPassword) {
     saveApprovedSignups(approvedSignups);
     return true;
 }
+// --- Discord user linking & entrance/exit sounds ---
+// data/discord-links.json shape:
+// { globalEnabled: bool, users: { [username]: { discordId, entranceSound, exitSound, disabled } } }
+function loadDiscordLinks() {
+    try {
+        const raw = fs.readFileSync(DISCORD_LINKS_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object') return { globalEnabled: false, users: {} };
+        return {
+            globalEnabled: data.globalEnabled === true,
+            users: (data.users && typeof data.users === 'object') ? data.users : {},
+        };
+    } catch {
+        return { globalEnabled: false, users: {} };
+    }
+}
+function saveDiscordLinks(data) {
+    fs.writeFileSync(DISCORD_LINKS_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+function getDiscordLinkGlobalEnabled() {
+    return loadDiscordLinks().globalEnabled === true;
+}
+function setDiscordLinkGlobalEnabled(enabled) {
+    const d = loadDiscordLinks();
+    d.globalEnabled = enabled === true;
+    saveDiscordLinks(d);
+}
+function getDiscordLinkForUser(username) {
+    const un = String(username || '').trim().toLowerCase();
+    if (!un) return null;
+    const d = loadDiscordLinks();
+    return d.users[un] || null;
+}
+function setDiscordLinkForUser(username, patch) {
+    const un = String(username || '').trim().toLowerCase();
+    if (!un) return false;
+    const d = loadDiscordLinks();
+    const cur = d.users[un] || { discordId: null, entranceSound: null, exitSound: null, disabled: false };
+    const next = { ...cur };
+    if ('discordId' in patch) next.discordId = patch.discordId ? String(patch.discordId).trim() : null;
+    if ('entranceSound' in patch) next.entranceSound = patch.entranceSound ? path.basename(String(patch.entranceSound)) : null;
+    if ('exitSound' in patch) next.exitSound = patch.exitSound ? path.basename(String(patch.exitSound)) : null;
+    if ('disabled' in patch) next.disabled = patch.disabled === true;
+    d.users[un] = next;
+    saveDiscordLinks(d);
+    return true;
+}
+function findUsernameByDiscordId(discordId) {
+    const id = String(discordId || '').trim();
+    if (!id) return null;
+    const d = loadDiscordLinks();
+    for (const [un, entry] of Object.entries(d.users)) {
+        if (entry && entry.discordId === id) return un;
+    }
+    return null;
+}
+
 const guestLastPlayByIP = new Map();
 const userLastPlayByUsername = new Map();
 const ttsLastPlayByIP = new Map();
@@ -1038,6 +1096,36 @@ client.once('ready', () => {
             currentConnection.subscribe(player);
             console.log(`🔊 Auto-joined ${channel.name}`);
         }
+    }
+});
+
+// Play entrance/exit sounds when linked users join or leave the bot's current channel.
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    try {
+        if (!getDiscordLinkGlobalEnabled()) return;
+        if (!activeGuildId || !lastChannelId) return;
+        if (newState.guild?.id !== activeGuildId && oldState.guild?.id !== activeGuildId) return;
+
+        const discordUserId = newState.id || oldState.id;
+        const username = findUsernameByDiscordId(discordUserId);
+        if (!username) return;
+        const link = getDiscordLinkForUser(username);
+        if (!link || link.disabled) return;
+
+        const user = USERS.get(username);
+        if (!user || user.disabled) return;
+        const role = user.role || 'user';
+
+        const wasInBotChannel = oldState.channelId === lastChannelId;
+        const isInBotChannel = newState.channelId === lastChannelId;
+
+        if (!wasInBotChannel && isInBotChannel && link.entranceSound) {
+            await playSoundAsLinkedUser(link.entranceSound, { username, role });
+        } else if (wasInBotChannel && !isInBotChannel && link.exitSound) {
+            await playSoundAsLinkedUser(link.exitSound, { username, role });
+        }
+    } catch (err) {
+        console.error('[entrance-exit] voiceStateUpdate error:', err);
     }
 });
 
@@ -1872,6 +1960,122 @@ app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     res.json({ ok: true });
 });
 
+// --- Entrance / exit sounds ---
+app.get('/api/me/entrance-exit', requireAuth, (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests not supported' });
+    const un = (req.session.user.username || '').toLowerCase();
+    const link = getDiscordLinkForUser(un) || { discordId: null, entranceSound: null, exitSound: null, disabled: false };
+    res.json({
+        globalEnabled: getDiscordLinkGlobalEnabled(),
+        discordId: link.discordId || null,
+        entranceSound: link.entranceSound || null,
+        exitSound: link.exitSound || null,
+        disabled: link.disabled === true,
+    });
+});
+
+app.patch('/api/me/entrance-exit', requireAuth, (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests not supported' });
+    const un = (req.session.user.username || '').toLowerCase();
+    const link = getDiscordLinkForUser(un);
+    if (!link || !link.discordId) return res.status(400).json({ error: 'Your account is not linked to a Discord user. Ask a superadmin.' });
+    const body = req.body || {};
+    const patch = {};
+    if ('entranceSound' in body) patch.entranceSound = body.entranceSound || null;
+    if ('exitSound' in body) patch.exitSound = body.exitSound || null;
+    setDiscordLinkForUser(un, patch);
+    const updated = getDiscordLinkForUser(un);
+    res.json({ ok: true, entranceSound: updated.entranceSound, exitSound: updated.exitSound });
+});
+
+app.get('/api/superadmin/entrance-exit', requireSuperadmin, (req, res) => {
+    const d = loadDiscordLinks();
+    const list = [];
+    USERS.forEach((u, un) => {
+        const l = d.users[un] || {};
+        list.push({
+            username: un,
+            role: u.role,
+            discordId: l.discordId || null,
+            entranceSound: l.entranceSound || null,
+            exitSound: l.exitSound || null,
+            disabled: l.disabled === true,
+        });
+    });
+    list.sort((a, b) => a.username.localeCompare(b.username));
+    res.json({ globalEnabled: d.globalEnabled === true, users: list });
+});
+
+app.patch('/api/superadmin/entrance-exit-config', requireSuperadmin, (req, res) => {
+    const body = req.body || {};
+    if ('globalEnabled' in body) setDiscordLinkGlobalEnabled(body.globalEnabled === true);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'entrance-exit.config',
+        target: null,
+        details: { globalEnabled: body.globalEnabled === true },
+    });
+    res.json({ ok: true, globalEnabled: getDiscordLinkGlobalEnabled() });
+});
+
+app.patch('/api/superadmin/entrance-exit/:username', requireSuperadmin, (req, res) => {
+    const un = String(req.params.username || '').trim().toLowerCase();
+    if (!un || !USERS.has(un)) return res.status(400).json({ error: 'Unknown user' });
+    const body = req.body || {};
+    const patch = {};
+    if ('discordId' in body) {
+        const id = body.discordId ? String(body.discordId).trim() : null;
+        if (id && !/^\d{5,32}$/.test(id)) return res.status(400).json({ error: 'Discord ID must be a numeric snowflake' });
+        if (id) {
+            const existing = findUsernameByDiscordId(id);
+            if (existing && existing !== un) return res.status(400).json({ error: `Discord ID already linked to ${existing}` });
+        }
+        patch.discordId = id;
+    }
+    if ('entranceSound' in body) patch.entranceSound = body.entranceSound || null;
+    if ('exitSound' in body) patch.exitSound = body.exitSound || null;
+    if ('disabled' in body) patch.disabled = body.disabled === true;
+    setDiscordLinkForUser(un, patch);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'entrance-exit.user-update',
+        target: un,
+        details: patch,
+    });
+    const updated = getDiscordLinkForUser(un);
+    res.json({ ok: true, username: un, ...updated });
+});
+
+// List Discord users currently visible to the bot (members in any voice channel of the active guild).
+// This avoids needing the privileged GuildMembers intent.
+app.get('/api/superadmin/discord-members', requireSuperadmin, (req, res) => {
+    const out = [];
+    try {
+        if (!activeGuildId) return res.json({ members: [], note: 'Bot not connected to a guild.' });
+        const guild = client.guilds.cache.get(activeGuildId);
+        if (!guild) return res.json({ members: [], note: 'Guild not in cache.' });
+        const seen = new Set();
+        for (const [, vs] of guild.voiceStates.cache) {
+            if (!vs.member || seen.has(vs.id)) continue;
+            seen.add(vs.id);
+            out.push({
+                id: vs.id,
+                username: vs.member.user?.username || null,
+                displayName: vs.member.displayName || vs.member.user?.username || null,
+                channelId: vs.channelId,
+                channelName: vs.channel?.name || null,
+            });
+        }
+        out.sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')));
+        res.json({ members: out });
+    } catch (err) {
+        console.error('[discord-members] error', err);
+        res.status(500).json({ members: [], error: err.message });
+    }
+});
+
 app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {
     const safeFilename = path.basename(req.params.filename || '');
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).send('Invalid file');
@@ -2108,6 +2312,166 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
         });
     });
 });
+
+// Play a sound on behalf of a linked user (entrance/exit). Reuses the single/multi-play
+// code paths and honors role hierarchy — a lower-role entrance sound is silently skipped
+// if a higher role is currently playing, same as a manual /api/play would be.
+async function playSoundAsLinkedUser(filename, startedBy) {
+    try {
+        if (!filename || !startedBy || !startedBy.username || !startedBy.role) return { ok: false, reason: 'bad-args' };
+        const safeFilename = path.basename(filename);
+        const filePath = path.join(SOUNDS_DIR, safeFilename);
+        const resolvedPath = path.resolve(filePath);
+        if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return { ok: false, reason: 'invalid-path' };
+        if (!fs.existsSync(filePath)) return { ok: false, reason: 'missing-file' };
+        if (!activeGuildId || !getVoiceConnection(activeGuildId)) return { ok: false, reason: 'no-voice' };
+
+        const meta = loadSoundsMeta();
+        let duration = getDuration(meta, safeFilename);
+        if (duration == null) {
+            duration = await probeDurationAsync(filePath);
+            if (duration != null) setSoundMeta(safeFilename, { duration });
+        }
+        const displayName = getDisplayName(meta, safeFilename);
+        const role = startedBy.role;
+
+        if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return { ok: false, reason: 'superadmin-only' };
+        if (getPlaybackLocked(meta)) {
+            const lockedBy = getPlaybackLockedBy(meta);
+            if (lockedBy === 'superadmin') return { ok: false, reason: 'locked' };
+            if (role === 'user') return { ok: false, reason: 'locked' };
+        }
+
+        const currentStatus = player.state.status;
+        const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
+        const startedByRole = playbackState.startedBy?.role;
+
+        if (!multiPlayEnabled && isSomeonePlaying) {
+            if ((startedByRole === 'admin' || startedByRole === 'superadmin') && role === 'user') return { ok: false, reason: 'lower-role' };
+            if (startedByRole === 'superadmin' && role === 'admin') return { ok: false, reason: 'lower-role' };
+        }
+        if (multiPlayEnabled && isSomeonePlaying) {
+            let highestActiveRole = startedByRole;
+            for (const [, t] of activeTracks) {
+                if (t.startedBy?.role === 'superadmin') { highestActiveRole = 'superadmin'; break; }
+                if (t.startedBy?.role === 'admin' && highestActiveRole !== 'superadmin') highestActiveRole = 'admin';
+            }
+            if ((highestActiveRole === 'admin' || highestActiveRole === 'superadmin') && role === 'user') return { ok: false, reason: 'lower-role' };
+            if (highestActiveRole === 'superadmin' && role === 'admin') return { ok: false, reason: 'lower-role' };
+        }
+
+        const metaStart = getSoundStartTime(meta, safeFilename);
+        const metaEnd = getSoundEndTime(meta, safeFilename);
+        const metaVolume = getSoundVolume(meta, safeFilename);
+        const soundStopOthers = getSoundStopOthers(meta, safeFilename);
+        const startTime = metaStart != null ? metaStart : 0;
+        const maxEnd = metaEnd != null ? metaEnd : (duration != null ? duration : 999999);
+        if (startTime >= maxEnd) return { ok: false, reason: 'bad-trim' };
+        const endTime = metaEnd != null && metaEnd > startTime ? metaEnd : null;
+        const playDuration = endTime != null ? endTime - startTime : null;
+        const volMult = metaVolume != null ? metaVolume : 1;
+        const effectiveVolume = Math.max(0, Math.min(2, currentVolume * volMult));
+
+        const conn = getVoiceConnection(activeGuildId);
+        if (conn && conn.state?.status !== 'ready') {
+            try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
+            catch { return { ok: false, reason: 'voice-not-ready' }; }
+        }
+
+        const effectivePlayDuration = playDuration != null ? playDuration : duration;
+        const plannedDurationMs = effectivePlayDuration != null ? Math.round(effectivePlayDuration * 1000) : null;
+        const newPlayId = statsDb.recordPlayStart({
+            filename: safeFilename,
+            displayName,
+            userId: startedBy.username,
+            userRole: role,
+            guestIp: null,
+            plannedDurationMs,
+        });
+
+        if (multiPlayEnabled) {
+            const ffArgs = ['-nostdin'];
+            if (startTime > 0) ffArgs.push('-ss', String(startTime));
+            ffArgs.push('-i', filePath);
+            if (playDuration != null && playDuration > 0) ffArgs.push('-t', String(playDuration));
+            ffArgs.push('-f', 's16le', '-ar', '48000', '-ac', '2', '-af', `volume=${volMult}`, '-');
+            const ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('ffmpeg multi-play error', err));
+
+            if (soundStopOthers || !isSomeonePlaying) {
+                finalizeAllOpenPlays(true);
+                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                activeTracks.clear();
+                player.stop();
+            }
+            if (!activeMixer || activeMixer.destroyed) {
+                activeMixer = new AudioMixer();
+                const resource = createAudioResource(activeMixer, { inputType: StreamType.Raw, inlineVolume: true });
+                resource.volume.setVolume(currentVolume);
+                player.play(resource);
+            }
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName });
+            activeTracks.set(trackId, {
+                filename: safeFilename, displayName,
+                startTime: Date.now(), startTimeOffset: startTime,
+                duration: effectivePlayDuration, startedBy, playId: newPlayId,
+            });
+            ff.on('close', () => {
+                const track = activeTracks.get(trackId);
+                if (track && track.playId != null) {
+                    const elapsedMs = Date.now() - track.startTime;
+                    const plannedMs = track.duration != null ? track.duration * 1000 : null;
+                    const stoppedEarly = plannedMs != null && elapsedMs < plannedMs - 250;
+                    statsDb.recordPlayEnd(track.playId, { stoppedEarly });
+                    track.playId = null;
+                }
+            });
+            playbackState = {
+                status: 'playing', filename: safeFilename, displayName,
+                startTime: Date.now(), startTimeOffset: startTime,
+                duration: effectivePlayDuration, startedBy,
+            };
+        } else {
+            if (currentSinglePlayId != null) {
+                statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+                currentSinglePlayId = null;
+            }
+            let stream;
+            const needsFfmpeg = startTime > 0 || playDuration != null;
+            if (needsFfmpeg) {
+                const args = ['-nostdin'];
+                if (startTime > 0) args.push('-ss', String(startTime));
+                args.push('-i', filePath);
+                if (playDuration != null && playDuration > 0) args.push('-t', String(playDuration));
+                args.push('-f', 'mp3', '-');
+                const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+                stream = ff.stdout;
+                ff.stderr.on('data', () => {});
+                ff.on('error', (err) => console.error('ffmpeg spawn error', err));
+            } else {
+                stream = fs.createReadStream(filePath);
+            }
+            const resource = createAudioResource(stream, {
+                inputType: StreamType.Arbitrary, inlineVolume: true,
+                metadata: { filename: safeFilename, displayName },
+            });
+            resource.volume.setVolume(effectiveVolume);
+            player.play(resource);
+            currentSinglePlayId = newPlayId;
+            playbackState = {
+                status: 'playing', filename: safeFilename, displayName,
+                startTime: Date.now(), startTimeOffset: startTime,
+                duration: effectivePlayDuration, startedBy,
+            };
+        }
+        addToRecentlyPlayedServer(safeFilename, displayName, startedBy.username, Date.now());
+        return { ok: true };
+    } catch (err) {
+        console.error('[entrance-exit] playback error:', err);
+        return { ok: false, reason: 'exception' };
+    }
+}
 
 app.post('/api/play', requireAuth, async (req, res) => {
     const { filename } = req.body;
