@@ -729,17 +729,6 @@
             </div>
         </div>
 
-        <div class="card hidden" id="urlStreamCard">
-            <div class="card-title">Stream from URL</div>
-            <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 0.5rem;">Paste a YouTube, SoundCloud, TikTok, or other supported URL to stream its audio into the voice channel.</p>
-            <input type="url" id="urlStreamInput" placeholder="https://www.youtube.com/watch?v=..." style="width:100%; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.85rem;">
-            <div id="urlStreamInfo" style="font-size:0.8rem; color:var(--text-muted); min-height:1.1rem; margin:0.4rem 0;"></div>
-            <div style="display:flex; gap:0.4rem;">
-                <button type="button" class="btn btn-ghost btn-sm" id="urlStreamProbeBtn" onclick="probeStreamUrl()">Preview</button>
-                <button type="button" class="btn btn-primary btn-sm" id="urlStreamPlayBtn" onclick="playStreamUrl()">Play</button>
-            </div>
-        </div>
-
         <div class="card admin-only volume-card-expanded hidden" id="volumeCard">
             <div class="volume-card-header">
                 <span class="card-title">Volume</span>
@@ -798,11 +787,47 @@
                 <button type="button" class="btn btn-ghost btn-sm hidden" id="ttsQueueClearBtn" onclick="clearTtsQueue()" style="padding:0.15rem 0.4rem;font-size:0.75rem;">Clear Queue</button>
             </div>
         </div>
+        <div class="card hidden" id="urlStreamCard">
+            <div class="tts-card-header">
+                <span class="card-title">Stream from URL</span>
+                <button type="button" class="btn btn-ghost tts-close-btn" onclick="hideUrlStreamSection()" title="Close">✕</button>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 0.5rem;">Paste a YouTube, SoundCloud, TikTok, or other supported URL. Preview it first to scrub, trim, then play or import the trimmed clip.</p>
+            <div style="display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center;">
+                <input type="url" id="urlStreamInput" placeholder="https://www.youtube.com/watch?v=..." style="flex:1; min-width:200px; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.85rem;">
+                <button type="button" class="btn btn-primary btn-sm" id="urlStreamPreviewBtn" onclick="loadUrlStreamPreview()">Preview</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="urlStreamPlayFullBtn" onclick="playStreamUrl()" title="Stream the whole video directly — no preview / trim">Play full</button>
+            </div>
+            <div id="urlStreamInfo" style="font-size:0.8rem; color:var(--text-muted); min-height:1.1rem; margin:0.4rem 0 0;"></div>
+            <div class="hidden" id="urlStreamPreviewArea" style="margin-top:0.6rem;">
+                <div id="urlStreamTitle" style="font-size:0.9rem; font-weight:500; margin-bottom:0.35rem; word-break:break-all;"></div>
+                <div style="position:relative; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-hover); overflow:hidden;">
+                    <canvas id="urlStreamWaveform" width="800" height="80" style="display:block; width:100%; height:80px; cursor:pointer;"></canvas>
+                </div>
+                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.4rem; flex-wrap:wrap; font-size:0.8rem;">
+                    <button type="button" class="btn btn-ghost btn-sm" id="urlStreamLocalPlayBtn" onclick="toggleUrlStreamLocalPlay()" title="Play locally in browser">▶</button>
+                    <span id="urlStreamTimeLabel" style="color:var(--text-muted); font-family:monospace; min-width:7rem;">0:00 / 0:00</span>
+                    <span style="color:var(--text-muted);">Trim:</span>
+                    <input type="number" id="urlStreamTrimStart" min="0" step="0.1" style="width:5rem; padding:0.2rem 0.35rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.8rem;" onchange="syncUrlStreamTrimFromInputs()">
+                    <span style="color:var(--text-muted);">→</span>
+                    <input type="number" id="urlStreamTrimEnd" min="0" step="0.1" style="width:5rem; padding:0.2rem 0.35rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.8rem;" onchange="syncUrlStreamTrimFromInputs()">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="resetUrlStreamTrim()" title="Reset trim to full length">Reset</button>
+                    <span id="urlStreamTrimLen" style="color:var(--text-muted); font-family:monospace;"></span>
+                </div>
+                <div style="display:flex; gap:0.4rem; margin-top:0.5rem; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-primary btn-sm" id="urlStreamPlayTrimBtn" onclick="playStreamUrlTrim()">Play to Discord</button>
+                    <input type="text" id="urlStreamImportName" placeholder="Import display name (optional)" style="flex:1; min-width:160px; padding:0.3rem 0.45rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.8rem;">
+                    <button type="button" class="btn btn-primary btn-sm" id="urlStreamImportBtn" onclick="importStreamUrl()">Import to Sounds</button>
+                </div>
+                <audio id="urlStreamLocalAudio" preload="auto" style="display:none"></audio>
+            </div>
+        </div>
         <div class="card sounds-card">
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-actions">
                     <button type="button" class="tts-toggle-btn hidden" id="ttsToggleBtn" onclick="toggleTtsSection()" title="Text-to-Speech">🗣 TTS</button>
+                    <button type="button" class="tts-toggle-btn hidden" id="urlStreamToggleBtn" onclick="toggleUrlStreamSection()" title="Stream from URL">🔗 URL</button>
                     <button type="button" class="btn upload-toggle-btn hidden" id="uploadToggleBtn" onclick="toggleUploadSection()" title="Upload sound"><span class="upload-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span> Upload</button>
                     <div class="sounds-options-wrap">
                     <button type="button" class="hamburger-btn" id="soundsOptionsBtn" onclick="toggleSoundsOptionsMenu()" title="View options">☰</button>
@@ -2503,12 +2528,12 @@
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
             }
             applyVolumeExpanded();
-            const urlCard = document.getElementById('urlStreamCard');
-            if (urlCard) urlCard.classList.toggle('hidden', !(d.urlStreamEnabled_self === true));
+            const urlBtn = document.getElementById('urlStreamToggleBtn');
+            if (urlBtn) urlBtn.classList.toggle('hidden', !(d.urlStreamEnabled_self === true));
+            _urlStreamMaxDurSelf = Number(d.urlStreamMaxDurationSec_self) || 0;
             const urlInfo = document.getElementById('urlStreamInfo');
-            if (urlInfo && d.urlStreamMaxDurationSec_self != null) {
-                const m = Number(d.urlStreamMaxDurationSec_self);
-                if (!urlInfo.dataset.dirty) urlInfo.textContent = m > 0 ? 'Max length: ' + m + 's' : 'No length limit.';
+            if (urlInfo && !urlInfo.dataset.dirty) {
+                urlInfo.textContent = _urlStreamMaxDurSelf > 0 ? ('Max length: ' + _urlStreamMaxDurSelf + 's') : 'No length limit.';
             }
             if ((user && user.role) === 'superadmin' && d.pendingCount !== undefined) {
                 updatePendingBadge(d.pendingCount, 0);
@@ -2680,6 +2705,23 @@
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamMaxDurationSec: obj }) });
         }
 
+        // ---------------- URL streaming (card with preview/trim/import) ----------------
+        let _urlStreamMaxDurSelf = 0;
+        let _urlStreamPreview = null; // { previewId, title, duration, url, peaks }
+        let _urlStreamTrim = { start: 0, end: null };
+        let _urlStreamDraggingHandle = null; // 'start' | 'end' | 'seek' | null
+
+        function toggleUrlStreamSection() {
+            const card = document.getElementById('urlStreamCard');
+            if (!card) return;
+            const show = card.classList.contains('hidden');
+            card.classList.toggle('hidden', !show);
+            if (show) document.getElementById('urlStreamInput')?.focus();
+        }
+        function hideUrlStreamSection() {
+            document.getElementById('urlStreamCard')?.classList.add('hidden');
+            _urlStreamStopLocal();
+        }
         function _urlStreamSetInfo(text, isError) {
             const info = document.getElementById('urlStreamInfo');
             if (!info) return;
@@ -2688,31 +2730,222 @@
             info.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
         }
         function _urlStreamSetBusy(busy) {
-            ['urlStreamProbeBtn', 'urlStreamPlayBtn', 'urlStreamInput'].forEach(id => {
+            ['urlStreamPreviewBtn', 'urlStreamPlayFullBtn', 'urlStreamPlayTrimBtn', 'urlStreamImportBtn', 'urlStreamInput'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.disabled = !!busy;
             });
         }
-        async function probeStreamUrl() {
+        function _fmtTime(t) {
+            if (!Number.isFinite(t)) return '?';
+            const m = Math.floor(t / 60);
+            const s = Math.floor(t % 60);
+            return m + ':' + String(s).padStart(2, '0');
+        }
+        function _urlStreamStopLocal() {
+            const a = document.getElementById('urlStreamLocalAudio');
+            if (a) { try { a.pause(); } catch {} }
+            const b = document.getElementById('urlStreamLocalPlayBtn');
+            if (b) b.textContent = '▶';
+        }
+
+        async function loadUrlStreamPreview() {
             const url = (document.getElementById('urlStreamInput')?.value || '').trim();
             if (!url) { _urlStreamSetInfo('Paste a URL first.', true); return; }
             _urlStreamSetBusy(true);
-            _urlStreamSetInfo('Probing…');
-            const res = await api('/api/stream-url/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+            _urlStreamSetInfo('Downloading preview… (larger videos take longer)');
+            _urlStreamStopLocal();
+            document.getElementById('urlStreamPreviewArea')?.classList.add('hidden');
+            const res = await api('/api/stream-url/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
             _urlStreamSetBusy(false);
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
-                _urlStreamSetInfo(err.error || 'Failed to probe.', true);
+                _urlStreamSetInfo(err.error || 'Failed to load preview.', true);
                 return;
             }
             const d = await res.json();
-            const mins = d.duration != null ? (Math.floor(d.duration / 60) + ':' + String(Math.floor(d.duration % 60)).padStart(2, '0')) : '?';
-            const parts = [d.title || '(no title)'];
-            if (d.uploader) parts.push('by ' + d.uploader);
-            parts.push(mins);
-            if (d.extractor) parts.push(d.extractor);
-            _urlStreamSetInfo(parts.join(' · '));
+            _urlStreamPreview = { previewId: d.previewId, title: d.title, duration: d.duration || 0, url: d.url, peaks: null };
+            _urlStreamTrim = { start: 0, end: d.duration || 0 };
+            document.getElementById('urlStreamTitle').textContent = (d.title || '(no title)') + (d.uploader ? ' — ' + d.uploader : '') + ' · ' + _fmtTime(d.duration);
+            document.getElementById('urlStreamPreviewArea').classList.remove('hidden');
+            _urlStreamSyncTrimInputs();
+            _urlStreamSetInfo('Preview ready.');
+            // Load the audio into the local <audio> element AND decode to peaks for the canvas.
+            const audio = document.getElementById('urlStreamLocalAudio');
+            const previewUrl = '/api/stream-url/preview/' + encodeURIComponent(d.previewId) + '/audio';
+            audio.src = previewUrl;
+            audio.ontimeupdate = () => _urlStreamDrawWaveform();
+            audio.onended = () => { const b = document.getElementById('urlStreamLocalPlayBtn'); if (b) b.textContent = '▶'; };
+            await _urlStreamDecodePeaks(previewUrl);
+            _urlStreamDrawWaveform();
         }
+
+        async function _urlStreamDecodePeaks(previewUrl) {
+            try {
+                const res = await fetch(previewUrl, { credentials: CREDENTIALS });
+                if (!res.ok) return;
+                const buf = await res.arrayBuffer();
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const decoded = await ctx.decodeAudioData(buf);
+                const ch = decoded.getChannelData(0);
+                const bars = 400;
+                const step = Math.max(1, Math.floor(ch.length / bars));
+                const peaks = [];
+                for (let i = 0; i < bars; i++) {
+                    let min = 0, max = 0;
+                    const base = i * step;
+                    for (let j = 0; j < step && base + j < ch.length; j++) {
+                        const v = ch[base + j];
+                        if (v < min) min = v; else if (v > max) max = v;
+                    }
+                    peaks.push({ min, max });
+                }
+                if (_urlStreamPreview) {
+                    _urlStreamPreview.peaks = peaks;
+                    _urlStreamPreview.duration = decoded.duration || _urlStreamPreview.duration;
+                    if (!_urlStreamTrim.end || _urlStreamTrim.end > _urlStreamPreview.duration) _urlStreamTrim.end = _urlStreamPreview.duration;
+                }
+            } catch (e) { /* decode can fail on huge files or odd codecs; canvas just stays empty */ }
+        }
+
+        function _urlStreamDrawWaveform() {
+            const canvas = document.getElementById('urlStreamWaveform');
+            const p = _urlStreamPreview;
+            if (!canvas || !p) return;
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            const w = Math.max(200, Math.round(rect.width * dpr));
+            const h = Math.max(60, Math.round(rect.height * dpr));
+            if (canvas.width !== w) canvas.width = w;
+            if (canvas.height !== h) canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, w, h);
+            const peaks = p.peaks;
+            const mid = h / 2;
+            if (peaks && peaks.length) {
+                const barW = Math.max(1, w / peaks.length);
+                ctx.fillStyle = '#ec4899';
+                peaks.forEach((peak, i) => {
+                    const x = Math.floor(i * barW);
+                    const top = mid + peak.min * (mid - 2);
+                    const bottom = mid + peak.max * (mid - 2);
+                    ctx.fillRect(x, top, Math.max(1, barW - 0.5), Math.max(1, bottom - top));
+                });
+            } else {
+                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                ctx.fillRect(0, mid - 1, w, 2);
+            }
+            const dur = p.duration || 1;
+            // Dim outside-of-trim zones.
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            const sX = (_urlStreamTrim.start / dur) * w;
+            const eX = (_urlStreamTrim.end / dur) * w;
+            if (sX > 0) ctx.fillRect(0, 0, sX, h);
+            if (eX < w) ctx.fillRect(eX, 0, w - eX, h);
+            // Trim handles.
+            ctx.strokeStyle = '#06b6d4';
+            ctx.lineWidth = 2 * dpr;
+            ctx.beginPath(); ctx.moveTo(sX, 0); ctx.lineTo(sX, h); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(eX, 0); ctx.lineTo(eX, h); ctx.stroke();
+            // Playhead.
+            const a = document.getElementById('urlStreamLocalAudio');
+            if (a && Number.isFinite(a.currentTime)) {
+                const pX = (a.currentTime / dur) * w;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1 * dpr;
+                ctx.beginPath(); ctx.moveTo(pX, 0); ctx.lineTo(pX, h); ctx.stroke();
+            }
+            // Time label.
+            const tl = document.getElementById('urlStreamTimeLabel');
+            if (tl && a) tl.textContent = _fmtTime(a.currentTime || 0) + ' / ' + _fmtTime(dur);
+            _urlStreamSyncTrimLen();
+        }
+
+        function _urlStreamSyncTrimInputs() {
+            const s = document.getElementById('urlStreamTrimStart');
+            const e = document.getElementById('urlStreamTrimEnd');
+            if (s) s.value = _urlStreamTrim.start.toFixed(1);
+            if (e) e.value = (_urlStreamTrim.end || 0).toFixed(1);
+            _urlStreamSyncTrimLen();
+        }
+        function _urlStreamSyncTrimLen() {
+            const el = document.getElementById('urlStreamTrimLen');
+            if (!el) return;
+            const len = Math.max(0, (_urlStreamTrim.end || 0) - _urlStreamTrim.start);
+            el.textContent = '(' + len.toFixed(1) + 's)';
+        }
+        function syncUrlStreamTrimFromInputs() {
+            const p = _urlStreamPreview;
+            if (!p) return;
+            const s = Math.max(0, Number(document.getElementById('urlStreamTrimStart').value) || 0);
+            const e = Math.max(s + 0.1, Number(document.getElementById('urlStreamTrimEnd').value) || p.duration);
+            _urlStreamTrim.start = Math.min(p.duration, s);
+            _urlStreamTrim.end = Math.min(p.duration, e);
+            _urlStreamSyncTrimInputs();
+            _urlStreamDrawWaveform();
+        }
+        function resetUrlStreamTrim() {
+            if (!_urlStreamPreview) return;
+            _urlStreamTrim = { start: 0, end: _urlStreamPreview.duration };
+            _urlStreamSyncTrimInputs();
+            _urlStreamDrawWaveform();
+        }
+
+        function toggleUrlStreamLocalPlay() {
+            const a = document.getElementById('urlStreamLocalAudio');
+            const b = document.getElementById('urlStreamLocalPlayBtn');
+            if (!a || !a.src) return;
+            if (a.paused) {
+                // Start from trimStart if we're outside the trim range.
+                if (a.currentTime < _urlStreamTrim.start || a.currentTime >= _urlStreamTrim.end) a.currentTime = _urlStreamTrim.start;
+                a.play();
+                if (b) b.textContent = '⏸';
+            } else {
+                a.pause();
+                if (b) b.textContent = '▶';
+            }
+        }
+
+        function _urlStreamHitTest(e, canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) / rect.width;
+            const dur = _urlStreamPreview?.duration || 1;
+            const sFrac = _urlStreamTrim.start / dur;
+            const eFrac = (_urlStreamTrim.end || 0) / dur;
+            const margin = 6 / rect.width;
+            if (Math.abs(x - sFrac) < margin) return 'start';
+            if (Math.abs(x - eFrac) < margin) return 'end';
+            return 'seek';
+        }
+        (function attachUrlStreamWaveformHandlers() {
+            const canvas = document.getElementById('urlStreamWaveform');
+            if (!canvas) return;
+            const setFromX = (e, mode) => {
+                if (!_urlStreamPreview) return;
+                const rect = canvas.getBoundingClientRect();
+                const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                const t = frac * _urlStreamPreview.duration;
+                if (mode === 'start') {
+                    _urlStreamTrim.start = Math.min(t, (_urlStreamTrim.end || 0) - 0.1);
+                } else if (mode === 'end') {
+                    _urlStreamTrim.end = Math.max(t, _urlStreamTrim.start + 0.1);
+                } else {
+                    const a = document.getElementById('urlStreamLocalAudio');
+                    if (a) a.currentTime = t;
+                }
+                _urlStreamSyncTrimInputs();
+                _urlStreamDrawWaveform();
+            };
+            canvas.addEventListener('mousedown', (e) => {
+                _urlStreamDraggingHandle = _urlStreamHitTest(e, canvas);
+                setFromX(e, _urlStreamDraggingHandle);
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!_urlStreamDraggingHandle) return;
+                setFromX(e, _urlStreamDraggingHandle);
+            });
+            window.addEventListener('mouseup', () => { _urlStreamDraggingHandle = null; });
+        })();
+
         async function playStreamUrl() {
             const url = (document.getElementById('urlStreamInput')?.value || '').trim();
             if (!url) { _urlStreamSetInfo('Paste a URL first.', true); return; }
@@ -2727,6 +2960,46 @@
             }
             const d = await res.json();
             _urlStreamSetInfo('Streaming: ' + (d.title || url));
+        }
+
+        async function playStreamUrlTrim() {
+            const p = _urlStreamPreview;
+            if (!p) { _urlStreamSetInfo('Load a preview first.', true); return; }
+            _urlStreamSetBusy(true);
+            _urlStreamSetInfo('Starting trimmed stream…');
+            const res = await api('/api/stream-url', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ previewId: p.previewId, trimStart: _urlStreamTrim.start, trimEnd: _urlStreamTrim.end }),
+            });
+            _urlStreamSetBusy(false);
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                _urlStreamSetInfo(err.error || 'Failed to start stream.', true);
+                return;
+            }
+            const d = await res.json();
+            _urlStreamSetInfo('Streaming: ' + (d.title || p.title) + ' · ' + _fmtTime(d.duration));
+        }
+
+        async function importStreamUrl() {
+            const p = _urlStreamPreview;
+            if (!p) { _urlStreamSetInfo('Load a preview first.', true); return; }
+            const displayName = (document.getElementById('urlStreamImportName')?.value || p.title || '').trim();
+            _urlStreamSetBusy(true);
+            _urlStreamSetInfo('Importing…');
+            const res = await api('/api/stream-url/import', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ previewId: p.previewId, trimStart: _urlStreamTrim.start, trimEnd: _urlStreamTrim.end, displayName }),
+            });
+            _urlStreamSetBusy(false);
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                _urlStreamSetInfo(err.error || 'Import failed.', true);
+                return;
+            }
+            const d = await res.json();
+            _urlStreamSetInfo(d.pending ? 'Sent to moderation queue.' : 'Imported as ' + d.filename);
+            if (!d.pending && typeof fetchSounds === 'function') { fetchSounds(); setTimeout(() => { if (typeof openSoundPanelFromSound === 'function') openSoundPanelFromSound(d.filename); }, 200); }
         }
         async function setTtsCooldownSecSetting(role, val) {
             const obj = {}; obj[role] = Number(val);

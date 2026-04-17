@@ -2783,8 +2783,34 @@ app.post('/api/play', requireAuth, async (req, res) => {
 
 // --- URL streaming (YouTube / TikTok / SoundCloud / anything yt-dlp supports) ---
 const URL_STREAM_PROBE_TIMEOUT_MS = 20_000;
+const URL_STREAM_DOWNLOAD_TIMEOUT_MS = 300_000; // 5 min
+const URL_PREVIEW_DIR = path.join(DATA_DIR, 'url-stream-cache');
+const URL_PREVIEW_TTL_MS = 30 * 60 * 1000; // 30 min
+if (!fs.existsSync(URL_PREVIEW_DIR)) fs.mkdirSync(URL_PREVIEW_DIR, { recursive: true });
 const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
 let activeUrlStream = null; // { ytdlp, ff, killTimer }
+// previewId -> { filePath, url, title, duration, createdAt, username }
+const urlPreviewCache = new Map();
+
+function sweepUrlPreviews() {
+    const now = Date.now();
+    for (const [id, entry] of urlPreviewCache) {
+        if (now - entry.createdAt > URL_PREVIEW_TTL_MS) {
+            try { fs.unlinkSync(entry.filePath); } catch {}
+            urlPreviewCache.delete(id);
+        }
+    }
+    try {
+        for (const name of fs.readdirSync(URL_PREVIEW_DIR)) {
+            const full = path.join(URL_PREVIEW_DIR, name);
+            const st = fs.statSync(full);
+            if (now - st.mtimeMs > URL_PREVIEW_TTL_MS) {
+                try { fs.unlinkSync(full); } catch {}
+            }
+        }
+    } catch {}
+}
+setInterval(sweepUrlPreviews, 10 * 60 * 1000).unref();
 
 function validateStreamUrl(raw) {
     let u;
@@ -2817,6 +2843,185 @@ function killActiveUrlStream() {
     activeUrlStream = null;
 }
 
+// Download the URL audio to a server-side cache so the client can render a
+// waveform, scrub locally, and then either stream the trimmed segment to
+// Discord or import it as a sound — all without re-downloading.
+app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const url = validateStreamUrl(req.body?.url);
+    if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+    sweepUrlPreviews();
+
+    const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
+    let title = '', duration = null, uploader = '';
+    if (probe.code === 0) {
+        try {
+            const info = JSON.parse(probe.stdout);
+            title = info.title || '';
+            uploader = info.uploader || info.channel || '';
+            if (typeof info.duration === 'number') duration = info.duration;
+        } catch {}
+    } else {
+        const msg = (probe.stderr || probe.stdout || '').trim().split('\n').slice(-3).join(' / ');
+        return res.status(502).json({ error: 'Failed to probe URL: ' + (msg || 'unknown error') });
+    }
+    // Cap preview download by the play-max for this role so we don't
+    // spend minutes downloading a source a user role couldn't stream anyway.
+    const maxPlay = getUrlStreamMaxDurationSec(role);
+    if (maxPlay > 0 && duration != null && duration > maxPlay) {
+        return res.status(403).json({ error: `This clip is ${Math.ceil(duration)}s. Your role is limited to ${maxPlay}s.` });
+    }
+
+    const crypto = require('crypto');
+    const previewId = crypto.randomBytes(8).toString('hex');
+    const filePath = path.join(URL_PREVIEW_DIR, `preview-${previewId}.wav`);
+    const tmpOut = path.join(URL_PREVIEW_DIR, `preview-${previewId}.dl.%(ext)s`);
+
+    const r = await ytdlpRun([
+        '-f', 'bestaudio',
+        '-x', '--audio-format', 'wav',
+        '--audio-quality', '5',
+        '--no-playlist',
+        '--no-warnings',
+        '--quiet',
+        '-o', tmpOut,
+        url,
+    ], { timeoutMs: URL_STREAM_DOWNLOAD_TIMEOUT_MS });
+    if (r.code !== 0) {
+        const msg = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' / ');
+        return res.status(502).json({ error: 'Failed to download: ' + (msg || 'unknown error') });
+    }
+    const dlPath = path.join(URL_PREVIEW_DIR, `preview-${previewId}.dl.wav`);
+    if (!fs.existsSync(dlPath)) return res.status(502).json({ error: 'yt-dlp did not produce a WAV.' });
+    fs.renameSync(dlPath, filePath);
+
+    // Re-probe precise duration from the file we actually have.
+    let actualDuration = duration;
+    try {
+        const probed = await new Promise((resolve) => {
+            const ff = spawn('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath]);
+            let out = '';
+            ff.stdout.on('data', (d) => { out += d.toString(); });
+            ff.on('close', () => resolve(parseFloat(out.trim()) || null));
+            ff.on('error', () => resolve(null));
+        });
+        if (probed) actualDuration = probed;
+    } catch {}
+
+    urlPreviewCache.set(previewId, {
+        filePath,
+        url,
+        title,
+        uploader,
+        duration: actualDuration,
+        createdAt: Date.now(),
+        username: req.session.user.username,
+    });
+    res.json({ previewId, title, uploader, duration: actualDuration, url });
+});
+
+app.get('/api/stream-url/preview/:id/audio', requireAuth, (req, res) => {
+    const entry = urlPreviewCache.get(String(req.params.id || ''));
+    if (!entry || !fs.existsSync(entry.filePath)) return res.status(404).send('Not found');
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'private, max-age=900');
+    fs.createReadStream(entry.filePath).pipe(res);
+});
+
+// Trim a preview and save it to the sounds library. Admin/superadmin get direct
+// save; user/guest goes into the existing pending-upload queue.
+app.post('/api/stream-url/import', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const isAdminOrSuper = role === 'admin' || role === 'superadmin';
+    const canDirectUpload = isAdminOrSuper;
+    const canGuestPendingUpload = role === 'guest' && getGuestUploadEnabled();
+    const canUserPendingUpload = role === 'user' && getUserUploadEnabled();
+    const canPendingUpload = canGuestPendingUpload || canUserPendingUpload;
+    if (!canDirectUpload && !canPendingUpload) return res.status(403).json({ error: 'Importing to the library is not allowed for your role.' });
+
+    const body = req.body || {};
+    const previewId = String(body.previewId || '').trim();
+    const entry = urlPreviewCache.get(previewId);
+    if (!entry || !fs.existsSync(entry.filePath)) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
+
+    let trimStart = Number(body.trimStart);
+    let trimEnd = Number(body.trimEnd);
+    const dur = entry.duration || 0;
+    if (!Number.isFinite(trimStart) || trimStart < 0) trimStart = 0;
+    if (!Number.isFinite(trimEnd) || trimEnd <= trimStart) trimEnd = dur || (trimStart + 1);
+    if (dur && trimEnd > dur) trimEnd = dur;
+    const trimLen = Math.max(0, trimEnd - trimStart);
+    if (trimLen < 0.25) return res.status(400).json({ error: 'Trim length must be at least 0.25s.' });
+
+    // Enforce the user's upload-duration cap (same as /api/upload).
+    const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : (role === 'user' ? getUserMaxUploadDuration() : null);
+    if (maxDur != null && trimLen > maxDur) {
+        return res.status(400).json({ error: `Trim length ${Math.ceil(trimLen)}s exceeds your ${maxDur}s limit.` });
+    }
+
+    const rawName = String(body.displayName || entry.title || 'url-import').trim();
+    const baseName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'url-import';
+    let safeName = baseName + '.mp3';
+    const targetDir = canDirectUpload ? SOUNDS_DIR : PENDING_DIR;
+    let targetPath = path.join(targetDir, safeName);
+    if (fs.existsSync(targetPath)) {
+        safeName = `${baseName}_${Date.now()}.mp3`;
+        targetPath = path.join(targetDir, safeName);
+    }
+    const resolvedPath = path.resolve(targetPath);
+    if (!resolvedPath.startsWith(path.resolve(targetDir))) return res.status(403).json({ error: 'Invalid path' });
+
+    // Extract trimmed segment via ffmpeg.
+    const args = ['-nostdin', '-y', '-ss', String(trimStart), '-i', entry.filePath, '-t', String(trimLen), '-acodec', 'libmp3lame', '-q:a', '4', targetPath];
+    const code = await new Promise((resolve) => {
+        const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+        ff.stderr.on('data', () => {});
+        ff.on('error', () => resolve(-1));
+        ff.on('close', (c) => resolve(c));
+    });
+    if (code !== 0 || !fs.existsSync(targetPath)) {
+        try { fs.unlinkSync(targetPath); } catch {}
+        return res.status(500).json({ error: 'Failed to extract audio segment.' });
+    }
+
+    const finalizeWithNormalize = (cb) => {
+        const skipNormalize = body.skipNormalize === true;
+        const shouldNormalize = getAutoNormalizeUploads() && !skipNormalize;
+        if (!shouldNormalize) return cb();
+        normalizeFileInPlace(targetPath, () => cb());
+    };
+
+    finalizeWithNormalize(() => {
+        const finalDuration = probeDuration(targetPath) ?? trimLen;
+        if (canDirectUpload) {
+            setSoundMeta(safeName, { duration: finalDuration, displayName: rawName });
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: role,
+                action: 'url-stream.import',
+                target: safeName,
+                details: { url: entry.url, trimStart, trimEnd },
+            });
+            return res.json({ ok: true, pending: false, filename: safeName, displayName: rawName, duration: finalDuration });
+        }
+        let finalSize = 0;
+        try { finalSize = fs.statSync(targetPath).size; } catch {}
+        addPendingUpload(safeName, {
+            uploadedBy: req.session.user.username,
+            uploadedByRole: role,
+            uploadedByIP: null,
+            uploadedAt: Date.now(),
+            duration: finalDuration,
+            size: finalSize,
+            originalName: rawName,
+            sourceUrl: entry.url,
+        });
+        res.json({ ok: true, pending: true, filename: safeName, displayName: rawName, duration: finalDuration });
+    });
+});
+
 app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
@@ -2848,8 +3053,22 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
     if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first.' });
 
-    const url = validateStreamUrl(req.body?.url);
-    if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+    const body = req.body || {};
+    const previewId = body.previewId ? String(body.previewId).trim() : '';
+    const previewEntry = previewId ? urlPreviewCache.get(previewId) : null;
+    let url, title, duration;
+
+    if (previewId) {
+        if (!previewEntry || !fs.existsSync(previewEntry.filePath)) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
+        url = previewEntry.url;
+        title = previewEntry.title || url;
+        duration = previewEntry.duration;
+    } else {
+        url = validateStreamUrl(body.url);
+        if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+        title = url;
+        duration = null;
+    }
 
     const meta = loadSoundsMeta();
     if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
@@ -2867,23 +3086,36 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         if (startedByRole === 'superadmin' && role === 'admin') return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
     }
 
-    // Probe for title + duration
-    const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
-    let title = url, duration = null;
-    if (probe.code === 0) {
-        try {
-            const info = JSON.parse(probe.stdout);
-            title = info.title || title;
-            if (typeof info.duration === 'number') duration = info.duration;
-        } catch {}
-    } else {
-        const msg = (probe.stderr || probe.stdout || '').trim().split('\n').slice(-3).join(' / ');
-        return res.status(502).json({ error: 'Failed to probe URL: ' + (msg || 'unknown error') });
+    // Resolve trim for preview-backed streams.
+    let trimStart = 0, trimEnd = null;
+    if (previewEntry) {
+        trimStart = Number(body.trimStart);
+        trimEnd = Number(body.trimEnd);
+        if (!Number.isFinite(trimStart) || trimStart < 0) trimStart = 0;
+        if (!Number.isFinite(trimEnd) || trimEnd <= trimStart) trimEnd = duration || null;
+        if (duration && trimEnd && trimEnd > duration) trimEnd = duration;
+    }
+    const effectiveDuration = previewEntry ? (trimEnd != null ? trimEnd - trimStart : duration) : duration;
+
+    // If we didn't get a live-URL duration, probe yt-dlp for it (skipped when preview is in use).
+    if (!previewEntry) {
+        const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
+        if (probe.code === 0) {
+            try {
+                const info = JSON.parse(probe.stdout);
+                title = info.title || title;
+                if (typeof info.duration === 'number') duration = info.duration;
+            } catch {}
+        } else {
+            const msg = (probe.stderr || probe.stdout || '').trim().split('\n').slice(-3).join(' / ');
+            return res.status(502).json({ error: 'Failed to probe URL: ' + (msg || 'unknown error') });
+        }
     }
 
     const maxDur = getUrlStreamMaxDurationSec(role);
-    if (maxDur > 0 && duration != null && duration > maxDur) {
-        return res.status(403).json({ error: `This clip is ${Math.ceil(duration)}s. Your role is limited to ${maxDur}s.` });
+    const checkDur = previewEntry ? effectiveDuration : duration;
+    if (maxDur > 0 && checkDur != null && checkDur > maxDur) {
+        return res.status(403).json({ error: `Length ${Math.ceil(checkDur)}s exceeds your ${maxDur}s cap.` });
     }
 
     const conn = getVoiceConnection(activeGuildId);
@@ -2892,7 +3124,7 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
     }
 
-    // Preempt everything — URL streams are long-running and always single-play.
+    // Preempt — URL streams are always single-play.
     killActiveUrlStream();
     if (currentSinglePlayId != null) {
         statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
@@ -2906,9 +3138,9 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
     player.stop();
 
     const crypto = require('crypto');
-    const safeName = 'url:' + crypto.createHash('sha1').update(url).digest('hex').slice(0, 10);
+    const safeName = 'url:' + crypto.createHash('sha1').update(url + ':' + trimStart + ':' + (trimEnd || '')).digest('hex').slice(0, 10);
     const startedBy = { username: req.session.user.username, role };
-    const plannedDurationMs = duration != null ? Math.round(duration * 1000) : null;
+    const plannedDurationMs = effectiveDuration != null ? Math.round(effectiveDuration * 1000) : null;
     const newPlayId = statsDb.recordPlayStart({
         filename: safeName, displayName: title,
         userId: req.session.user.username, userRole: role,
@@ -2916,26 +3148,39 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
     });
 
     try {
-        const ytdlp = spawn(YT_DLP_BIN, ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
-        ytdlp.stderr.on('data', () => {});
-        ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
-        const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
-        ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
-        ff.stderr.on('data', () => {});
-        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+        let ytdlp = null, ff;
+        if (previewEntry) {
+            // Stream from cached WAV through ffmpeg with trim.
+            const ffArgs = ['-nostdin'];
+            if (trimStart > 0) ffArgs.push('-ss', String(trimStart));
+            ffArgs.push('-i', previewEntry.filePath);
+            if (trimEnd != null) ffArgs.push('-t', String(trimEnd - trimStart));
+            ffArgs.push('-vn', '-f', 'mp3', '-');
+            ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+        } else {
+            ytdlp = spawn(YT_DLP_BIN, ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
+            ytdlp.stderr.on('data', () => {});
+            ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
+            ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
+            ff.stderr.on('data', () => {});
+            ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+        }
 
-        const killAfterMs = ((duration != null ? duration : maxDur) || 600) * 1000 + 10_000;
+        const killAfterMs = ((effectiveDuration != null ? effectiveDuration : maxDur) || 600) * 1000 + 10_000;
         const killTimer = setTimeout(() => {
             console.log('[url-stream] hard-killing stream after max duration');
             try { ff.kill('SIGKILL'); } catch {}
-            try { ytdlp.kill('SIGKILL'); } catch {}
+            try { ytdlp?.kill('SIGKILL'); } catch {}
         }, killAfterMs);
 
         activeUrlStream = { ytdlp, ff, killTimer };
 
         ff.on('close', () => {
             clearTimeout(killTimer);
-            try { ytdlp.kill('SIGTERM'); } catch {}
+            try { ytdlp?.kill('SIGTERM'); } catch {}
             if (activeUrlStream && activeUrlStream.ff === ff) activeUrlStream = null;
             if (currentSinglePlayId === newPlayId) {
                 statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
@@ -2956,11 +3201,11 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
             displayName: title,
             startTime: Date.now(),
             startTimeOffset: 0,
-            duration,
+            duration: effectiveDuration,
             startedBy,
         };
         addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
-        res.json({ ok: true, title, duration, url });
+        res.json({ ok: true, title, duration: effectiveDuration, url, trimStart, trimEnd });
     } catch (err) {
         console.error('[url-stream] fatal', err);
         res.status(500).json({ error: err.message || 'Failed to start stream' });
