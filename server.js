@@ -2821,6 +2821,19 @@ const URL_PREVIEW_DIR = path.join(DATA_DIR, 'url-stream-cache');
 const URL_PREVIEW_TTL_MS = 30 * 60 * 1000; // 30 min
 if (!fs.existsSync(URL_PREVIEW_DIR)) fs.mkdirSync(URL_PREVIEW_DIR, { recursive: true });
 const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
+
+// Args applied to every yt-dlp invocation. The android/ios player clients
+// avoid YouTube's 'Sign in to confirm you're not a bot' wall that hits the
+// default web client, and also expose Shorts formats. YTDLP_COOKIES_FILE
+// lets an operator point at an exported cookies.txt for gated content.
+function ytdlpCommonArgs() {
+    const args = ['--extractor-args', 'youtube:player_client=android,ios,web'];
+    const cookies = (process.env.YTDLP_COOKIES_FILE || '').trim();
+    if (cookies) args.push('--cookies', cookies);
+    const extra = (process.env.YTDLP_EXTRA_ARGS || '').trim();
+    if (extra) args.push(...extra.split(/\s+/));
+    return args;
+}
 let activeUrlStream = null; // { ytdlp, ff, killTimer }
 // previewId -> { filePath, url, title, duration, createdAt, username }
 const urlPreviewCache = new Map();
@@ -2858,7 +2871,8 @@ function validateStreamUrl(raw) {
 
 function ytdlpRun(args, { timeoutMs = 30_000 } = {}) {
     return new Promise((resolve) => {
-        const p = spawn(YT_DLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const fullArgs = [...ytdlpCommonArgs(), ...args];
+        const p = spawn(YT_DLP_BIN, fullArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '', stderr = '';
         p.stdout.on('data', (d) => { stdout += d.toString(); });
         p.stderr.on('data', (d) => { stderr += d.toString(); });
@@ -2912,7 +2926,7 @@ app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
     const tmpOut = path.join(URL_PREVIEW_DIR, `preview-${previewId}.dl.%(ext)s`);
 
     const r = await ytdlpRun([
-        '-f', 'bestaudio',
+        '-f', 'bestaudio/best',
         '-x', '--audio-format', 'wav',
         '--audio-quality', '5',
         '--no-playlist',
@@ -3190,7 +3204,7 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
             ff.stderr.on('data', () => {});
             ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
         } else {
-            ytdlp = spawn(YT_DLP_BIN, ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
+            ytdlp = spawn(YT_DLP_BIN, [...ytdlpCommonArgs(), '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
             ytdlp.stderr.on('data', () => {});
             ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
             ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
