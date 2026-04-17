@@ -729,6 +729,17 @@
             </div>
         </div>
 
+        <div class="card hidden" id="urlStreamCard">
+            <div class="card-title">Stream from URL</div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 0.5rem;">Paste a YouTube, SoundCloud, TikTok, or other supported URL to stream its audio into the voice channel.</p>
+            <input type="url" id="urlStreamInput" placeholder="https://www.youtube.com/watch?v=..." style="width:100%; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.85rem;">
+            <div id="urlStreamInfo" style="font-size:0.8rem; color:var(--text-muted); min-height:1.1rem; margin:0.4rem 0;"></div>
+            <div style="display:flex; gap:0.4rem;">
+                <button type="button" class="btn btn-ghost btn-sm" id="urlStreamProbeBtn" onclick="probeStreamUrl()">Preview</button>
+                <button type="button" class="btn btn-primary btn-sm" id="urlStreamPlayBtn" onclick="playStreamUrl()">Play</button>
+            </div>
+        </div>
+
         <div class="card admin-only volume-card-expanded hidden" id="volumeCard">
             <div class="volume-card-header">
                 <span class="card-title">Volume</span>
@@ -1035,6 +1046,39 @@
                         </label>
                     </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">URL Streaming (YouTube / TikTok / etc.)</div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">When enabled for a role, users in that role can paste a video URL and stream its audio into Discord. yt-dlp-supported sites only; Instagram / TikTok may be brittle.</p>
+                    <div class="row" style="gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
+                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                            <input type="checkbox" id="urlStreamEnabledUser" onchange="setUrlStreamEnabledSetting('user', this.checked)">
+                            <span>Allow users</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                            <input type="checkbox" id="urlStreamEnabledAdmin" onchange="setUrlStreamEnabledSetting('admin', this.checked)">
+                            <span>Allow admins</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                            <input type="checkbox" id="urlStreamEnabledSuperadmin" onchange="setUrlStreamEnabledSetting('superadmin', this.checked)">
+                            <span>Allow superadmin</span>
+                        </label>
+                    </div>
+                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>User max duration (s):</span>
+                            <input type="number" id="urlStreamMaxDurUser" min="0" max="86400" value="60" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('user', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Admin max duration (s):</span>
+                            <input type="number" id="urlStreamMaxDurAdmin" min="0" max="86400" value="300" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('admin', this.value)">
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                            <span>Superadmin max duration (s):</span>
+                            <input type="number" id="urlStreamMaxDurSuperadmin" min="0" max="86400" value="1800" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('superadmin', this.value)">
+                        </label>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max duration to 0 to disable the length cap for that role.</p>
                 </div>
             </div>
 
@@ -2442,11 +2486,30 @@
                 if (d.ttsMaxQueueSize !== undefined) { const q = document.getElementById('ttsMaxQueueSizeInput'); if (q) q.value = d.ttsMaxQueueSize; }
                 const an = document.getElementById('autoNormalizeUploadsToggle');
                 if (an && d.autoNormalizeUploads !== undefined) an.checked = d.autoNormalizeUploads === true;
+                if (d.urlStreamEnabled) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('urlStreamEnabled' + r.charAt(0).toUpperCase() + r.slice(1));
+                        if (el && d.urlStreamEnabled[r] !== undefined) el.checked = d.urlStreamEnabled[r] === true;
+                    }
+                }
+                if (d.urlStreamMaxDurationSec) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('urlStreamMaxDur' + r.charAt(0).toUpperCase() + r.slice(1));
+                        if (el && d.urlStreamMaxDurationSec[r] !== undefined) el.value = d.urlStreamMaxDurationSec[r];
+                    }
+                }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
             }
             applyVolumeExpanded();
+            const urlCard = document.getElementById('urlStreamCard');
+            if (urlCard) urlCard.classList.toggle('hidden', !(d.urlStreamEnabled_self === true));
+            const urlInfo = document.getElementById('urlStreamInfo');
+            if (urlInfo && d.urlStreamMaxDurationSec_self != null) {
+                const m = Number(d.urlStreamMaxDurationSec_self);
+                if (!urlInfo.dataset.dirty) urlInfo.textContent = m > 0 ? 'Max length: ' + m + 's' : 'No length limit.';
+            }
             if ((user && user.role) === 'superadmin' && d.pendingCount !== undefined) {
                 updatePendingBadge(d.pendingCount, 0);
             }
@@ -2606,6 +2669,64 @@
         async function setTtsMaxTextLengthSetting(role, val) {
             const obj = {}; obj[role] = Number(val);
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsMaxTextLength: obj }) });
+        }
+        async function setUrlStreamEnabledSetting(role, enabled) {
+            const obj = {}; obj[role] = !!enabled;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamEnabled: obj }) });
+            fetchSettings();
+        }
+        async function setUrlStreamMaxDurSetting(role, val) {
+            const obj = {}; obj[role] = Number(val);
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamMaxDurationSec: obj }) });
+        }
+
+        function _urlStreamSetInfo(text, isError) {
+            const info = document.getElementById('urlStreamInfo');
+            if (!info) return;
+            info.dataset.dirty = '1';
+            info.textContent = text || '';
+            info.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+        }
+        function _urlStreamSetBusy(busy) {
+            ['urlStreamProbeBtn', 'urlStreamPlayBtn', 'urlStreamInput'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = !!busy;
+            });
+        }
+        async function probeStreamUrl() {
+            const url = (document.getElementById('urlStreamInput')?.value || '').trim();
+            if (!url) { _urlStreamSetInfo('Paste a URL first.', true); return; }
+            _urlStreamSetBusy(true);
+            _urlStreamSetInfo('Probing…');
+            const res = await api('/api/stream-url/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+            _urlStreamSetBusy(false);
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                _urlStreamSetInfo(err.error || 'Failed to probe.', true);
+                return;
+            }
+            const d = await res.json();
+            const mins = d.duration != null ? (Math.floor(d.duration / 60) + ':' + String(Math.floor(d.duration % 60)).padStart(2, '0')) : '?';
+            const parts = [d.title || '(no title)'];
+            if (d.uploader) parts.push('by ' + d.uploader);
+            parts.push(mins);
+            if (d.extractor) parts.push(d.extractor);
+            _urlStreamSetInfo(parts.join(' · '));
+        }
+        async function playStreamUrl() {
+            const url = (document.getElementById('urlStreamInput')?.value || '').trim();
+            if (!url) { _urlStreamSetInfo('Paste a URL first.', true); return; }
+            _urlStreamSetBusy(true);
+            _urlStreamSetInfo('Starting stream…');
+            const res = await api('/api/stream-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+            _urlStreamSetBusy(false);
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                _urlStreamSetInfo(err.error || 'Failed to start stream.', true);
+                return;
+            }
+            const d = await res.json();
+            _urlStreamSetInfo('Streaming: ' + (d.title || url));
         }
         async function setTtsCooldownSecSetting(role, val) {
             const obj = {}; obj[role] = Number(val);

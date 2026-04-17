@@ -294,6 +294,32 @@ function setTtsCooldownSec(role, sec) {
     saveGuestData(d);
 }
 
+// --- URL streaming settings (per-role enable + max duration) ---
+function getUrlStreamEnabled(role) {
+    const d = loadGuestData();
+    // Default: admin + superadmin on, user/guest off
+    const defaults = { guest: false, user: false, admin: true, superadmin: true };
+    const key = 'urlStreamEnabled_' + role;
+    return typeof d[key] === 'boolean' ? d[key] : !!defaults[role];
+}
+function setUrlStreamEnabled(role, v) {
+    const d = loadGuestData();
+    d['urlStreamEnabled_' + role] = v === true;
+    saveGuestData(d);
+}
+function getUrlStreamMaxDurationSec(role) {
+    const d = loadGuestData();
+    const defaults = { guest: 0, user: 60, admin: 300, superadmin: 1800 };
+    const key = 'urlStreamMaxDurationSec_' + role;
+    const n = Number(d[key]);
+    return Number.isFinite(n) && n >= 0 ? n : (defaults[role] ?? 300);
+}
+function setUrlStreamMaxDurationSec(role, sec) {
+    const d = loadGuestData();
+    d['urlStreamMaxDurationSec_' + role] = Number(sec) >= 0 ? Number(sec) : 0;
+    saveGuestData(d);
+}
+
 // --- TTS voice management (stored in guest.json) ---
 function getTtsDisabledVoices() {
     const d = loadGuestData();
@@ -1682,6 +1708,13 @@ app.get('/api/settings', requireAuth, (req, res) => {
     const role = req.session.user.role;
     out.ttsMaxTextLength_self = getTtsMaxTextLength(role);
     out.ttsCooldownSec_self = getTtsCooldownSec(role);
+    // URL streaming: per-role config (superadmin sees full matrix, others get only their own)
+    if (req.session.user.role === 'superadmin') {
+        out.urlStreamEnabled = { guest: getUrlStreamEnabled('guest'), user: getUrlStreamEnabled('user'), admin: getUrlStreamEnabled('admin'), superadmin: getUrlStreamEnabled('superadmin') };
+        out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
+    }
+    out.urlStreamEnabled_self = getUrlStreamEnabled(role);
+    out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role);
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
@@ -1761,6 +1794,20 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (Array.isArray(ttsDisabledVoices)) { setTtsDisabledVoices(ttsDisabledVoices); out.ttsDisabledVoices = getTtsDisabledVoices(); }
         if (ttsVoiceRvcOverrides && typeof ttsVoiceRvcOverrides === 'object' && !Array.isArray(ttsVoiceRvcOverrides)) { setTtsVoiceRvcOverrides(ttsVoiceRvcOverrides); out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides(); }
         if (typeof ttsMaxQueueSize === 'number') { setTtsMaxQueueSize(ttsMaxQueueSize); out.ttsMaxQueueSize = getTtsMaxQueueSize(); }
+        // URL streaming settings
+        const { urlStreamEnabled, urlStreamMaxDurationSec } = req.body;
+        if (urlStreamEnabled && typeof urlStreamEnabled === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof urlStreamEnabled[r] === 'boolean') setUrlStreamEnabled(r, urlStreamEnabled[r]);
+            }
+            out.urlStreamEnabled = { guest: getUrlStreamEnabled('guest'), user: getUrlStreamEnabled('user'), admin: getUrlStreamEnabled('admin'), superadmin: getUrlStreamEnabled('superadmin') };
+        }
+        if (urlStreamMaxDurationSec && typeof urlStreamMaxDurationSec === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof urlStreamMaxDurationSec[r] === 'number' && urlStreamMaxDurationSec[r] >= 0) setUrlStreamMaxDurationSec(r, urlStreamMaxDurationSec[r]);
+            }
+            out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
+        }
     }
     res.json(Object.keys(out).length ? out : { ok: true });
 });
@@ -2734,6 +2781,192 @@ app.post('/api/play', requireAuth, async (req, res) => {
     }
 });
 
+// --- URL streaming (YouTube / TikTok / SoundCloud / anything yt-dlp supports) ---
+const URL_STREAM_PROBE_TIMEOUT_MS = 20_000;
+const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
+let activeUrlStream = null; // { ytdlp, ff, killTimer }
+
+function validateStreamUrl(raw) {
+    let u;
+    try { u = new URL(String(raw || '').trim()); } catch { return null; }
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const host = u.hostname.toLowerCase();
+    if (host === 'localhost' || host === '::1') return null;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return null;
+    if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return null;
+    return u.toString();
+}
+
+function ytdlpRun(args, { timeoutMs = 30_000 } = {}) {
+    return new Promise((resolve) => {
+        const p = spawn(YT_DLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        p.stdout.on('data', (d) => { stdout += d.toString(); });
+        p.stderr.on('data', (d) => { stderr += d.toString(); });
+        const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, timeoutMs);
+        p.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+        p.on('error', (err) => { clearTimeout(timer); resolve({ code: -1, stdout, stderr: String(err) }); });
+    });
+}
+
+function killActiveUrlStream() {
+    if (!activeUrlStream) return;
+    try { activeUrlStream.ff?.kill('SIGKILL'); } catch {}
+    try { activeUrlStream.ytdlp?.kill('SIGKILL'); } catch {}
+    if (activeUrlStream.killTimer) clearTimeout(activeUrlStream.killTimer);
+    activeUrlStream = null;
+}
+
+app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const url = validateStreamUrl(req.body?.url);
+    if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+    const r = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
+    if (r.code !== 0) {
+        const msg = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' / ');
+        return res.status(502).json({ error: 'Failed to probe URL: ' + (msg || 'unknown error') });
+    }
+    try {
+        const info = JSON.parse(r.stdout);
+        res.json({
+            title: info.title || '',
+            uploader: info.uploader || info.channel || '',
+            duration: typeof info.duration === 'number' ? info.duration : null,
+            thumbnail: info.thumbnail || null,
+            extractor: info.extractor_key || info.extractor || null,
+            webpage_url: info.webpage_url || url,
+        });
+    } catch {
+        res.status(502).json({ error: 'Could not parse metadata.' });
+    }
+});
+
+app.post('/api/stream-url', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot stream URLs.' });
+    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first.' });
+
+    const url = validateStreamUrl(req.body?.url);
+    if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+
+    const meta = loadSoundsMeta();
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
+    }
+
+    const currentStatus = player.state.status;
+    const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
+    const startedByRole = playbackState.startedBy?.role;
+    if (isSomeonePlaying) {
+        if ((startedByRole === 'admin' || startedByRole === 'superadmin') && role === 'user') return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
+        if (startedByRole === 'superadmin' && role === 'admin') return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
+    }
+
+    // Probe for title + duration
+    const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
+    let title = url, duration = null;
+    if (probe.code === 0) {
+        try {
+            const info = JSON.parse(probe.stdout);
+            title = info.title || title;
+            if (typeof info.duration === 'number') duration = info.duration;
+        } catch {}
+    } else {
+        const msg = (probe.stderr || probe.stdout || '').trim().split('\n').slice(-3).join(' / ');
+        return res.status(502).json({ error: 'Failed to probe URL: ' + (msg || 'unknown error') });
+    }
+
+    const maxDur = getUrlStreamMaxDurationSec(role);
+    if (maxDur > 0 && duration != null && duration > maxDur) {
+        return res.status(403).json({ error: `This clip is ${Math.ceil(duration)}s. Your role is limited to ${maxDur}s.` });
+    }
+
+    const conn = getVoiceConnection(activeGuildId);
+    if (conn && conn.state?.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
+        catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
+    }
+
+    // Preempt everything — URL streams are long-running and always single-play.
+    killActiveUrlStream();
+    if (currentSinglePlayId != null) {
+        statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+        currentSinglePlayId = null;
+    }
+    if (multiPlayEnabled) {
+        finalizeAllOpenPlays(true);
+        if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
+    }
+    player.stop();
+
+    const crypto = require('crypto');
+    const safeName = 'url:' + crypto.createHash('sha1').update(url).digest('hex').slice(0, 10);
+    const startedBy = { username: req.session.user.username, role };
+    const plannedDurationMs = duration != null ? Math.round(duration * 1000) : null;
+    const newPlayId = statsDb.recordPlayStart({
+        filename: safeName, displayName: title,
+        userId: req.session.user.username, userRole: role,
+        guestIp: null, plannedDurationMs,
+    });
+
+    try {
+        const ytdlp = spawn(YT_DLP_BIN, ['-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.stderr.on('data', () => {});
+        ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
+        const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+        ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
+        ff.stderr.on('data', () => {});
+        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+
+        const killAfterMs = ((duration != null ? duration : maxDur) || 600) * 1000 + 10_000;
+        const killTimer = setTimeout(() => {
+            console.log('[url-stream] hard-killing stream after max duration');
+            try { ff.kill('SIGKILL'); } catch {}
+            try { ytdlp.kill('SIGKILL'); } catch {}
+        }, killAfterMs);
+
+        activeUrlStream = { ytdlp, ff, killTimer };
+
+        ff.on('close', () => {
+            clearTimeout(killTimer);
+            try { ytdlp.kill('SIGTERM'); } catch {}
+            if (activeUrlStream && activeUrlStream.ff === ff) activeUrlStream = null;
+            if (currentSinglePlayId === newPlayId) {
+                statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
+                currentSinglePlayId = null;
+            }
+        });
+
+        const resource = createAudioResource(ff.stdout, {
+            inputType: StreamType.Arbitrary, inlineVolume: true,
+            metadata: { filename: safeName, displayName: title },
+        });
+        resource.volume.setVolume(currentVolume);
+        player.play(resource);
+        currentSinglePlayId = newPlayId;
+        playbackState = {
+            status: 'playing',
+            filename: safeName,
+            displayName: title,
+            startTime: Date.now(),
+            startTimeOffset: 0,
+            duration,
+            startedBy,
+        };
+        addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
+        res.json({ ok: true, title, duration, url });
+    } catch (err) {
+        console.error('[url-stream] fatal', err);
+        res.status(500).json({ error: err.message || 'Failed to start stream' });
+    }
+});
+
 app.get('/api/playback-state', requireAuth, (req, res) => {
     const statusMap = {
         [AudioPlayerStatus.Idle]: 'idle',
@@ -2882,6 +3115,7 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     player.stop();
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
+    killActiveUrlStream();
     ttsQueue.length = 0;
     ttsIsPlaying = false;
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
