@@ -387,7 +387,6 @@
         .sound-btn.hm-3 .sound-btn-duration, .sound-btn.hm-4 .sound-btn-duration,
         .mobile-grid-btn.hm-1 .duration, .mobile-grid-btn.hm-2 .duration,
         .mobile-grid-btn.hm-3 .duration, .mobile-grid-btn.hm-4 .duration { color: rgba(255,255,255,0.8); }
-        .sounds-option-item.hm-active { background: var(--accent); color: white; }
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
@@ -1551,6 +1550,10 @@
             if (soundsCard) soundsCard.classList.toggle('mobile-active', mobileView);
             if (mobileBtn) mobileBtn.classList.toggle('active', mobileView);
             if (mobileView) renderMobileGrid();
+            heatmapMode = prefs.heatmap === true;
+            const heatmapBtn = document.getElementById('heatmapBtn');
+            if (heatmapBtn) heatmapBtn.classList.toggle('active', heatmapMode);
+            if (heatmapMode) refreshPlayCounts().then(() => renderSoundsGrid());
             applyVolumeExpanded();
             applyRecentPlayerExpanded();
         }
@@ -1566,12 +1569,13 @@
         async function toggleHeatmapMode() {
             heatmapMode = !heatmapMode;
             const btn = document.getElementById('heatmapBtn');
-            if (btn) btn.classList.toggle('hm-active', heatmapMode);
+            if (btn) btn.classList.toggle('active', heatmapMode);
             if (heatmapMode) {
                 await refreshPlayCounts();
             } else {
                 playCountsMap = {};
             }
+            savePrefs({ heatmap: heatmapMode });
             renderSoundsGrid();
         }
 
@@ -1581,6 +1585,16 @@
                 if (!res || !res.ok) { playCountsMap = {}; return; }
                 playCountsMap = await res.json() || {};
             } catch { playCountsMap = {}; }
+        }
+        let _playCountsRefreshTimer = null;
+        function schedulePlayCountsRefresh() {
+            if (_playCountsRefreshTimer) return;
+            _playCountsRefreshTimer = setTimeout(async () => {
+                _playCountsRefreshTimer = null;
+                if (!heatmapMode) return;
+                await refreshPlayCounts();
+                renderSoundsGrid();
+            }, 600);
         }
 
         function heatmapLevelForFilename(filename, maxCount) {
@@ -4944,6 +4958,9 @@
                 const startedByChanged = prevStartedByRole !== (playback.startedBy && playback.startedBy.role);
                 const filenameChanged = prevFilename !== playback.filename;
                 if (statusChanged || startedByChanged || filenameChanged) renderSoundsGrid();
+                if (heatmapMode && (filenameChanged || (statusChanged && playback.status === 'idle'))) {
+                    schedulePlayCountsRefresh();
+                }
                 if (state.voiceConnected !== undefined && isAdminOrSuperadmin()) {
                     const connectionCard = document.getElementById('connectionCard');
                     const voiceBar = document.getElementById('voiceConnectedBar');
