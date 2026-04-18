@@ -116,8 +116,18 @@
         .header-menu-item { display: block; width: 100%; padding: 0.5rem 0.6rem; text-align: left; font-size: 0.85rem; background: none; border: none; border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
         .header-menu-item:hover { background: var(--surface-hover); }
         .header-menu-item .pending-badge { margin-left: 0.35rem; padding: 0.1rem 0.35rem; font-size: 0.7rem; background: var(--danger); color: white; border-radius: 10px; }
-        .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+        .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; z-index: 1; }
         .superadmin-close-btn:hover { border-color: var(--accent); color: var(--accent); }
+        /* Superadmin modal overlay: sits on top of the sounds view, dimmed
+           backdrop, large panel on big screens. Click-outside closes (handler
+           is on the overlay itself). */
+        .superadmin-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(3px); z-index: 900; display: flex; align-items: center; justify-content: center; padding: 2vh 2vw; overscroll-behavior: contain; }
+        .superadmin-overlay.hidden { display: none; }
+        .superadmin-overlay .superadmin-modal-card { position: relative; width: min(90vw, 1400px); height: min(90vh, 1200px); max-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,0.6); overflow-y: auto; padding: 1.5rem 1.25rem; scrollbar-width: thin; }
+        @media (max-width: 900px) {
+            .superadmin-overlay { padding: 0; }
+            .superadmin-overlay .superadmin-modal-card { width: 100vw; height: 100vh; max-width: 100vw; border-radius: 0; border: none; }
+        }
         .superadmin-tabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; flex-wrap: wrap; }
         .superadmin-tab { padding: 0.4rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.85rem; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 0.35rem; }
         .superadmin-tab .tab-badge { padding: 0.1rem 0.35rem; font-size: 0.7rem; background: var(--danger); color: white; border-radius: 10px; }
@@ -1014,11 +1024,11 @@
         </div><!-- .main-panel -->
         </div>
 
-        <div id="superadminView" class="main-view hidden">
-        <div class="card" id="superadminCard" style="position:relative">
+        <div id="superadminView" class="superadmin-overlay hidden" onclick="if(event.target===this)switchMainTab('sounds')">
+        <div class="superadmin-modal-card" id="superadminCard">
             <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
                 <span>Superadmin</span>
-                <button type="button" class="superadmin-close-btn" onclick="switchMainTab('sounds')" title="Back to soundboard">✕</button>
+                <button type="button" class="superadmin-close-btn" onclick="switchMainTab('sounds')" title="Close">✕</button>
             </div>
             <div class="superadmin-tabs">
                 <button type="button" class="superadmin-tab active" data-panel="access" onclick="switchSuperadminTab('access')">Access & Limits</button>
@@ -2332,7 +2342,9 @@
         function isAdminOrSuperadmin() { return (user && user.role) === 'admin' || (user && user.role) === 'superadmin'; }
 
         function switchMainTab(tab) {
-            document.getElementById('soundsView').classList.toggle('hidden', tab !== 'sounds');
+            // Superadmin is an overlay now, not a separate view — keep the
+            // sounds view visible underneath so closing the modal returns the
+            // user to exactly the state they left.
             document.getElementById('superadminView').classList.toggle('hidden', tab !== 'superadmin');
             if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); }
         }
@@ -7014,8 +7026,10 @@
                 // sound filter as a fallback. Previously this only worked when
                 // the search input itself was focused.
                 if (e.key === 'Escape') {
-                    const overlay = document.getElementById('shortcutsOverlay');
-                    if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
+                    const shortcutsOverlay = document.getElementById('shortcutsOverlay');
+                    if (shortcutsOverlay && !shortcutsOverlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
+                    const superadminOverlay = document.getElementById('superadminView');
+                    if (superadminOverlay && !superadminOverlay.classList.contains('hidden')) { e.preventDefault(); switchMainTab('sounds'); return; }
                     const panelOverlay = document.getElementById('soundPanelOverlay');
                     if (panelOverlay && !panelOverlay.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); return; }
                     const sfi = document.getElementById('soundFilterInput');
