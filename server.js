@@ -4313,28 +4313,41 @@ app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
 });
 
 // Play a Suno staging track straight to Discord without requiring Save first.
+// Prefers the fully-downloaded local MP3, falls back to the Suno stream URL
+// (ffmpeg pulls HTTP directly, so we don't have to wait for the full download).
 // Limited to users with Suno access (same gate as /generate).
 app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async (req, res) => {
     const slot = parseInt(req.params.slot, 10);
-    const audioPath = sunoGen.getSlotAudioPath(req.params.taskId, slot);
-    if (!audioPath) return res.status(404).json({ error: 'Final audio not downloaded yet — wait for SUCCESS.' });
+    const taskId = req.params.taskId;
+    let ffInput = sunoGen.getSlotAudioPath(taskId, slot);
+    let sourceKind = 'local';
+    if (!ffInput) {
+        // Not downloaded yet — look up the live stream URL from staging meta
+        const meta = sunoGen.getStagingMeta(taskId);
+        const track = meta && meta.tracks && meta.tracks[slot];
+        if (track && track.stream_url) { ffInput = track.stream_url; sourceKind = 'stream'; }
+    }
+    if (!ffInput) return res.status(404).json({ error: 'Neither local MP3 nor stream URL available yet' });
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first' });
 
-    // Ensure voice connection is ready (same dance as /api/play)
     const conn = getVoiceConnection(activeGuildId);
     if (conn && conn.state.status !== 'ready') {
         try { await entersState(conn, VoiceConnectionStatus.Ready, 15000); }
         catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
     }
 
-    // Pull the title/lyrics from staging meta for Now Playing display
-    const meta = sunoGen.getStagingMeta(req.params.taskId);
+    const meta = sunoGen.getStagingMeta(taskId);
     const track = meta && meta.tracks && meta.tracks[slot];
-    const displayName = (track && track.title) ? ('🎵 ' + track.title) : 'Suno preview';
+    const displayName = (track && track.title) ? ('🎵 ' + track.title + (sourceKind === 'stream' ? ' (streaming)' : '')) : 'Suno preview';
     const startedBy = { username: req.session.user.username, role: req.session.user.role };
 
     try {
-        const ff = spawn('ffmpeg', ['-nostdin', '-i', audioPath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        // For a local file path we use it directly; for a stream URL ffmpeg
+        // downloads as-needed. -reconnect flags help with Suno CDN hiccups.
+        const ffArgs = ['-nostdin'];
+        if (sourceKind === 'stream') ffArgs.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3');
+        ffArgs.push('-i', ffInput, '-f', 'mp3', '-');
+        const ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
         ff.stderr.on('data', () => {});
         ff.on('error', (err) => console.error('[Suno play] ffmpeg error', err));
         const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'suno_preview', displayName } });
@@ -4346,7 +4359,7 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async 
             duration: (track && track.duration) || null,
             startedBy, tts: false,
         };
-        res.json({ ok: true, displayName });
+        res.json({ ok: true, displayName, sourceKind });
     } catch (err) {
         console.error('[Suno play] error:', err);
         res.status(500).json({ error: 'Failed to start Discord playback' });

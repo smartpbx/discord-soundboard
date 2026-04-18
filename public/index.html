@@ -6484,8 +6484,9 @@
                 const dur = t.duration ? Math.round(t.duration) + 's' : '';
                 const coverUrl = t.image_url || ('/api/suno/cover/' + encodeURIComponent(_sunoTaskId) + '/' + slot);
                 const localPreviewUrl = '/api/suno/preview/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+                const anyPlayable = localReady || !!streamUrl;
                 const saveDisabled = localReady ? '' : ' disabled title="This variant\'s final MP3 is still downloading"';
-                const playDiscordDisabled = localReady ? '' : ' disabled title="Wait for final MP3 before playing to Discord"';
+                const playDiscordDisabled = anyPlayable ? '' : ' disabled title="Wait for audio to be available"';
 
                 let row = document.getElementById(rowId);
                 if (!row || wasPlaceholder) {
@@ -6541,7 +6542,7 @@
                     else hintEl.textContent = 'Audio not ready yet.';
                 }
                 if (saveBtn) saveBtn.disabled = !localReady;
-                if (discBtn) discBtn.disabled = !localReady;
+                if (discBtn) discBtn.disabled = !(localReady || streamUrl);
             }
 
             // Remove orphan rows if Suno returned fewer tracks than last render
