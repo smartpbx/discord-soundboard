@@ -3,11 +3,16 @@
 
 Outputs to <job_dir>/raw/<NN>_<sanitized_title>.wav. Skips URLs whose
 output file already exists. yt-dlp is invoked as a subprocess.
+
+Downloads run in a small thread pool so a multi-URL job doesn't wait
+for each clip to finish before starting the next — YouTube throttles
+aggressive parallelism so we cap at MAX_CONCURRENT_DOWNLOADS.
 """
 import argparse
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,6 +21,7 @@ from _status import phase_run, load_input, emit
 
 PHASE = "download"
 YT_DLP = "/usr/local/bin/yt-dlp"
+MAX_CONCURRENT_DOWNLOADS = 3
 
 
 def sanitize(title: str) -> str:
@@ -65,16 +71,27 @@ def main():
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         downloaded = []
-        for i, url in enumerate(urls, start=1):
-            run.progress(current=i, total=len(urls), url=url)
-            path = download_one(url, raw_dir, i)
-            if path and path.exists():
-                downloaded.append(str(path.relative_to(job_dir)))
+        completed = 0
+        total = len(urls)
+        run.progress(current=0, total=total)
+        with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_DOWNLOADS, total)) as ex:
+            futures = {ex.submit(download_one, url, raw_dir, i): url for i, url in enumerate(urls, start=1)}
+            for fut in as_completed(futures):
+                completed += 1
+                url = futures[fut]
+                try:
+                    path = fut.result()
+                except Exception as e:
+                    emit(PHASE, "progress", url=url, error=str(e)[:300])
+                    path = None
+                if path and path.exists():
+                    downloaded.append(str(path.relative_to(job_dir)))
+                run.progress(current=completed, total=total, url=url)
 
         if not downloaded:
             raise RuntimeError("All downloads failed")
 
-        run.done(files=len(downloaded), urls_count=len(urls), output_dir="raw/")
+        run.done(files=len(downloaded), urls_count=total, output_dir="raw/")
 
 
 if __name__ == "__main__":

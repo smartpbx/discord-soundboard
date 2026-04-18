@@ -102,7 +102,7 @@ def main():
         voice_id = inp["voice_id"]
         total_epoch = int(inp.get("total_epoch", 200))
         save_every = int(inp.get("save_every_epoch", 25))
-        batch_size = int(inp.get("batch_size", 8))
+        batch_size = int(inp.get("batch_size", 16))
         sample_rate = int(inp.get("sample_rate", 40000))
 
         chunks_src = job_dir / "chunks"
@@ -174,7 +174,9 @@ def main():
                     "--gpu", "0",
                     "--sample_rate", str(sample_rate),
                     "--embedder_model", "contentvec",
-                    "--include_mutes", "2",
+                    # 1 mute per pitch level is enough — 2 doubles the padding
+                    # segments for a barely-perceptible quality gain.
+                    "--include_mutes", "1",
                 ], train_log)
                 if rc != 0:
                     raise RuntimeError(f"Applio extract failed (rc={rc})")

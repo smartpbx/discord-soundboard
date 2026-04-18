@@ -41,7 +41,9 @@ def main():
     ap.add_argument("--default-exaggeration", type=float, default=0.7)
     ap.add_argument("--total-epoch", type=int, default=200)
     ap.add_argument("--save-every-epoch", type=int, default=25)
-    ap.add_argument("--batch-size", type=int, default=8)
+    # RTX 3090 has 24 GB; 16 fits comfortably and roughly halves wall time
+    # per epoch vs 8. If you later use a smaller GPU, pass --batch-size 8.
+    ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--sample-rate", type=int, default=40000, choices=[32000, 40000, 48000])
     ap.add_argument("--whisper-model", default="base", choices=["tiny", "base", "small", "medium"])
     ap.add_argument("--job-id", default=None,
