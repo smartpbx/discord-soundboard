@@ -333,6 +333,12 @@
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
+        /* Preview button: shows play arrow normally, swaps to stop square
+           while the local preview is active so a second click is obviously
+           "stop". Both SVGs live in the markup; CSS toggles which is visible. */
+        .sound-preview .sp-stop { display: none; }
+        .sound-preview.playing .sp-play { display: none; }
+        .sound-preview.playing .sp-stop { display: inline-block; }
         .sound-preview, .sound-edit, .sound-fav {
             width: 24px; height: 24px; padding: 0;
             border: none; background: var(--surface);
@@ -4127,7 +4133,7 @@
                         </button>
                         <div class="sound-item-actions">
                             ${favBtn}
-                            <button type="button" class="sound-preview" data-filename="${filename}" title="Preview (play locally)" onclick="event.stopPropagation(); previewSound(this.dataset.filename, this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg></button>
+                            <button type="button" class="sound-preview" data-filename="${filename}" title="Preview (play locally) — click again to stop" onclick="event.stopPropagation(); previewSound(this.dataset.filename, this)"><svg class="sp-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg><svg class="sp-stop" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
                             ${editBtn}
                         </div>
                     </div>`;
