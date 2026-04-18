@@ -31,19 +31,51 @@ APPLIO_DATASETS = APPLIO_DIR / "datasets"
 APPLIO_LOGS = APPLIO_DIR / "logs"
 TTS_UNIT = "tts-server.service"
 GSV_UNIT = "gptsovits.service"
+TTS_URL = os.environ.get("TTS_URL", "http://127.0.0.1:8880")
+
+
+def set_tts_training_mode(run, active: bool, reason: str = ""):
+    """Toggle TTS server's training-mode flag.
+
+    Preferred path: hit POST /admin/training-mode so the TTS server stays up,
+    drops RVC + Chatterbox caches, and rejects synth requests with a clear
+    503 instead of a connection refused. Voice listing keeps working, so
+    the soundboard UI doesn't go blank during training.
+
+    Fallback: if the endpoint is unreachable (older TTS version), stop/start
+    the systemd unit like we used to.
+    """
+    import urllib.request
+    import urllib.error
+    import json as _json
+    url = f"{TTS_URL}/admin/training-mode"
+    payload = _json.dumps({"active": active, "reason": reason}).encode()
+    req = urllib.request.Request(url, data=payload, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            run.progress(action="tts_training_mode", active=active, via="api")
+            return True
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+        run.progress(action="tts_training_mode_fallback", error=str(e)[:120])
+        # Old-school fallback: stop/start services. Keeps Phase 5 working on
+        # TTS deployments without the admin endpoint.
+        if active:
+            subprocess.run(["systemctl", "stop", TTS_UNIT], check=False)
+            subprocess.run(["systemctl", "stop", GSV_UNIT], check=False)
+            time.sleep(3)
+        else:
+            subprocess.run(["systemctl", "start", TTS_UNIT], check=False)
+            subprocess.run(["systemctl", "start", GSV_UNIT], check=False)
+        return False
 
 
 def stop_tts(run):
-    run.progress(action="stopping_tts_for_gpu_memory")
-    subprocess.run(["systemctl", "stop", TTS_UNIT], check=False)
-    subprocess.run(["systemctl", "stop", GSV_UNIT], check=False)
-    time.sleep(3)
+    set_tts_training_mode(run, active=True, reason="rvc_training")
 
 
 def start_tts(run):
-    run.progress(action="restarting_tts")
-    subprocess.run(["systemctl", "start", TTS_UNIT], check=False)
-    subprocess.run(["systemctl", "start", GSV_UNIT], check=False)
+    set_tts_training_mode(run, active=False, reason="rvc_training_done")
 
 
 def run_applio(args, log_path: Path):

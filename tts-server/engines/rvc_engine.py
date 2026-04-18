@@ -34,6 +34,28 @@ _synthesizers = {}  # cache: model_id -> (net_g, if_f0, target_sr)
 _faiss_indexes = {}  # cache: index_path -> (index, big_npy)
 
 
+def free_caches():
+    """Drop all cached RVC models + FAISS indexes + HuBERT from GPU memory.
+
+    Called on training-mode enter — these are the largest 3090 tenants on
+    the TTS side (each RVC voice loads ~2–3 GB, indices another ~2 GB per
+    voice, HuBERT another ~1 GB). Next synth request lazy-reloads.
+    """
+    import torch as _torch
+    global _hubert_model
+    n_synth = len(_synthesizers)
+    n_idx = len(_faiss_indexes)
+    _synthesizers.clear()
+    _faiss_indexes.clear()
+    _hubert_model = None
+    log.info("RVC: freed %d synthesizers, %d indexes, hubert", n_synth, n_idx)
+    try:
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
+    except Exception as e:
+        log.warning("RVC: empty_cache failed: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # Manifest / voice listing (unchanged public API)
 # ---------------------------------------------------------------------------

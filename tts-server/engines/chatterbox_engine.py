@@ -129,6 +129,24 @@ def invalidate_voice(voice_id: str = None):
         _conditionals.clear()
 
 
+def free_caches():
+    """Evict the Chatterbox model + cached conditionals from GPU memory.
+
+    Called when the pipeline enters training mode — the ~2 GB Chatterbox
+    model is the biggest TTS-side tenant of the 3090 other than RVC. Next
+    /synthesize call will lazily reload (adds ~5 s latency once).
+    """
+    global _model
+    log.info("Chatterbox: freeing model + %d cached conditionals", len(_conditionals))
+    _model = None
+    _conditionals.clear()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception as e:
+        log.warning("Chatterbox: empty_cache failed: %s", e)
+
+
 def get_models_dir() -> str:
     return MODELS_DIR
 

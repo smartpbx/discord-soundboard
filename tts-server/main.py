@@ -59,6 +59,46 @@ class VoiceInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Training mode — drops big model caches during RVC training so the 3090
+# doesn't OOM. Set via POST /admin/training-mode. While active, synthesize
+# calls return 503 (voice LISTING still works — the soundboard UI stays
+# functional; only synth is paused).
+# ---------------------------------------------------------------------------
+_TRAINING_MODE = False
+_TRAINING_MODE_SINCE = None
+
+
+class TrainingModeRequest(BaseModel):
+    active: bool
+    reason: Optional[str] = None
+
+
+@app.post("/admin/training-mode")
+def set_training_mode(req: TrainingModeRequest):
+    global _TRAINING_MODE, _TRAINING_MODE_SINCE
+    if req.active:
+        if not _TRAINING_MODE:
+            log.info("Entering training mode (%s) — freeing GPU caches", req.reason or "no reason given")
+            try: chatterbox_engine.free_caches()
+            except Exception as e: log.warning("chatterbox free_caches failed: %s", e)
+            try: rvc_engine.free_caches()
+            except Exception as e: log.warning("rvc free_caches failed: %s", e)
+        _TRAINING_MODE = True
+        _TRAINING_MODE_SINCE = time.time()
+    else:
+        if _TRAINING_MODE:
+            log.info("Leaving training mode (%s) — caches will lazy-reload on next synth", req.reason or "no reason given")
+        _TRAINING_MODE = False
+        _TRAINING_MODE_SINCE = None
+    return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
+
+
+@app.get("/admin/training-mode")
+def get_training_mode():
+    return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -91,6 +131,14 @@ def voices():
 
 @app.post("/synthesize")
 def synthesize(req: SynthesizeRequest):
+    if _TRAINING_MODE:
+        # Lazy-loading while training is active would trigger OOM — the 3090
+        # is already at ~8 GB for the train loop. Fail fast with a clear
+        # message so the soundboard can surface it instead of hanging.
+        raise HTTPException(
+            status_code=503,
+            detail="Voice synthesis is paused while a training job is running. Try again in a few minutes.",
+        )
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text is empty")
