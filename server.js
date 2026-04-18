@@ -4212,19 +4212,22 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
 app.get('/api/suno/status/:taskId', requireAuth, async (req, res) => {
     const taskId = req.params.taskId;
     try {
-        // If we've already ingested, don't re-poll Suno — return cached meta.
+        // Short-circuit: if we've already downloaded the final audio, return cached meta.
         const cached = sunoGen.getStagingMeta(taskId);
-        if (cached && cached.tracks && cached.tracks.length && cached.tracks.some(t => t.audio_bytes)) {
-            return res.json({ status: 'SUCCESS', tracks: cached.tracks });
+        if (cached && cached.tracks && cached.tracks.some(t => t.audio_bytes)) {
+            return res.json({ status: cached.status || 'SUCCESS', tracks: cached.tracks });
         }
         const payload = await sunoGen.getSongStatus(taskId);
-        const status = (payload && (payload.status || (payload.response && payload.response.status))) || 'PENDING';
-        // On completion, download assets into staging. Safe to call multiple times — re-uses existing files.
-        if (String(status).toUpperCase() === 'SUCCESS' || String(status).toUpperCase() === 'COMPLETE') {
-            await sunoGen.ingestCompletedTask(taskId, payload);
+        const status = String((payload && (payload.status || (payload.response && payload.response.status))) || 'PENDING').toUpperCase();
+        // Ingest opportunistically — downloads final MP3 + cover only when audio_url appears (status=SUCCESS).
+        // Runs on every poll so as soon as the final URL drops in, we have a local copy.
+        let tracks;
+        if (['SUCCESS', 'COMPLETE', 'FIRST_SUCCESS', 'TEXT_SUCCESS'].includes(status)) {
+            tracks = await sunoGen.ingestCompletedTask(taskId, payload);
+        } else {
+            tracks = sunoGen.extractTracks(payload).map((t, i) => ({ slot: i, ...t }));
         }
-        const meta = sunoGen.getStagingMeta(taskId);
-        res.json({ status, tracks: meta && meta.tracks || sunoGen.extractTracks(payload).map((t, i) => ({ slot: i, ...t })) });
+        res.json({ status, tracks });
     } catch (e) {
         res.status(e.status || 502).json({ error: e.message });
     }

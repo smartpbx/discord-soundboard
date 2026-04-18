@@ -1546,7 +1546,11 @@
                 </div>
 
                 <div id="sunoStatus" class="hidden">
-                    <div class="status-line" id="sunoStatusLine"></div>
+                    <div style="display:flex;align-items:center;gap:0.6rem;">
+                        <span class="tts-spinner" id="sunoSpinner" style="display:inline-block;"></span>
+                        <div class="status-line" id="sunoStatusLine" style="flex:1;"></div>
+                        <span id="sunoElapsed" style="font-size:0.8rem;color:var(--text-muted);"></span>
+                    </div>
                     <div id="sunoTracksList" style="margin-top:0.75rem;"></div>
                     <div class="footer-row">
                         <button type="button" class="btn btn-ghost" onclick="backToSunoForm()">Back to form</button>
@@ -6348,6 +6352,8 @@
             }
         }
 
+        let _sunoStartTs = 0;
+
         async function submitSunoGen() {
             const title = document.getElementById('sunoTitleInput').value.trim();
             const style = document.getElementById('sunoStyleInput').value.trim();
@@ -6365,22 +6371,38 @@
                 body: JSON.stringify({ title, lyrics, style, model, instrumental, customMode: true }),
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                showToast(data.error || 'Failed to start generation', 'error');
+            if (!res.ok || !data.taskId) {
+                showToast(data.error || 'Failed to start generation (no taskId)', 'error');
                 btn.disabled = false; btn.textContent = 'Generate';
                 return;
             }
             _sunoTaskId = data.taskId;
+            _sunoStartTs = Date.now();
             document.getElementById('sunoForm').classList.add('hidden');
             document.getElementById('sunoStatus').classList.remove('hidden');
-            document.getElementById('sunoStatusLine').textContent = 'Queued — Suno is generating. Usually 30–120 seconds.';
+            document.getElementById('sunoStatusLine').textContent = 'Queued — Suno is generating lyrics first (~10-20s), then audio starts streaming.';
             document.getElementById('sunoTracksList').innerHTML = '';
+            document.getElementById('sunoElapsed').textContent = '';
+            document.getElementById('sunoSpinner').style.display = 'inline-block';
             startSunoPoll();
             refreshSunoMeta();
         }
 
-        function startSunoPoll() { stopSunoPoll(); _sunoPollTimer = setInterval(pollSunoStatus, 5000); pollSunoStatus(); }
+        function startSunoPoll() { stopSunoPoll(); _sunoPollTimer = setInterval(pollSunoStatus, 3000); pollSunoStatus(); }
         function stopSunoPoll() { if (_sunoPollTimer) { clearInterval(_sunoPollTimer); _sunoPollTimer = null; } }
+
+        function sunoStatusLabel(st) {
+            return ({
+                PENDING: 'Queued — Suno is generating lyrics...',
+                TEXT_SUCCESS: 'Lyrics ready — audio generation starting...',
+                FIRST_SUCCESS: 'Streaming — audio is ready to preview while the rest generates.',
+                SUCCESS: 'Ready — pick a variant to save.',
+                CREATE_TASK_FAILED: 'Suno rejected the task.',
+                GENERATE_AUDIO_FAILED: 'Audio generation failed.',
+                SENSITIVE_WORD_ERROR: 'Lyrics rejected by Suno (sensitive words).',
+                CALLBACK_EXCEPTION: 'Callback error (safe to ignore — we poll).',
+            })[st] || ('Working... (' + st + ')');
+        }
 
         async function pollSunoStatus() {
             if (!_sunoTaskId) return;
@@ -6388,40 +6410,75 @@
             if (!res.ok) return;
             const data = await res.json();
             const line = document.getElementById('sunoStatusLine');
-            const st = (data.status || 'PENDING').toUpperCase();
+            const spinner = document.getElementById('sunoSpinner');
+            const elapsed = document.getElementById('sunoElapsed');
+            const st = String(data.status || 'PENDING').toUpperCase();
+
+            // Elapsed timer
+            if (_sunoStartTs) {
+                const secs = Math.round((Date.now() - _sunoStartTs) / 1000);
+                elapsed.textContent = secs + 's';
+            }
+
+            line.textContent = sunoStatusLabel(st);
+            line.classList.remove('error', 'success');
+
+            if (data.tracks && data.tracks.length) renderSunoTracks(data.tracks, st);
+
             if (st === 'SUCCESS' || st === 'COMPLETE') {
-                line.textContent = 'Ready — pick a variant to save.';
-                line.classList.remove('error'); line.classList.add('success');
-                renderSunoTracks(data.tracks || []);
+                line.classList.add('success');
+                spinner.style.display = 'none';
                 stopSunoPoll();
-            } else if (st === 'ERROR' || st === 'FAIL' || st === 'FAILED' || st === 'CREATE_TASK_FAILED' || st === 'GENERATE_AUDIO_FAILED' || st === 'SENSITIVE_WORD_ERROR') {
-                line.textContent = 'Suno reports: ' + st + '. Try different lyrics / style.';
+            } else if (['CREATE_TASK_FAILED', 'GENERATE_AUDIO_FAILED', 'SENSITIVE_WORD_ERROR', 'ERROR', 'FAIL', 'FAILED'].includes(st)) {
                 line.classList.add('error');
+                spinner.style.display = 'none';
                 stopSunoPoll();
-            } else {
-                line.textContent = 'Still generating (' + st + ')... polling every 5s.';
             }
         }
 
-        function renderSunoTracks(tracks) {
+        function renderSunoTracks(tracks, overallStatus) {
             const box = document.getElementById('sunoTracksList');
-            if (!tracks || !tracks.length) { box.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem;">No tracks returned.</div>'; return; }
+            if (!tracks || !tracks.length) {
+                // Lyrics stage often returns 0 tracks — show a placeholder
+                if (box.dataset.placeholder !== '1') {
+                    box.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem;font-size:0.85rem;">Audio not started yet. This first step generates lyrics.</div>';
+                    box.dataset.placeholder = '1';
+                }
+                return;
+            }
+            box.dataset.placeholder = '';
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            const finalReady = overallStatus === 'SUCCESS' || overallStatus === 'COMPLETE';
+
             box.innerHTML = tracks.map((t) => {
                 const slot = t.slot != null ? t.slot : 0;
-                const hasAudio = t.audio_bytes || t.audio_ready;
-                const coverUrl = '/api/suno/cover/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
-                const audioUrl = '/api/suno/preview/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+                const localAudioReady = !!t.audio_bytes;   // /api/suno/preview/ served by us
+                const streamUrl = t.stream_url || null;    // partial, still generating
                 const title = t.title || ('Variant ' + (slot + 1));
                 const tags = t.tags || '';
                 const dur = t.duration ? Math.round(t.duration) + 's' : '';
+                const coverUrl = t.image_url || ('/api/suno/cover/' + encodeURIComponent(_sunoTaskId) + '/' + slot);
+                const localPreviewUrl = '/api/suno/preview/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+
+                // Prefer the local file when downloaded (reliable save), else use streamUrl as a direct CDN play
+                let audioPlayer = '';
+                if (localAudioReady) {
+                    audioPlayer = '<audio controls preload="auto" src="' + localPreviewUrl + '" style="width:100%;"></audio>';
+                } else if (streamUrl) {
+                    audioPlayer = '<audio controls preload="auto" src="' + esc(streamUrl) + '" style="width:100%;"></audio>'
+                        + '<div style="font-size:0.72rem;color:var(--text-muted);">▶ Streaming live from Suno (partial — full MP3 still generating)</div>';
+                } else {
+                    audioPlayer = '<div style="font-size:0.8rem;color:var(--text-muted);">Audio not ready yet</div>';
+                }
+
+                const saveDisabled = finalReady ? '' : ' disabled title="Wait for final MP3 before saving"';
                 return '<div style="display:flex;gap:0.75rem;padding:0.5rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:0.5rem;">'
                     + '<img src="' + coverUrl + '" alt="cover" style="width:80px;height:80px;border-radius:var(--radius-sm);object-fit:cover;background:var(--surface);" onerror="this.style.display=\'none\'">'
                     + '<div style="flex:1;display:flex;flex-direction:column;gap:0.35rem;min-width:0;">'
                     +   '<div style="font-weight:500;">' + esc(title) + ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">' + esc(tags) + (dur ? ' · ' + esc(dur) : '') + '</span></div>'
-                    +   (hasAudio ? '<audio controls src="' + audioUrl + '" style="width:100%;"></audio>' : '<span style="color:var(--text-muted);font-size:0.8rem;">Audio not yet downloaded</span>')
+                    +   audioPlayer
                     +   '<div style="display:flex;gap:0.4rem;">'
-                    +     '<button type="button" class="btn btn-primary btn-sm" onclick="saveSunoSlot(' + slot + ')">Save</button>'
+                    +     '<button type="button" class="btn btn-primary btn-sm" onclick="saveSunoSlot(' + slot + ')"' + saveDisabled + '>Save</button>'
                     +     '<button type="button" class="btn btn-ghost btn-sm" onclick="openSunoLyrics(' + slot + ')" title="Show full lyrics">Lyrics</button>'
                     +   '</div>'
                     + '</div>'
