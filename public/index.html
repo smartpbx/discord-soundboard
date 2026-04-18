@@ -152,7 +152,10 @@
         .change-password-modal label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.35rem; }
         .change-password-modal input { width: 100%; padding: 0.5rem; margin-bottom: 0.75rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
         .change-password-modal .btn { margin-right: 0.5rem; }
-        .voice-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 210; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        /* z-index sits above the superadmin overlay (900) so View / Add /
+           Edit modals open *on top* of the superadmin panel rather than
+           hiding behind it. */
+        .voice-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
         .voice-modal-overlay.hidden { display: none !important; }
         .voice-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; width: 560px; max-width: 95vw; max-height: 92vh; overflow-y: auto; }
         .voice-modal h3 { margin: 0 0 1rem; font-size: 1rem; }
@@ -1451,7 +1454,15 @@
                     </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Pick a Discord user from the dropdown (members currently in a voice channel the bot can see) or paste a snowflake ID. Then set their entrance and exit sounds — or let them pick their own.</p>
                     <div style="overflow-x:auto;">
-                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse; table-layout: fixed;">
+                            <colgroup>
+                                <col style="width: 8rem">
+                                <col style="width: 5rem">
+                                <col style="width: 22rem">
+                                <col style="width: 14rem">
+                                <col style="width: 14rem">
+                                <col style="width: 5rem">
+                            </colgroup>
                             <thead><tr>
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">User</th>
                                 <th style="text-align:left; padding: 0.35rem 0.5rem;">Role</th>
@@ -1673,6 +1684,22 @@
                         <button type="button" class="btn btn-ghost" onclick="closeTrainVoiceModal()">Close (job keeps running)</button>
                         <button type="button" class="btn btn-danger" id="trainVoiceCancelBtn" onclick="cancelTrainingJob()">Cancel job</button>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="resumeTrainOverlay" class="voice-modal-overlay hidden" onclick="if(event.target===this)closeResumeTrainModal()">
+            <div class="voice-modal" style="width: 480px;">
+                <h3>Resume training</h3>
+                <p id="resumeTrainSubtitle" style="font-size:0.9rem; color:var(--text-muted); margin:0 0 0.75rem;">Resume from the last Applio checkpoint.</p>
+                <div class="field">
+                    <label for="resumeTrainScheduleAt">Schedule for (optional)</label>
+                    <input type="datetime-local" id="resumeTrainScheduleAt">
+                    <div class="field-help">Leave blank to resume immediately.</div>
+                </div>
+                <div class="footer-row" style="display:flex; gap:0.4rem; justify-content:flex-end; margin-top:0.75rem;">
+                    <button type="button" class="btn btn-ghost" onclick="closeResumeTrainModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="resumeTrainConfirmBtn" onclick="confirmResumeTrain()">Resume</button>
                 </div>
             </div>
         </div>
@@ -2589,6 +2616,11 @@
                     if (user.role === 'superadmin') {
                         document.querySelectorAll('.superadmin-only').forEach(el => el.classList.remove('hidden'));
                         startPendingCountPolling();
+                        // Bootstrap a one-shot training-jobs fetch so we record
+                        // current statuses; the fetch self-arms the poll if any
+                        // job is active. Toasts then fire on transitions even
+                        // when the superadmin modal isn't open.
+                        if (typeof fetchTrainJobs === 'function') fetchTrainJobs();
                     } else {
                         document.querySelectorAll('.superadmin-only').forEach(el => el.classList.add('hidden'));
                     }
@@ -5785,18 +5817,18 @@
                     + '<td style="padding: 0.35rem 0.5rem; color: var(--text-muted);">' + esc(u.role) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem;">'
                         + '<div style="display:flex; gap:0.25rem; align-items:center; flex-wrap:wrap;">'
-                        + '<input type="text" class="ee-discord-id" value="' + esc(idVal) + '" placeholder="snowflake ID" style="width: 11rem; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: monospace; font-size: 0.8rem;">'
-                        + (memberOptions ? '<select class="ee-discord-pick" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;"><option value="">— pick member —</option>' + memberOptions + '</select>' : '')
+                        + '<input type="text" class="ee-discord-id" value="' + esc(idVal) + '" placeholder="snowflake ID" style="flex:1; min-width: 9rem; max-width: 100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: monospace; font-size: 0.8rem;">'
+                        + (memberOptions ? '<select class="ee-discord-pick" style="flex:1; min-width: 8rem; max-width: 100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;"><option value="">— pick member —</option>' + memberOptions + '</select>' : '')
                         + '<button type="button" class="btn btn-primary btn-sm ee-save-id">Save</button>'
                         + (idVal ? '<button type="button" class="btn btn-ghost btn-sm ee-clear-id">Unlink</button>' : '')
                         + '</div>'
                     + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem;">'
-                        + '<select class="ee-entrance" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; min-width: 10rem;">'
+                        + '<select class="ee-entrance" style="width: 100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;">'
                         + '<option value="">— none —</option>' + soundOptions + '</select>'
                     + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem;">'
-                        + '<select class="ee-exit" style="padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; min-width: 10rem;">'
+                        + '<select class="ee-exit" style="width: 100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;">'
                         + '<option value="">— none —</option>' + soundOptions + '</select>'
                     + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem; text-align:center;">'
@@ -6417,11 +6449,54 @@
                 + '</div>';
         }
 
+        // Per-job snapshot of last-seen status + current_phase. We toast on
+        // transitions but skip the very first observation so opening the panel
+        // doesn't dump a stack of "X completed" notifications for old jobs.
+        const _trainJobLastSeen = new Map();
+        let _trainJobsObserved = false;
+        function _maybeToastJobTransition(j) {
+            if (!j || !j.id) return;
+            const prev = _trainJobLastSeen.get(j.id);
+            const curStatus = j.status;
+            const curPhase = (j.progress && j.progress.current_phase) || null;
+            const name = (j.input && j.input.name) || j.id;
+            if (prev && _trainJobsObserved) {
+                if (prev.status !== curStatus) {
+                    if (curStatus === 'completed') showToast('Training "' + name + '" completed ✓', 'success');
+                    else if (curStatus === 'failed') showToast('Training "' + name + '" failed', 'error');
+                    else if (curStatus === 'cancelled') showToast('Training "' + name + '" cancelled', 'info');
+                    else if (curStatus === 'unknown_exit') showToast('Training "' + name + '" exited (check logs)', 'error');
+                    else if (curStatus === 'running' && (prev.status === 'queued' || prev.status === 'failed' || prev.status === 'cancelled')) {
+                        showToast('Training "' + name + '" started', 'info');
+                    }
+                } else if (curStatus === 'running' && prev.phase !== curPhase && curPhase) {
+                    showToast('"' + name + '" → phase: ' + curPhase, 'info');
+                }
+            }
+            _trainJobLastSeen.set(j.id, { status: curStatus, phase: curPhase });
+        }
+
+        let _trainJobsPollTimer = null;
+        function startTrainJobsPoll() {
+            if (_trainJobsPollTimer) return;
+            // 15 s is enough granularity for "phase changed" / "completed"
+            // toasts without hammering the API.
+            _trainJobsPollTimer = setInterval(fetchTrainJobs, 15_000);
+        }
+        function stopTrainJobsPoll() {
+            if (_trainJobsPollTimer) { clearInterval(_trainJobsPollTimer); _trainJobsPollTimer = null; }
+        }
+
         async function fetchTrainJobs() {
             const res = await api('/api/superadmin/tts/train');
             if (!res.ok) return;
             const data = await res.json();
             const jobs = data.jobs || [];
+            for (const j of jobs) _maybeToastJobTransition(j);
+            _trainJobsObserved = true;
+            // Stop polling if no jobs are currently active — saves API calls.
+            const anyActive = jobs.some(j => j.status === 'running' || j.status === 'queued');
+            if (!anyActive) stopTrainJobsPoll(); else startTrainJobsPoll();
             const tbody = document.getElementById('trainJobsBody');
             const empty = document.getElementById('trainJobsEmpty');
             if (!tbody) return;
@@ -6484,39 +6559,47 @@
             fetchTrainJobs();
         }
 
-        async function resumeTrainJob(jobId, name) {
-            // Same scheduling affordance as "Start training" — blank = now,
-            // or paste an ISO/local datetime to queue for later (e.g. after
-            // another job finishes, or overnight).
-            const sched = prompt(
-                'Resume "' + (name || jobId) + '" from the last Applio checkpoint.\n\n' +
-                'Schedule (optional): enter a datetime like 2026-04-17 03:00, or leave blank to resume now.\n\n' +
-                'Cancel to abort.',
-                ''
-            );
-            if (sched === null) return;
+        let _resumeTrainCtx = null;
+        function resumeTrainJob(jobId, name) {
+            _resumeTrainCtx = { jobId, name };
+            const subtitle = document.getElementById('resumeTrainSubtitle');
+            if (subtitle) subtitle.textContent = 'Resume "' + (name || jobId) + '" from the last Applio checkpoint.';
+            const sched = document.getElementById('resumeTrainScheduleAt');
+            if (sched) sched.value = '';
+            document.getElementById('resumeTrainOverlay').classList.remove('hidden');
+            setTimeout(() => sched?.focus(), 50);
+        }
+        function closeResumeTrainModal() {
+            document.getElementById('resumeTrainOverlay').classList.add('hidden');
+            _resumeTrainCtx = null;
+        }
+        async function confirmResumeTrain() {
+            if (!_resumeTrainCtx) return;
+            const { jobId, name } = _resumeTrainCtx;
+            const schedStr = document.getElementById('resumeTrainScheduleAt').value;
             let runAfter = null;
-            const trimmed = sched.trim();
-            if (trimmed) {
-                const t = Date.parse(trimmed);
+            if (schedStr) {
+                const t = Date.parse(schedStr);
                 if (!Number.isFinite(t)) { showToast('Could not parse that datetime', 'error'); return; }
                 if (t < Date.now() - 60_000) { showToast('Scheduled time is in the past', 'error'); return; }
                 runAfter = t;
             }
+            const btn = document.getElementById('resumeTrainConfirmBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Resuming...'; }
             const body = runAfter ? { run_after: runAfter } : {};
             const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/resume', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
             const data = await res.json().catch(() => ({}));
+            if (btn) { btn.disabled = false; btn.textContent = 'Resume'; }
             if (!res.ok) { showToast(data.error || 'Resume failed', 'error'); return; }
+            closeResumeTrainModal();
             if (runAfter) {
                 showToast('Resume queued for ' + new Date(runAfter).toLocaleString(), 'success');
             } else {
                 showToast('Resumed as new job ' + data.meta.id, 'success');
             }
-            // Open the new job for live status (queue state will show "queued" until due)
             reopenTrainJob(data.meta.id, name);
             fetchTrainJobs();
         }
