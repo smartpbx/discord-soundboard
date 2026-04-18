@@ -94,7 +94,13 @@ Captures `job_id` from the JSON output. All subsequent phases use `--job-dir /tm
 
 Run each, watch stdout for status events, surface major milestones to the user (don't repeat every progress event — pick the meaningful ones). If a phase errors, report the error to the user verbatim and stop. Do **not** retry a failed phase more than once without telling the user.
 
-Phase 5 (training) takes 50–80 min. Stream the per-epoch progress events as you receive them (every ~14 sec) but only forward to the user every 25 epochs (the milestone checkpoints). Don't spam.
+Phase 5 (training) takes 50–80 min. The bash call to `05_train.py` **blocks** until training finishes — you will get one large `tool_result` at the end with the full training log. Do NOT poll / grep `/opt/Applio/logs/<voice>/` or the train.log while waiting — the soundboard UI tails the train log directly and shows live epoch + ETA to the user. Your polling produces duplicate / stale epoch reports because the log contains history from earlier runs.
+
+When the training tool_result finally arrives, extract the final epoch, best loss, and convergence note and report that **once**. Then move to Phase 6.
+
+### Resume-mode specifics
+
+When resuming: after invoking `05_train.py --resume`, say "Resume training started, continuing from the latest checkpoint." and then just wait. **No intermediate status messages**, no log grepping, no manual epoch reports. The UI handles progress display.
 
 ### 5. Hand off to user
 

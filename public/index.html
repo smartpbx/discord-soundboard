@@ -6195,10 +6195,16 @@
         let _trainPollTimer = null;
         let _trainCurrentJobId = null;
         let _trainEventCursor = 0;
+        // Claude CLI auto-compacts long-running sessions, which re-emits a
+        // `session init` event with the same session_id. We only want to show
+        // one "Session started" line per actual session boundary, so we track
+        // the last-rendered id and skip duplicates.
+        let _trainLastSessionId = null;
 
         function openTrainVoiceModal() {
             _trainCurrentJobId = null;
             _trainEventCursor = 0;
+            _trainLastSessionId = null;
             document.getElementById('trainVoiceTitle').textContent = 'Train new RVC voice';
             document.getElementById('trainVoiceForm').classList.remove('hidden');
             document.getElementById('trainVoiceStatus').classList.add('hidden');
@@ -6244,6 +6250,7 @@
             }
             _trainCurrentJobId = data.job.id;
             _trainEventCursor = 0;
+            _trainLastSessionId = null;
             document.getElementById('trainVoiceForm').classList.add('hidden');
             document.getElementById('trainVoiceStatus').classList.remove('hidden');
             document.getElementById('trainVoiceTitle').textContent = 'Training: ' + data.job.input.name;
@@ -6322,8 +6329,20 @@
                     line.style.opacity = '0.7';
                     line.textContent = '   ↳ ' + (evt.summary || '(no output)').replace(/\n/g, ' ').slice(0, 240);
                 } else if (evt.kind === 'session_started') {
-                    line.style.color = 'var(--accent)';
-                    line.textContent = '⏵ Session ' + (evt.session_id || '').slice(0, 8) + ' started';
+                    // Same id repeated = Claude CLI auto-compact, not a fresh
+                    // spawn. Suppress the repeat; show a quieter "compacted"
+                    // marker instead so the log doesn't look like Claude is
+                    // restarting every few minutes.
+                    const sid = evt.session_id || '';
+                    if (sid && sid === _trainLastSessionId) {
+                        line.style.color = 'var(--text-muted)';
+                        line.style.opacity = '0.6';
+                        line.textContent = '↻ Context compacted';
+                    } else {
+                        line.style.color = 'var(--accent)';
+                        line.textContent = '⏵ Session ' + sid.slice(0, 8) + ' started';
+                        _trainLastSessionId = sid;
+                    }
                 } else if (evt.kind === 'result') {
                     line.style.color = evt.subtype === 'success' ? '#4ade80' : 'var(--danger)';
                     const cost = evt.total_cost_usd ? ' · $' + evt.total_cost_usd.toFixed(4) : '';
@@ -6437,6 +6456,7 @@
         function reopenTrainJob(jobId, name) {
             _trainCurrentJobId = jobId;
             _trainEventCursor = 0;
+            _trainLastSessionId = null;
             document.getElementById('trainVoiceForm').classList.add('hidden');
             document.getElementById('trainVoiceStatus').classList.remove('hidden');
             document.getElementById('trainVoiceTitle').textContent = 'Training: ' + name;
