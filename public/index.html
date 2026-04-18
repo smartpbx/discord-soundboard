@@ -6996,10 +6996,30 @@
             updateNowPlaying();
             updatePlayPauseButton();
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
-            document.addEventListener('keydown', (e) => {
+            // Bind to window (catches keydowns even when focus is on a button
+            // that would otherwise consume the event) and use the capture phase
+            // so we see the event before any element handler can stop it. Without
+            // this, focus drifting onto a sound button after a click could make
+            // Escape / Space / favorite keys appear to "stop working" until the
+            // user clicked into a real input first.
+            window.addEventListener('keydown', (e) => {
                 const tag = document.activeElement && document.activeElement.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement && document.activeElement.isContentEditable)) {
+                const inEditable = tag === 'INPUT' || tag === 'TEXTAREA'
+                    || (document.activeElement && document.activeElement.isContentEditable);
+                if (inEditable) {
                     if (e.key === 'Escape') { e.preventDefault(); clearSoundFilter(); document.activeElement.blur(); }
+                    return;
+                }
+                // Escape: close any open overlay first; then ALWAYS clear the
+                // sound filter as a fallback. Previously this only worked when
+                // the search input itself was focused.
+                if (e.key === 'Escape') {
+                    const overlay = document.getElementById('shortcutsOverlay');
+                    if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
+                    const panelOverlay = document.getElementById('soundPanelOverlay');
+                    if (panelOverlay && !panelOverlay.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); return; }
+                    const sfi = document.getElementById('soundFilterInput');
+                    if (sfi && sfi.value) { e.preventDefault(); clearSoundFilter(); }
                     return;
                 }
                 if (e.key >= '1' && e.key <= '9') {
@@ -7010,11 +7030,6 @@
                 } else if (e.key === 's' || e.key === 'S') {
                     e.preventDefault();
                     stopPlayback();
-                } else if (e.key === 'Escape') {
-                    const overlay = document.getElementById('shortcutsOverlay');
-                    if (overlay && !overlay.classList.contains('hidden')) { e.preventDefault(); closeShortcuts(); return; }
-                    const panelOverlay = document.getElementById('soundPanelOverlay');
-                    if (panelOverlay && !panelOverlay.classList.contains('hidden')) { e.preventDefault(); closeSoundPanel(); }
                 } else if (e.key === '/') {
                     e.preventDefault();
                     const sfi = document.getElementById('soundFilterInput');
