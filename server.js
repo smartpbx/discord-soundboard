@@ -31,6 +31,7 @@ const DISCORD_LINKS_PATH = path.join(DATA_DIR, 'discord-links.json');
 const TTS_RECENTS_DIR = path.join(DATA_DIR, 'tts-recents');
 if (!fs.existsSync(TTS_RECENTS_DIR)) fs.mkdirSync(TTS_RECENTS_DIR, { recursive: true });
 const TTS_RECENTS_PER_USER = 5;
+const TTS_RECENTS_GLOBAL_LIMIT = 30;
 
 const DEFAULT_GUEST_COOLDOWN_SEC = 10;
 const DEFAULT_GUEST_MAX_DURATION = 7;
@@ -421,6 +422,12 @@ function saveServerState(updates) {
 }
 
 const RECENTLY_PLAYED_MAX = 5;
+// Filenames that aren't real sound files — each TTS/URL-stream/Suno play
+// is a distinct event, so we must NOT dedupe on filename (which would
+// collapse every TTS clip to a single entry). Dedupe on displayName
+// for these synthetic entries so "same phrase twice" still collapses,
+// but different phrases stay separate.
+const SYNTHETIC_FILENAMES = new Set(['tts', 'url_stream', 'suno_preview']);
 function getRecentlyPlayedFromState() {
     const state = loadServerState();
     const arr = Array.isArray(state.recentlyPlayed) ? state.recentlyPlayed : [];
@@ -429,7 +436,12 @@ function getRecentlyPlayedFromState() {
 function addToRecentlyPlayedServer(filename, displayName, playedBy, playedAt) {
     if (!filename) return;
     let list = getRecentlyPlayedFromState();
-    list = list.filter((x) => x.filename !== filename);
+    if (SYNTHETIC_FILENAMES.has(filename)) {
+        // Dedupe on displayName for synthetic sources, not filename.
+        list = list.filter((x) => !(x.filename === filename && x.displayName === displayName));
+    } else {
+        list = list.filter((x) => x.filename !== filename);
+    }
     list.unshift({ filename, displayName: displayName || filename, playedBy: playedBy || null, playedAt: playedAt || Date.now() });
     list = list.slice(0, RECENTLY_PLAYED_MAX);
     saveServerState({ recentlyPlayed: list });
@@ -1321,7 +1333,11 @@ let lastChannelId = null; // Persisted for auto-join on restart
     if (typeof state.multiPlay === 'boolean') multiPlayEnabled = state.multiPlay;
 })();
 
-// Catch and log audio errors so the bot doesn't crash silently
+// Catch and log audio errors so the bot doesn't crash silently.
+// Also clear the TTS-playing flag here so a broken resource can't wedge the
+// queue: without this, a subsequent sound played before TTS recovers would
+// overwrite playbackState, preventing the Idle handler from noticing that
+// TTS had been playing and leaving ttsIsPlaying stuck true forever.
 player.on('error', error => {
     const meta = error.resource?.metadata ?? 'unknown';
     console.error(`❌ Audio Player Error: ${error.message} (resource: ${meta})`);
@@ -1330,17 +1346,22 @@ player.on('error', error => {
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
+    ttsIsPlaying = false;
+    processTtsQueue();
 });
 
 player.on('stateChange', (oldState, newState) => {
     console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
     if (newState.status === AudioPlayerStatus.Idle) {
-        const wasTts = playbackState.tts === true;
         finalizeAllOpenPlays();
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
-        if (wasTts) ttsIsPlaying = false;
+        // Whenever the shared player is idle, TTS can't be playing either.
+        // (Previously this was gated on playbackState.tts, which meant a
+        // non-TTS sound played between a TTS start and its end could leave
+        // ttsIsPlaying stuck true.)
+        ttsIsPlaying = false;
         processTtsQueue();
     }
 });
@@ -1390,7 +1411,15 @@ function playTtsBuffer(item) {
 }
 
 function processTtsQueue() {
-    if (ttsIsPlaying || ttsQueue.length === 0) return;
+    if (ttsQueue.length === 0) return;
+    // Self-heal: if we think TTS is playing but the shared player is actually
+    // idle, something went wrong earlier (e.g. ffmpeg crashed before emitting
+    // close) and ttsIsPlaying is stale. Clear it and continue.
+    if (ttsIsPlaying && player.state.status === AudioPlayerStatus.Idle) {
+        console.warn('[TTS Queue] ttsIsPlaying was stuck — resetting (player is idle)');
+        ttsIsPlaying = false;
+    }
+    if (ttsIsPlaying) return;
     // Don't start TTS if a non-TTS sound is currently playing
     const playerStatus = player.state.status;
     if ((playerStatus === AudioPlayerStatus.Playing || playerStatus === AudioPlayerStatus.Buffering) && !playbackState.tts) return;
@@ -1923,12 +1952,27 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
         if (typeof ttsMaxQueueSize === 'number') { setTtsMaxQueueSize(ttsMaxQueueSize); out.ttsMaxQueueSize = getTtsMaxQueueSize(); }
         // Suno settings
         const { sunoEnabled, sunoDailyLimit } = req.body;
-        if (typeof sunoEnabled === 'boolean') { setSunoEnabled(sunoEnabled); out.sunoEnabled = sunoEnabled; }
+        const sunoChanges = {};
+        if (typeof sunoEnabled === 'boolean') { setSunoEnabled(sunoEnabled); out.sunoEnabled = sunoEnabled; sunoChanges.enabled = sunoEnabled; }
         if (sunoDailyLimit && typeof sunoDailyLimit === 'object') {
+            const changed = {};
             for (const r of ['guest', 'user', 'admin', 'superadmin']) {
-                if (typeof sunoDailyLimit[r] === 'number' && sunoDailyLimit[r] >= 0) setSunoDailyLimit(r, sunoDailyLimit[r]);
+                if (typeof sunoDailyLimit[r] === 'number' && sunoDailyLimit[r] >= 0) {
+                    setSunoDailyLimit(r, sunoDailyLimit[r]);
+                    changed[r] = sunoDailyLimit[r];
+                }
             }
+            if (Object.keys(changed).length) sunoChanges.dailyLimit = changed;
             out.sunoDailyLimit = { guest: getSunoDailyLimit('guest'), user: getSunoDailyLimit('user'), admin: getSunoDailyLimit('admin'), superadmin: getSunoDailyLimit('superadmin') };
+        }
+        if (Object.keys(sunoChanges).length) {
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.suno',
+                target: null,
+                details: sunoChanges,
+            });
         }
         // URL streaming settings
         const { urlStreamEnabled, urlStreamMaxDurationSec } = req.body;
@@ -3352,6 +3396,13 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
             startedBy,
         };
         addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: role,
+            action: 'url-stream.play',
+            target: safeName,
+            details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewEntry },
+        });
         res.json({ ok: true, title, duration: effectiveDuration, url, trimStart, trimEnd });
     } catch (err) {
         console.error('[url-stream] fatal', err);
@@ -3838,17 +3889,30 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     }
 
     processTtsQueue();
+    if (!isGuest) {
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: role,
+            action: 'tts.speak',
+            target: null,
+            details: { voiceId, textLength: trimmed.length, preview: trimmed.slice(0, 80), recentId },
+        });
+    }
     res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
 });
 
 // --- TTS recents (per-user, max 5) ---
 
-// List the current user's TTS recents (most recent first).
+// List the most recent TTS clips across ALL users (global feed, most recent first).
+// Guests see none. Non-guests see every user's clips so shared TTS history is visible.
 app.get('/api/tts/recents', requireAuth, (req, res) => {
     if (req.session.user.role === 'guest') return res.json([]);
-    const rows = statsDb.listTtsRecents(req.session.user.username, TTS_RECENTS_PER_USER);
+    const rows = statsDb.listTtsRecentsGlobal(TTS_RECENTS_GLOBAL_LIMIT);
+    const me = req.session.user.username;
     res.json(rows.map(r => ({
         id: r.id,
+        owner: r.owner,
+        mine: r.owner === me,
         text: r.text,
         voiceId: r.voice_id,
         voiceLabel: r.voice_label,
@@ -3864,7 +3928,7 @@ app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
     const row = statsDb.getTtsRecent(id);
-    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    if (!row) return res.status(404).json({ error: 'Recent not found' });
     const wavPath = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
     if (!wavPath.startsWith(TTS_RECENTS_DIR) || !fs.existsSync(wavPath)) {
         return res.status(404).json({ error: 'Audio file missing' });
@@ -3889,6 +3953,13 @@ app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
     const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: row.text, voiceId: row.voice_id, ttsVolume: 1, displayName: row.display_name || `TTS: "${row.text.slice(0, 40)}"`, startedBy, username: req.session.user.username, recentId: row.id };
     ttsQueue.push(queueItem);
     processTtsQueue();
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: role,
+        action: 'tts.replay',
+        target: String(row.id),
+        details: { owner: row.owner, voiceId: row.voice_id, preview: String(row.text || '').slice(0, 80) },
+    });
     res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName });
 });
 
@@ -3899,7 +3970,7 @@ app.post('/api/tts/recents/:id/save-as-sound', requireAuth, async (req, res) => 
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
     const row = statsDb.getTtsRecent(id);
-    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    if (!row) return res.status(404).json({ error: 'Recent not found' });
     const wavPath = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
     if (!wavPath.startsWith(TTS_RECENTS_DIR) || !fs.existsSync(wavPath)) {
         return res.status(404).json({ error: 'Audio file missing' });
@@ -3936,28 +4007,61 @@ app.post('/api/tts/recents/:id/save-as-sound', requireAuth, async (req, res) => 
     meta.tts = { text: row.text, voiceId: row.voice_id, voiceLabel: row.voice_label || null };
     setSoundMeta(finalName, meta);
     console.log('[TTS Save] saved recent %d as %s by %s', row.id, finalName, req.session.user.username);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: role,
+        action: 'tts.save-as-sound',
+        target: finalName,
+        details: { recentId: row.id, owner: row.owner, voiceId: row.voice_id, displayName: meta.displayName },
+    });
     res.json({ ok: true, filename: finalName, displayName: meta.displayName, duration });
 });
 
 // Remove a stored recent and its WAV file.
+// Only the clip's owner or a superadmin can delete (protects other users' history).
 app.delete('/api/tts/recents/:id', requireAuth, (req, res) => {
     if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests have no recents.' });
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
     const row = statsDb.getTtsRecent(id);
-    if (!row || row.owner !== req.session.user.username) return res.status(404).json({ error: 'Recent not found' });
+    if (!row) return res.status(404).json({ error: 'Recent not found' });
+    const me = req.session.user.username;
+    const isOwner = row.owner === me;
+    const isSuperadmin = req.session.user.role === 'superadmin';
+    if (!isOwner && !isSuperadmin) return res.status(403).json({ error: 'Only the clip owner or a superadmin can remove this.' });
     try {
         const p = path.join(TTS_RECENTS_DIR, path.basename(row.wav_path));
         if (p.startsWith(TTS_RECENTS_DIR) && fs.existsSync(p)) fs.unlinkSync(p);
     } catch (e) { console.warn('[TTS Recents] unlink failed:', e.message); }
     statsDb.deleteTtsRecent(row.id);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'tts.recents-delete',
+        target: String(row.id),
+        details: { owner: row.owner, selfDelete: isOwner, preview: String(row.text || '').slice(0, 80) },
+    });
     res.json({ ok: true });
 });
 
-app.post('/api/tts/queue/clear', requireAdmin, (req, res) => {
+app.post('/api/tts/queue/clear', requireSuperadmin, (req, res) => {
+    const cleared = ttsQueue.length;
     ttsQueue.length = 0;
-    console.log('[TTS Queue] cleared by %s', req.session.user.username);
-    res.json({ ok: true });
+    // Force-release the "playing" flag too. Admins only use this button when
+    // the queue is wedged, so assuming ttsIsPlaying is stale is the right
+    // default — otherwise clearing the queue still wouldn't unblock items
+    // that were about to enqueue after the stuck ffmpeg.
+    const wasStuck = ttsIsPlaying && player.state.status === AudioPlayerStatus.Idle;
+    if (wasStuck) ttsIsPlaying = false;
+    console.log('[TTS Queue] cleared by %s (items=%d, wasStuck=%s)', req.session.user.username, cleared, wasStuck);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'tts.queue-clear',
+        target: null,
+        details: { cleared, wasStuck },
+    });
+    res.json({ ok: true, cleared, wasStuck });
 });
 
 // --- Superadmin: Chatterbox voice management ---
@@ -4202,7 +4306,13 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
             customMode: customMode !== false,
         });
         const used = incrementSunoUsage(req.session.user.username);
-        try { statsDb.logAdminAction(req.session.user.username, req.session.user.role, 'suno_generate', taskId, JSON.stringify({ style, model, instrumental })); } catch {}
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'suno.generate',
+            target: taskId,
+            details: { style, model, instrumental: !!instrumental, used_today: used, limit: req._sunoLimit.limit },
+        });
         res.json({ ok: true, taskId, used_today: used, limit: req._sunoLimit.limit });
     } catch (e) {
         res.status(e.status || 502).json({ error: e.message });
@@ -4302,13 +4412,29 @@ app.post('/api/suno/save/:taskId', requireAuth, (req, res) => {
     };
     saveSoundsMeta(sounds);
 
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'suno.save',
+        target: filename,
+        details: { taskId, slot, displayName, model: modelUsed },
+    });
     res.json({ ok: true, filename, cover: coverRel, entry: sounds[filename] });
 });
 
 app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
+    const taskId = req.params.taskId;
     // Optional: refund the day's usage counter if user cancels early.
-    if (req.query.refund === '1') decrementSunoUsage(req.session.user.username);
-    try { sunoGen.deleteStaging(req.params.taskId); } catch {}
+    const refunded = req.query.refund === '1';
+    if (refunded) decrementSunoUsage(req.session.user.username);
+    try { sunoGen.deleteStaging(taskId); } catch {}
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'suno.discard',
+        target: taskId,
+        details: { refunded },
+    });
     res.json({ ok: true });
 });
 
@@ -4391,6 +4517,13 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async 
             duration: (track && track.duration) || null,
             startedBy, tts: false,
         };
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'suno.play',
+            target: taskId,
+            details: { slot, sourceKind, displayName },
+        });
         res.json({ ok: true, displayName, sourceKind });
     } catch (err) {
         console.error('[Suno play] error:', err);
@@ -4428,6 +4561,17 @@ app.get('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
 app.post('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
     try {
         const job = voiceTrainer.startJob(req.body || {});
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-train.start',
+            target: job && job.id ? String(job.id) : null,
+            details: {
+                voice_id: job && job.voice_id,
+                run_after: (req.body && req.body.run_after) || null,
+                urls: Array.isArray(req.body && req.body.urls) ? req.body.urls.length : undefined,
+            },
+        });
         res.json({ ok: true, job });
     } catch (e) {
         res.status(e.status || 500).json({ error: e.message });
@@ -4447,6 +4591,13 @@ app.get('/api/superadmin/tts/train/:id', requireSuperadmin, (req, res) => {
 app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) => {
     try {
         const meta = voiceTrainer.cancelJob(req.params.id);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-train.cancel',
+            target: String(req.params.id),
+            details: { voice_id: meta && meta.voice_id, status: meta && meta.status },
+        });
         res.json({ ok: true, meta });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -4454,6 +4605,13 @@ app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) =
 app.post('/api/superadmin/tts/train/:id/resume', requireSuperadmin, (req, res) => {
     try {
         const meta = voiceTrainer.resumeJob(req.params.id);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-train.resume',
+            target: String(req.params.id),
+            details: { voice_id: meta && meta.voice_id, status: meta && meta.status },
+        });
         res.json({ ok: true, meta });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });

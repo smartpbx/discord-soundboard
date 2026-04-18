@@ -379,14 +379,17 @@
         .sound-grid.compact-mode .sound-item { min-height: 72px; }
         .sound-grid.compact-mode .sound-btn { min-height: 72px; height: 72px; padding: 0.4rem 0.35rem 0.3rem; font-size: 0.78rem; }
         .sound-grid.compact-mode .sound-btn-duration { font-size: 0.65rem; }
-        .sound-btn.hm-1, .mobile-grid-btn.hm-1 { background: #0b0f1e !important; color: #cfd6e4 !important; border-color: #1b2a4e !important; box-shadow: 0 0 4px rgba(56,189,248,0.12), inset 0 0 8px rgba(56,189,248,0.05) !important; }
-        .sound-btn.hm-2, .mobile-grid-btn.hm-2 { background: #0a1e2a !important; color: #e6f4f7 !important; border-color: #0e7490 !important; box-shadow: 0 0 6px rgba(34,211,238,0.25), inset 0 0 10px rgba(34,211,238,0.06) !important; }
-        .sound-btn.hm-3, .mobile-grid-btn.hm-3 { background: #1d0a28 !important; color: #f5e6f5 !important; border-color: #86198f !important; box-shadow: 0 0 7px rgba(217,70,239,0.3), inset 0 0 10px rgba(217,70,239,0.07) !important; }
-        .sound-btn.hm-4, .mobile-grid-btn.hm-4 { background: #26081a !important; color: #ffe4ec !important; border-color: #be123c !important; box-shadow: 0 0 9px rgba(244,63,94,0.4), inset 0 0 12px rgba(244,63,94,0.09) !important; }
-        .sound-btn.hm-1 .sound-btn-duration, .sound-btn.hm-2 .sound-btn-duration,
-        .sound-btn.hm-3 .sound-btn-duration, .sound-btn.hm-4 .sound-btn-duration,
-        .mobile-grid-btn.hm-1 .duration, .mobile-grid-btn.hm-2 .duration,
-        .mobile-grid-btn.hm-3 .duration, .mobile-grid-btn.hm-4 .duration { color: rgba(255,255,255,0.8); }
+        /* Heatmap: dim → bright as plays climb, 8 steps, global scale. */
+        .sound-btn.hm-1, .mobile-grid-btn.hm-1 { background: #15091f !important; color: #c8b5d6 !important; border-color: #2a1440 !important; box-shadow: 0 0 2px rgba(139,92,246,0.15), inset 0 0 4px rgba(139,92,246,0.05) !important; }
+        .sound-btn.hm-2, .mobile-grid-btn.hm-2 { background: #1f0b30 !important; color: #d8c5e8 !important; border-color: #3d1b5c !important; box-shadow: 0 0 3px rgba(139,92,246,0.22), inset 0 0 6px rgba(139,92,246,0.08) !important; }
+        .sound-btn.hm-3, .mobile-grid-btn.hm-3 { background: #2a0f45 !important; color: #e6d1f2 !important; border-color: #501f7a !important; box-shadow: 0 0 4px rgba(147,51,234,0.3), inset 0 0 7px rgba(147,51,234,0.1) !important; }
+        .sound-btn.hm-4, .mobile-grid-btn.hm-4 { background: #46175f !important; color: #ede0f5 !important; border-color: #6d2d9e !important; box-shadow: 0 0 5px rgba(167,85,247,0.4), inset 0 0 9px rgba(167,85,247,0.12) !important; }
+        .sound-btn.hm-5, .mobile-grid-btn.hm-5 { background: #6a1f9a !important; color: #f8e9ff !important; border-color: #9333ea !important; box-shadow: 0 0 7px rgba(168,85,247,0.5), inset 0 0 10px rgba(192,132,252,0.14) !important; }
+        .sound-btn.hm-6, .mobile-grid-btn.hm-6 { background: #9922c9 !important; color: #fff !important; border-color: #c026d3 !important; box-shadow: 0 0 10px rgba(192,38,211,0.6), inset 0 0 11px rgba(255,255,255,0.08) !important; font-weight: 500 !important; }
+        .sound-btn.hm-7, .mobile-grid-btn.hm-7 { background: #c72ee0 !important; color: #fff !important; border-color: #e879f9 !important; box-shadow: 0 0 13px rgba(217,70,239,0.72), 0 0 3px rgba(255,255,255,0.18), inset 0 0 12px rgba(255,255,255,0.12) !important; font-weight: 600 !important; }
+        .sound-btn.hm-8, .mobile-grid-btn.hm-8 { background: #ec4899 !important; color: #fff !important; border-color: #fb7185 !important; box-shadow: 0 0 18px rgba(236,72,153,0.9), 0 0 5px rgba(255,255,255,0.3), inset 0 0 16px rgba(255,255,255,0.22) !important; font-weight: 700 !important; }
+        .sound-btn[class*="hm-"] .sound-btn-duration,
+        .mobile-grid-btn[class*="hm-"] .duration { color: rgba(255,255,255,0.85); }
         .sound-grid.compact-mode .sound-item-actions { top: 2px; right: 2px; }
         .sound-grid.compact-mode .sound-preview, .sound-grid.compact-mode .sound-edit, .sound-grid.compact-mode .sound-fav { width: 20px; height: 20px; }
         .sound-grid.compact-mode .sound-preview svg, .sound-grid.compact-mode .sound-edit svg, .sound-grid.compact-mode .sound-fav svg { width: 10px; height: 10px; }
@@ -783,7 +786,6 @@
             <div class="tts-status hidden" id="ttsStatus"></div>
             <div class="hidden" id="ttsQueueInfo" style="display:none;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem;">
                 <span id="ttsQueueText"></span>
-                <button type="button" class="btn btn-ghost btn-sm hidden" id="ttsQueueClearBtn" onclick="clearTtsQueue()" style="padding:0.15rem 0.4rem;font-size:0.75rem;">Clear Queue</button>
             </div>
         </div>
         <div class="card hidden" id="urlStreamCard">
@@ -899,7 +901,7 @@
                     <div class="sounds-options-menu hidden" id="soundsOptionsMenu">
                         <button type="button" class="sounds-option-item" id="mobileBtn" onclick="toggleMobileView(); closeSoundsOptionsMenu();" title="Mobile view: fullscreen soundboard">Mobile</button>
                         <button type="button" class="sounds-option-item" id="compactBtn" onclick="toggleCompact(); closeSoundsOptionsMenu();" title="Compact view: smaller buttons">Compact</button>
-                        <button type="button" class="sounds-option-item" id="heatmapBtn" onclick="toggleHeatmapMode(); closeSoundsOptionsMenu();" title="Tint each sound by play count — scale relative to the current filter">Heatmap</button>
+                        <button type="button" class="sounds-option-item" id="heatmapBtn" onclick="toggleHeatmapMode(); closeSoundsOptionsMenu();" title="Tint each sound by play count — brighter = more plays, scaled against the most-played sound on the whole board">Heatmap</button>
                         <button type="button" class="sounds-option-item admin-only" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
                         <button type="button" class="sounds-option-item admin-only" id="manageTagsBtn" onclick="toggleManageTags(); closeSoundsOptionsMenu();" title="Manage tags: reorder, delete, hide">Manage tags</button>
                     </div>
@@ -1361,6 +1363,13 @@
             </div>
 
             <div id="superadminPanelTtsVoices" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>TTS Queue</span>
+                        <button type="button" class="btn btn-danger btn-sm" id="superadminTtsQueueClearBtn" onclick="clearTtsQueue()" title="Force-clear the queue and release the stuck-playing flag. Rarely needed — auto-recovery handles most cases.">Clear Queue</button>
+                    </div>
+                    <p id="superadminTtsQueueStatus" style="font-size: 0.85rem; color: var(--text-muted); margin: 0.25rem 0 0;">Queue idle.</p>
+                </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
                         <span>Voice Management</span>
@@ -1835,15 +1844,26 @@
             }, 600);
         }
 
+        // Global max across ALL sounds — heatmap is meant to surface the most-
+        // played sounds on the board, not the most-played within the current
+        // filter (which would make every filtered view look saturated).
+        function getGlobalHeatmapMax() {
+            if (!heatmapMode || !Array.isArray(soundsList) || !soundsList.length) return 0;
+            let m = 0;
+            for (const s of soundsList) {
+                const c = playCountsMap[s.filename] || 0;
+                if (c > m) m = c;
+            }
+            return m;
+        }
         function heatmapLevelForFilename(filename, maxCount) {
             if (!heatmapMode || !maxCount) return 0;
             const c = playCountsMap[filename] || 0;
             if (c <= 0) return 0;
-            const ratio = c / maxCount;
-            if (ratio <= 0.25) return 1;
-            if (ratio <= 0.5) return 2;
-            if (ratio <= 0.75) return 3;
-            return 4;
+            // Log-scale so a handful of dominant sounds don't flatten everything
+            // else into hm-1. 8 levels, brighter = more plays, max → hm-8.
+            const ratio = Math.log(1 + c) / Math.log(1 + maxCount);
+            return Math.max(1, Math.min(8, Math.ceil(ratio * 8)));
         }
 
         function toggleMobileView() {
@@ -2019,20 +2039,23 @@
             listEl.classList.remove('hidden');
             titleEl.classList.remove('hidden');
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const isSuperadmin = user && user.role === 'superadmin';
             listEl.innerHTML = ttsRecentsList.map(r => {
                 const voice = esc(r.voiceLabel || ttsVoiceLabelFromId(r.voiceId));
                 const when = formatRecentTime(r.createdAt);
                 const text = esc(r.text.length > 80 ? r.text.slice(0, 80) + '…' : r.text);
-                return '<div class="player-recent-tts-item" data-id="' + r.id + '" title="' + esc(r.text) + '">' +
+                const ownerLabel = r.mine ? 'you' : esc(r.owner || 'someone');
+                const canDelete = r.mine || isSuperadmin;
+                return '<div class="player-recent-tts-item' + (r.mine ? ' is-mine' : '') + '" data-id="' + r.id + '" title="' + esc(r.text) + '">' +
                     '<div class="player-recent-tts-body">' +
                         '<div class="player-recent-tts-text">' + text + '</div>' +
-                        '<div class="player-recent-tts-meta">' + voice + ' · ' + when + '</div>' +
+                        '<div class="player-recent-tts-meta">' + ownerLabel + ' · ' + voice + ' · ' + when + '</div>' +
                     '</div>' +
                     '<div class="player-recent-tts-actions">' +
                         '<button type="button" title="Replay to voice channel" onclick="replayTtsRecent(' + r.id + ')">▶</button>' +
                         '<button type="button" title="Load into TTS box to edit" onclick="editTtsRecent(' + r.id + ')">📝</button>' +
                         '<button type="button" title="Save as sound" onclick="saveTtsRecent(' + r.id + ')">💾</button>' +
-                        '<button type="button" title="Remove from recents" onclick="deleteTtsRecent(' + r.id + ')">✕</button>' +
+                        (canDelete ? '<button type="button" title="Remove from recents" onclick="deleteTtsRecent(' + r.id + ')">✕</button>' : '') +
                     '</div>' +
                 '</div>';
             }).join('');
@@ -2081,7 +2104,7 @@
         async function deleteTtsRecent(id) {
             const res = await api('/api/tts/recents/' + id, { method: 'DELETE' });
             if (!res) return;
-            if (res.ok) fetchTtsRecents();
+            if (res.ok) { showToast('TTS recent removed', 'success'); fetchTtsRecents(); }
             else { const d = await res.json().catch(() => ({})); showToast(d.error || 'Remove failed', 'error'); }
         }
 
@@ -2226,7 +2249,7 @@
             const start = isPaged ? mobilePageIndex * perPage : 0;
             const end = isPaged ? Math.min(start + perPage, filtered.length) : filtered.length;
             const pageSounds = filtered.slice(start, end);
-            const heatmapMax = heatmapMode ? Math.max(0, ...filtered.map(s => playCountsMap[s.filename] || 0)) : 0;
+            const heatmapMax = getGlobalHeatmapMax();
             area.innerHTML = pageSounds.map(s => {
                 const disabled = !canPlay || tooLong(s.duration);
                 const name = (s.displayName || s.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3225,7 +3248,7 @@
 
         async function playStreamUrl() {
             const url = (document.getElementById('urlStreamInput')?.value || '').trim();
-            if (!url) { _urlStreamSetInfo('Paste a URL first.', true); return; }
+            if (!url) { _urlStreamSetInfo('Paste a URL first.', true); showToast('Paste a URL first', 'error'); return; }
             _urlStreamSetBusy(true);
             _urlStreamSetInfo('Starting stream…');
             const res = await api('/api/stream-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
@@ -3233,15 +3256,17 @@
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
                 _urlStreamSetInfo(err.error || 'Failed to start stream.', true);
+                showToast(err.error || 'Failed to start stream', 'error');
                 return;
             }
             const d = await res.json();
             _urlStreamSetInfo('Streaming: ' + (d.title || url));
+            showToast('Streaming ' + (d.title || 'URL'), 'success');
         }
 
         async function playStreamUrlTrim() {
             const p = _urlStreamPreview;
-            if (!p) { _urlStreamSetInfo('Load a preview first.', true); return; }
+            if (!p) { _urlStreamSetInfo('Load a preview first.', true); showToast('Load a preview first', 'error'); return; }
             _urlStreamSetBusy(true);
             _urlStreamSetInfo('Starting trimmed stream…');
             const res = await api('/api/stream-url', {
@@ -3252,15 +3277,17 @@
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
                 _urlStreamSetInfo(err.error || 'Failed to start stream.', true);
+                showToast(err.error || 'Failed to start stream', 'error');
                 return;
             }
             const d = await res.json();
             _urlStreamSetInfo('Streaming: ' + (d.title || p.title) + ' · ' + _fmtTime(d.duration));
+            showToast('Streaming trimmed clip to Discord', 'success');
         }
 
         async function importStreamUrl() {
             const p = _urlStreamPreview;
-            if (!p) { _urlStreamSetInfo('Load a preview first.', true); return; }
+            if (!p) { _urlStreamSetInfo('Load a preview first.', true); showToast('Load a preview first', 'error'); return; }
             const displayName = (document.getElementById('urlStreamImportName')?.value || p.title || '').trim();
             _urlStreamSetBusy(true);
             _urlStreamSetInfo('Importing…');
@@ -3272,10 +3299,12 @@
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
                 _urlStreamSetInfo(err.error || 'Import failed.', true);
+                showToast(err.error || 'Import failed', 'error');
                 return;
             }
             const d = await res.json();
             _urlStreamSetInfo(d.pending ? 'Sent to moderation queue.' : 'Imported as ' + d.filename);
+            showToast(d.pending ? 'Sent to moderation queue' : 'Imported as ' + (d.displayName || d.filename), 'success');
             if (!d.pending && typeof fetchSounds === 'function') { fetchSounds(); setTimeout(() => { if (typeof openSoundPanelFromSound === 'function') openSoundPanelFromSound(d.filename); }, 200); }
         }
         async function setTtsCooldownSecSetting(role, val) {
@@ -4014,7 +4043,7 @@
             const filtered = getFilteredSounds();
             const { isUser, isGuest, guestCooldown, userCooldown, cannotOverride, canPlay, maxDur, tooLong, superadminPlaying } = getPlayabilityState();
             const isAdmin = isAdminOrSuperadmin();
-            const heatmapMax = heatmapMode ? Math.max(0, ...filtered.map(s => playCountsMap[s.filename] || 0)) : 0;
+            const heatmapMax = getGlobalHeatmapMax();
             grid.innerHTML = filtered.map((s, idx) => {
                 const esc = (x) => (x != null ? x : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 const name = esc(s.displayName || s.filename);
@@ -4498,6 +4527,79 @@
             const wrap = document.getElementById('liveWaveformWrap');
             if (wrap) wrap.style.display = 'none';
         }
+        // Per-audio live waveform (Suno track rows, and any other inline player).
+        // Each audio element gets its own AnalyserNode + a RAF loop tied to the
+        // given canvas. createMediaElementSource can only be called once per
+        // element, so we cache the nodes on the audio itself and reuse them
+        // across re-renders.
+        function attachMiniWaveform(audio, canvas) {
+            if (!audio || !canvas) return;
+            const ctx = ensureLiveWaveformCtx();
+            if (!ctx) return;
+            try { if (ctx.state === 'suspended') ctx.resume(); } catch {}
+            let st = audio.__miniWaveform;
+            if (!st) {
+                let source;
+                try { source = ctx.createMediaElementSource(audio); }
+                catch { return; }
+                const analyser = ctx.createAnalyser();
+                analyser.fftSize = 1024;
+                source.connect(analyser);
+                analyser.connect(ctx.destination);
+                st = { analyser, canvas, raf: null, data: new Uint8Array(analyser.fftSize), playing: false };
+                audio.__miniWaveform = st;
+                const start = () => { st.playing = true; st.canvas.style.display = 'block'; drawMiniWaveform(st); };
+                const stop = () => { st.playing = false; if (st.raf) { cancelAnimationFrame(st.raf); st.raf = null; } };
+                audio.addEventListener('play', start);
+                audio.addEventListener('playing', start);
+                audio.addEventListener('pause', stop);
+                audio.addEventListener('ended', stop);
+                audio.addEventListener('emptied', stop);
+            } else if (st.canvas !== canvas) {
+                st.canvas = canvas;
+            }
+            if (!audio.paused && !st.raf) drawMiniWaveform(st);
+        }
+        function drawMiniWaveform(st) {
+            if (!st || !st.canvas || !st.analyser) return;
+            const canvas = st.canvas;
+            const ctx2d = canvas.getContext('2d');
+            function resizeIfNeeded() {
+                const rect = canvas.getBoundingClientRect();
+                if (rect.width <= 0) return false;
+                const dpr = window.devicePixelRatio || 1;
+                const w = Math.max(1, Math.floor(rect.width * dpr));
+                const h = Math.max(1, Math.floor(rect.height * dpr));
+                if (canvas.width !== w || canvas.height !== h) {
+                    canvas.width = w;
+                    canvas.height = h;
+                }
+                return true;
+            }
+            function frame() {
+                st.raf = requestAnimationFrame(frame);
+                if (!st.playing) { cancelAnimationFrame(st.raf); st.raf = null; return; }
+                if (!resizeIfNeeded()) return;
+                st.analyser.getByteTimeDomainData(st.data);
+                const W = canvas.width, H = canvas.height;
+                ctx2d.clearRect(0, 0, W, H);
+                ctx2d.strokeStyle = 'rgba(124,58,237,0.9)';
+                ctx2d.lineWidth = Math.max(1, (window.devicePixelRatio || 1));
+                ctx2d.beginPath();
+                const slice = W / st.data.length;
+                let x = 0;
+                for (let i = 0; i < st.data.length; i++) {
+                    const v = st.data[i] / 128.0;
+                    const y = (v * H) / 2;
+                    if (i === 0) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
+                    x += slice;
+                }
+                ctx2d.lineTo(W, H / 2);
+                ctx2d.stroke();
+            }
+            frame();
+        }
+
         function startLiveWaveformDraw() {
             const canvas = document.getElementById('liveWaveformCanvas');
             if (!canvas || !liveWaveformAnalyser) return;
@@ -5187,24 +5289,23 @@
                 }
                 playback.tts = !!state.tts;
                 playback.ttsVoice = state.ttsVoice || null;
-                // TTS queue display
+                // TTS queue display (sidebar indicator + superadmin panel status line)
                 if (state.ttsQueue) {
                     const qEl = document.getElementById('ttsQueueInfo');
                     const qTxt = document.getElementById('ttsQueueText');
-                    const qClear = document.getElementById('ttsQueueClearBtn');
+                    const superadminStatus = document.getElementById('superadminTtsQueueStatus');
+                    const synth = Number(state.ttsQueue.synthPending) || 0;
+                    const hasActivity = state.ttsQueue.length > 0 || state.ttsQueue.playing || synth > 0;
+                    const parts = [];
+                    if (state.ttsQueue.playing) parts.push('TTS playing');
+                    if (synth > 0) parts.push(synth + ' generating');
+                    if (state.ttsQueue.length > 0) parts.push(state.ttsQueue.length + ' queued');
                     if (qEl && qTxt) {
-                        const synth = Number(state.ttsQueue.synthPending) || 0;
-                        if (state.ttsQueue.length > 0 || state.ttsQueue.playing || synth > 0) {
-                            qEl.style.display = 'flex';
-                            const parts = [];
-                            if (state.ttsQueue.playing) parts.push('TTS playing');
-                            if (synth > 0) parts.push(synth + ' generating');
-                            if (state.ttsQueue.length > 0) parts.push(state.ttsQueue.length + ' queued');
-                            qTxt.textContent = parts.join(' \u2022 ');
-                            if (qClear) qClear.classList.toggle('hidden', !isAdminOrSuperadmin());
-                        } else {
-                            qEl.style.display = 'none';
-                        }
+                        if (hasActivity) { qEl.style.display = 'flex'; qTxt.textContent = parts.join(' \u2022 '); }
+                        else { qEl.style.display = 'none'; }
+                    }
+                    if (superadminStatus) {
+                        superadminStatus.textContent = hasActivity ? parts.join(' \u2022 ') : 'Queue idle.';
                     }
                 }
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
@@ -5527,19 +5628,23 @@
                 const data = await r.json();
                 if (!r.ok) {
                     setTtsStatus(data.error || 'TTS failed.', true);
+                    showToast(data.error || 'TTS failed', 'error');
                     if (data.cooldownRemaining) {
                         setTtsStatus(`Wait ${data.cooldownRemaining}s before using TTS again.`, true);
                     }
                 } else {
                     if (data.queuePosition && data.queuePosition > 1) {
                         setTtsStatus('Queued (#' + data.queuePosition + ')');
+                        showToast('Queued for TTS (#' + data.queuePosition + ')', 'info');
                     } else {
                         setTtsStatus('');
+                        showToast('Speaking in Discord', 'success');
                     }
                     fetchTtsRecents();
                 }
             } catch (e) {
                 setTtsStatus('TTS request failed.', true);
+                showToast('TTS request failed', 'error');
             } finally {
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
@@ -6186,7 +6291,12 @@
             if (!_trainCurrentJobId) return;
             if (!confirm('Cancel this training job? The pipeline will stop where it is.')) return;
             const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(_trainCurrentJobId) + '/cancel', { method: 'POST' });
-            if (res.ok) showToast('Job cancelled', 'info');
+            if (res && res.ok) {
+                showToast('Job cancelled', 'info');
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Cancel failed', 'error');
+            }
             stopTrainPoll();
             pollTrainStatus();
         }
@@ -6430,7 +6540,13 @@
 
         async function discardSunoTask(taskId) {
             if (!confirm('Discard this generation? Files will be deleted.')) return;
-            await api('/api/suno/discard/' + encodeURIComponent(taskId), { method: 'DELETE' });
+            const res = await api('/api/suno/discard/' + encodeURIComponent(taskId), { method: 'DELETE' });
+            if (!res || !res.ok) {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Failed to discard generation', 'error');
+                return;
+            }
+            showToast('Generation discarded', 'success');
             refreshSunoRecent();
         }
 
@@ -6578,6 +6694,7 @@
                         + '<div style="flex:1;display:flex;flex-direction:column;gap:0.35rem;min-width:0;">'
                         +   '<div id="' + rowId + '_title" style="font-weight:500;">' + esc(title) + ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">' + esc(tags) + (dur ? ' · ' + esc(dur) : '') + '</span></div>'
                         +   '<audio id="' + rowId + '_audio" controls preload="auto" style="width:100%;display:none;"></audio>'
+                        +   '<canvas id="' + rowId + '_wave" class="suno-mini-waveform" style="display:none;width:100%;height:32px;background:var(--surface);border-radius:var(--radius-sm);"></canvas>'
                         +   '<div id="' + rowId + '_hint" style="font-size:0.72rem;color:var(--text-muted);"></div>'
                         +   '<div style="display:flex;gap:0.4rem;flex-wrap:wrap;">'
                         +     '<button type="button" class="btn btn-primary btn-sm" id="' + rowId + '_saveBtn" onclick="saveSunoSlot(' + slot + ')"' + saveDisabled + '>Save</button>'
@@ -6616,6 +6733,11 @@
                 if (!desiredSrc && audioEl) {
                     audioEl.style.display = 'none';
                 }
+                // Wire the per-track live waveform. Safe to call repeatedly —
+                // the helper caches the AnalyserNode on the audio element so
+                // subsequent calls are no-ops apart from re-binding the canvas.
+                const waveEl = document.getElementById(rowId + '_wave');
+                if (audioEl && waveEl && desiredSrc) attachMiniWaveform(audioEl, waveEl);
                 if (hintEl) {
                     if (localReady) hintEl.textContent = '✓ Full MP3 downloaded locally.';
                     else if (streamUrl) hintEl.textContent = '▶ Streaming live from Suno (the player buffers the partial audio it receives — if it stalls, press play again).';
