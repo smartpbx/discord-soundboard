@@ -64,8 +64,15 @@ class VoiceInfo(BaseModel):
 # calls return 503 (voice LISTING still works — the soundboard UI stays
 # functional; only synth is paused).
 # ---------------------------------------------------------------------------
+import threading
+
 _TRAINING_MODE = False
 _TRAINING_MODE_SINCE = None
+# Serialize synth calls while training is active so only ONE set of model
+# weights is ever resident in VRAM at a time. Concurrent lazy-loads from
+# parallel synth requests would race for headroom and OOM the GPU.
+_TRAINING_SYNTH_LOCK = threading.Lock()
+_TRAINING_SYNTH_TIMEOUT_SEC = 30
 
 
 class TrainingModeRequest(BaseModel):
@@ -129,16 +136,43 @@ def voices():
     return all_voices
 
 
+def _free_gpu_caches():
+    """Drop RVC + Chatterbox model caches and call torch.cuda.empty_cache().
+
+    Used after each training-mode synth so the GPU returns to its training
+    baseline and the next training step doesn't compete for VRAM.
+    """
+    try: chatterbox_engine.free_caches()
+    except Exception as e: log.warning("chatterbox free_caches post-synth failed: %s", e)
+    try: rvc_engine.free_caches()
+    except Exception as e: log.warning("rvc free_caches post-synth failed: %s", e)
+
+
 @app.post("/synthesize")
 def synthesize(req: SynthesizeRequest):
     if _TRAINING_MODE:
-        # Lazy-loading while training is active would trigger OOM — the 3090
-        # is already at ~8 GB for the train loop. Fail fast with a clear
-        # message so the soundboard can surface it instead of hanging.
-        raise HTTPException(
-            status_code=503,
-            detail="Voice synthesis is paused while a training job is running. Try again in a few minutes.",
-        )
+        # Training is using ~8-10 GB of the 3090. TTS needs to share the
+        # remaining ~14 GB without OOM'ing the train loop, so we:
+        #   1. Serialize synth calls (only one lazy-load at a time)
+        #   2. Free all caches immediately after each synth so training
+        #      regains headroom before the next batch
+        # Parallel callers queue on the lock; if the queue exceeds
+        # _TRAINING_SYNTH_TIMEOUT_SEC we 503 with a clear message.
+        acquired = _TRAINING_SYNTH_LOCK.acquire(timeout=_TRAINING_SYNTH_TIMEOUT_SEC)
+        if not acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="Training-mode synthesis queue is busy. Try again in a moment.",
+            )
+        try:
+            return _do_synthesize(req)
+        finally:
+            _free_gpu_caches()
+            _TRAINING_SYNTH_LOCK.release()
+    return _do_synthesize(req)
+
+
+def _do_synthesize(req: SynthesizeRequest):
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text is empty")
