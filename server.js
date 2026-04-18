@@ -4342,14 +4342,46 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async 
     const startedBy = { username: req.session.user.username, role: req.session.user.role };
 
     try {
-        // For a local file path we use it directly; for a stream URL ffmpeg
-        // downloads as-needed. -reconnect flags help with Suno CDN hiccups.
         const ffArgs = ['-nostdin'];
-        if (sourceKind === 'stream') ffArgs.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3');
-        ffArgs.push('-i', ffInput, '-f', 'mp3', '-');
+        // -reconnect only applies to HTTP inputs; harmless on local files.
+        if (sourceKind === 'stream') ffArgs.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5');
+        ffArgs.push('-i', ffInput);
+
+        if (sourceKind === 'stream') {
+            // Tee the incoming stream to BOTH Discord (stdout) AND a local
+            // staging MP3 so the user can Save this variant even if Suno
+            // never publishes the final audio_url. ffmpeg's tee muxer needs
+            // re-encode (libmp3lame) because -c:a copy with tee requires
+            // the source to already be MP3 bitstream-clean, which Suno's
+            // partial stream isn't.
+            const stagingFile = require('path').join(require('./lib/suno-gen').STAGING_DIR, taskId, `slot${slot}_audio.mp3`);
+            const teeTarget = `[f=mp3:onfail=ignore]${stagingFile}|[f=mp3]pipe:1`;
+            ffArgs.push('-map', '0:a', '-c:a', 'libmp3lame', '-b:a', '192k', '-f', 'tee', teeTarget);
+        } else {
+            ffArgs.push('-f', 'mp3', 'pipe:1');
+        }
+
         const ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
         ff.stderr.on('data', () => {});
         ff.on('error', (err) => console.error('[Suno play] ffmpeg error', err));
+        ff.on('close', (code) => {
+            console.log('[Suno play] ffmpeg exit code=%s sourceKind=%s taskId=%s slot=%s', code, sourceKind, taskId, slot);
+            // If we were teeing a stream and ffmpeg finished cleanly, update
+            // staging meta so the frontend notices the new local file on
+            // its next poll and flips save/play-in-discord to localReady.
+            if (sourceKind === 'stream') {
+                try {
+                    const meta = sunoGen.getStagingMeta(taskId);
+                    if (meta && meta.tracks && meta.tracks[slot]) {
+                        const p = sunoGen.getSlotAudioPath(taskId, slot);
+                        if (p) {
+                            meta.tracks[slot].audio_bytes = require('fs').statSync(p).size;
+                            require('fs').writeFileSync(require('path').join(require('./lib/suno-gen').STAGING_DIR, taskId, 'meta.json'), JSON.stringify(meta, null, 2));
+                        }
+                    }
+                } catch (e) { console.error('[Suno play] post-tee meta update failed:', e.message); }
+            }
+        });
         const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'suno_preview', displayName } });
         resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume)));
         player.play(resource);
@@ -4364,6 +4396,14 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async 
         console.error('[Suno play] error:', err);
         res.status(500).json({ error: 'Failed to start Discord playback' });
     }
+});
+
+// List all unsaved staging generations so the frontend can surface a
+// "Recent generations" section. Entries stick around for STAGING_TTL_MS
+// (12h) unless explicitly discarded.
+app.get('/api/suno/recent', requireAuth, (req, res) => {
+    try { res.json({ items: sunoGen.listRecent() }); }
+    catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Full suno metadata for one saved sound (used by the "regenerate" flow).

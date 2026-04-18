@@ -876,6 +876,15 @@
                     <button type="button" class="btn btn-danger" id="sunoDiscardBtn" onclick="discardSuno()">Discard all</button>
                 </div>
             </div>
+
+            <div id="sunoRecentWrap" style="margin-top:0.85rem;border-top:1px solid var(--border);padding-top:0.6rem;">
+                <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.4rem;">
+                    <span style="font-size:0.8rem;color:var(--text-muted);flex:1;">Recent generations (not yet saved) — auto-purged after 12 h</span>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="refreshSunoRecent()">↻</button>
+                </div>
+                <div id="sunoRecentList" style="display:flex;flex-direction:column;gap:0.35rem;"></div>
+                <div id="sunoRecentEmpty" style="font-size:0.8rem;color:var(--text-muted);padding:0.4rem 0;">Nothing here yet.</div>
+            </div>
         </div>
         <div class="card sounds-card">
             <div class="sounds-card-header">
@@ -6370,6 +6379,59 @@
             } catch (e) {
                 metaEl.textContent = '';
             }
+            refreshSunoRecent();
+        }
+
+        async function refreshSunoRecent() {
+            const list = document.getElementById('sunoRecentList');
+            const empty = document.getElementById('sunoRecentEmpty');
+            if (!list) return;
+            try {
+                const r = await api('/api/suno/recent');
+                if (!r.ok) return;
+                const data = await r.json();
+                const items = (data.items || []).filter(it => it.taskId !== _sunoTaskId);
+                if (!items.length) { list.innerHTML = ''; empty.style.display = 'block'; return; }
+                empty.style.display = 'none';
+                const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                list.innerHTML = items.map(it => {
+                    const firstTrack = (it.tracks || [])[0] || {};
+                    const title = firstTrack.title || '(untitled)';
+                    const tags = firstTrack.tags || '';
+                    const numReady = it.tracks.filter(t => t.audio_ready).length;
+                    const ago = Math.round((Date.now() - it.mtime_ms) / 60000);
+                    return '<div style="display:flex;gap:0.5rem;align-items:center;padding:0.4rem 0.5rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.85rem;">'
+                        + '<span style="flex:1;min-width:0;"><span style="font-weight:500;">' + esc(title) + '</span>'
+                        +   ' <span style="color:var(--text-muted);">' + esc(tags) + '</span>'
+                        +   ' <span style="color:var(--text-muted);font-size:0.75rem;"> · ' + numReady + '/' + it.tracks.length + ' ready · ' + ago + 'm ago</span>'
+                        + '</span>'
+                        + '<button type="button" class="btn btn-ghost btn-sm" onclick="restoreSunoTask(\'' + esc(it.taskId) + '\')">Restore</button>'
+                        + '<button type="button" class="btn btn-danger btn-sm" onclick="discardSunoTask(\'' + esc(it.taskId) + '\')" title="Delete staging">✕</button>'
+                        + '</div>';
+                }).join('');
+            } catch (e) { list.innerHTML = ''; }
+        }
+
+        async function restoreSunoTask(taskId) {
+            // Bring an orphaned generation back into the active view so user can
+            // play/save it. Resumes polling in case Suno is still finalising.
+            stopSunoPoll();
+            _sunoTaskId = taskId;
+            _sunoStartTs = Date.now() - 60000;  // fake elapsed — we don't know actual age, show ~stable progress
+            document.getElementById('sunoForm').classList.add('hidden');
+            document.getElementById('sunoStatus').classList.remove('hidden');
+            document.getElementById('sunoTracksList').innerHTML = '';
+            document.getElementById('sunoSpinner').style.display = 'inline-block';
+            document.getElementById('sunoStatusLine').textContent = 'Restored — re-polling Suno for current state...';
+            document.getElementById('sunoProgressFill').style.width = '50%';
+            startSunoPoll();
+            refreshSunoMeta();
+        }
+
+        async function discardSunoTask(taskId) {
+            if (!confirm('Discard this generation? Files will be deleted.')) return;
+            await api('/api/suno/discard/' + encodeURIComponent(taskId), { method: 'DELETE' });
+            refreshSunoRecent();
         }
 
         let _sunoStartTs = 0;
@@ -6594,6 +6656,7 @@
             if (!res.ok) { showToast(data.error || 'Save failed', 'error'); return; }
             showToast('Saved as ' + data.filename, 'success');
             fetchSounds();
+            refreshSunoRecent();
         }
 
         async function playSunoToDiscord(slot) {
@@ -6629,6 +6692,7 @@
             await api('/api/suno/discard/' + encodeURIComponent(_sunoTaskId), { method: 'DELETE' });
             _sunoTaskId = null;
             backToSunoForm();
+            refreshSunoRecent();
         }
 
         async function uploadSound(file) {
