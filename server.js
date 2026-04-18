@@ -989,6 +989,23 @@ const TTS_API_URL = (process.env.TTS_API_URL || '').replace(/\/+$/, '');
 // { wavBuffer: Buffer, text: string, voiceId: string, timestamp: number }
 const ttsLastBuffer = new Map();
 
+// Short-lived cache of freshly-synthesized TTS WAVs keyed by a random token.
+// Lets the speak-request's browser fetch the bytes and render a live waveform
+// while the queue plays in Discord. TTL is short because the WAV is already
+// persisted in tts_recents for non-guests; this is only needed for the
+// post-synth flash visualization.
+const ttsWavCache = new Map();
+const TTS_WAV_CACHE_TTL_MS = 2 * 60 * 1000;
+function ttsWavCacheStash(buffer) {
+    const id = require('crypto').randomBytes(16).toString('hex');
+    ttsWavCache.set(id, { buffer, expiresAt: Date.now() + TTS_WAV_CACHE_TTL_MS });
+    return id;
+}
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, e] of ttsWavCache) if (e.expiresAt < now) ttsWavCache.delete(id);
+}, 60_000).unref?.();
+
 // --- TTS Queue ---
 const ttsQueue = [];
 let ttsQueueIdCounter = 0;
@@ -3835,6 +3852,10 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
 
     // Cache for legacy "save last TTS" feature
     ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
+    // Short-lived handle for the frontend to fetch the WAV and render a live
+    // waveform during playback (audio element plays muted locally; only the
+    // AnalyserNode taps the samples).
+    const localWavId = ttsWavCacheStash(wavBuffer);
 
     const startedBy = { username: req.session.user.username, role };
     const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
@@ -3898,7 +3919,18 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
             details: { voiceId, textLength: trimmed.length, preview: trimmed.slice(0, 80), recentId },
         });
     }
-    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled });
+    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
+});
+
+// Serve a freshly-synthesized TTS WAV by its short-lived token so the
+// requesting browser can feed it through an AnalyserNode for the live
+// waveform. Not a persistent asset — fetch once and play.
+app.get('/api/tts/wav/:id', requireAuth, (req, res) => {
+    const entry = ttsWavCache.get(req.params.id);
+    if (!entry) return res.status(404).json({ error: 'WAV expired or not found' });
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(entry.buffer);
 });
 
 // --- TTS recents (per-user, max 5) ---
