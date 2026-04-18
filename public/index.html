@@ -1551,6 +1551,9 @@
                         <div class="status-line" id="sunoStatusLine" style="flex:1;"></div>
                         <span id="sunoElapsed" style="font-size:0.8rem;color:var(--text-muted);"></span>
                     </div>
+                    <div style="margin-top:0.45rem;height:6px;background:var(--surface-hover);border:1px solid var(--border);border-radius:3px;overflow:hidden;">
+                        <div id="sunoProgressFill" style="width:0%;height:100%;background:var(--accent);transition:width 0.4s ease;"></div>
+                    </div>
                     <div id="sunoTracksList" style="margin-top:0.75rem;"></div>
                     <div class="footer-row">
                         <button type="button" class="btn btn-ghost" onclick="backToSunoForm()">Back to form</button>
@@ -6404,6 +6407,18 @@
             })[st] || ('Working... (' + st + ')');
         }
 
+        function sunoPhaseProgress(st, elapsedSec) {
+            // Phase-based + elapsed-time-interpolated percentage (no real
+            // percent from Suno). Tuned from the ~50s typical generation time.
+            switch (st) {
+                case 'PENDING': return Math.min(25, 5 + elapsedSec * 1.2);
+                case 'TEXT_SUCCESS': return Math.min(45, 30 + elapsedSec * 0.3);
+                case 'FIRST_SUCCESS': return Math.min(95, 55 + (elapsedSec - 20) * 1.5);
+                case 'SUCCESS': case 'COMPLETE': return 100;
+                default: return 5;
+            }
+        }
+
         async function pollSunoStatus() {
             if (!_sunoTaskId) return;
             const res = await api('/api/suno/status/' + encodeURIComponent(_sunoTaskId));
@@ -6412,13 +6427,14 @@
             const line = document.getElementById('sunoStatusLine');
             const spinner = document.getElementById('sunoSpinner');
             const elapsed = document.getElementById('sunoElapsed');
+            const progressFill = document.getElementById('sunoProgressFill');
             const st = String(data.status || 'PENDING').toUpperCase();
 
-            // Elapsed timer
-            if (_sunoStartTs) {
-                const secs = Math.round((Date.now() - _sunoStartTs) / 1000);
-                elapsed.textContent = secs + 's';
-            }
+            // Elapsed timer + progress fill
+            const secs = _sunoStartTs ? Math.round((Date.now() - _sunoStartTs) / 1000) : 0;
+            elapsed.textContent = secs + 's';
+            const pct = sunoPhaseProgress(st, secs);
+            progressFill.style.width = pct.toFixed(0) + '%';
 
             line.textContent = sunoStatusLabel(st);
             line.classList.remove('error', 'success');
@@ -6436,56 +6452,105 @@
             }
         }
 
+        // Track per-slot DOM state so re-renders don't reset audio playback position.
+        const _sunoRendered = new Set();
+
         function renderSunoTracks(tracks, overallStatus) {
             const box = document.getElementById('sunoTracksList');
             if (!tracks || !tracks.length) {
-                // Lyrics stage often returns 0 tracks — show a placeholder
                 if (box.dataset.placeholder !== '1') {
                     box.innerHTML = '<div style="color:var(--text-muted);padding:0.5rem;font-size:0.85rem;">Audio not started yet. This first step generates lyrics.</div>';
                     box.dataset.placeholder = '1';
                 }
                 return;
             }
+            const wasPlaceholder = box.dataset.placeholder === '1';
             box.dataset.placeholder = '';
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            const finalReady = overallStatus === 'SUCCESS' || overallStatus === 'COMPLETE';
+            // Save / Play-to-Discord gates are per-track based on whether THAT specific slot
+            // has a full local MP3 — overall status can still be FIRST_SUCCESS while one of
+            // two variants is already fully downloaded.
+            window._sunoTracks = tracks;
 
-            box.innerHTML = tracks.map((t) => {
+            // Build row HTML per slot — reuses the existing card div if present to keep the
+            // audio element alive (re-creating the element resets playback to 0:00 every poll).
+            for (const t of tracks) {
                 const slot = t.slot != null ? t.slot : 0;
-                const localAudioReady = !!t.audio_bytes;   // /api/suno/preview/ served by us
-                const streamUrl = t.stream_url || null;    // partial, still generating
+                const rowId = 'sunoTrack_' + slot;
+                const localReady = !!t.audio_bytes;
+                const streamUrl = t.stream_url || null;
                 const title = t.title || ('Variant ' + (slot + 1));
                 const tags = t.tags || '';
                 const dur = t.duration ? Math.round(t.duration) + 's' : '';
                 const coverUrl = t.image_url || ('/api/suno/cover/' + encodeURIComponent(_sunoTaskId) + '/' + slot);
                 const localPreviewUrl = '/api/suno/preview/' + encodeURIComponent(_sunoTaskId) + '/' + slot;
+                const saveDisabled = localReady ? '' : ' disabled title="This variant\'s final MP3 is still downloading"';
+                const playDiscordDisabled = localReady ? '' : ' disabled title="Wait for final MP3 before playing to Discord"';
 
-                // Prefer the local file when downloaded (reliable save), else use streamUrl as a direct CDN play
-                let audioPlayer = '';
-                if (localAudioReady) {
-                    audioPlayer = '<audio controls preload="auto" src="' + localPreviewUrl + '" style="width:100%;"></audio>';
-                } else if (streamUrl) {
-                    audioPlayer = '<audio controls preload="auto" src="' + esc(streamUrl) + '" style="width:100%;"></audio>'
-                        + '<div style="font-size:0.72rem;color:var(--text-muted);">▶ Streaming live from Suno (partial — full MP3 still generating)</div>';
-                } else {
-                    audioPlayer = '<div style="font-size:0.8rem;color:var(--text-muted);">Audio not ready yet</div>';
+                let row = document.getElementById(rowId);
+                if (!row || wasPlaceholder) {
+                    // Fresh row — build from scratch
+                    const div = document.createElement('div');
+                    div.id = rowId;
+                    div.style.cssText = 'display:flex;gap:0.75rem;padding:0.5rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:0.5rem;';
+                    div.innerHTML = '<img id="' + rowId + '_cover" src="' + coverUrl + '" alt="cover" style="width:80px;height:80px;border-radius:var(--radius-sm);object-fit:cover;background:var(--surface);" onerror="this.style.visibility=\'hidden\'">'
+                        + '<div style="flex:1;display:flex;flex-direction:column;gap:0.35rem;min-width:0;">'
+                        +   '<div id="' + rowId + '_title" style="font-weight:500;">' + esc(title) + ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">' + esc(tags) + (dur ? ' · ' + esc(dur) : '') + '</span></div>'
+                        +   '<audio id="' + rowId + '_audio" controls preload="auto" style="width:100%;display:none;"></audio>'
+                        +   '<div id="' + rowId + '_hint" style="font-size:0.72rem;color:var(--text-muted);"></div>'
+                        +   '<div style="display:flex;gap:0.4rem;flex-wrap:wrap;">'
+                        +     '<button type="button" class="btn btn-primary btn-sm" id="' + rowId + '_saveBtn" onclick="saveSunoSlot(' + slot + ')"' + saveDisabled + '>Save</button>'
+                        +     '<button type="button" class="btn btn-ghost btn-sm" id="' + rowId + '_discBtn" onclick="playSunoToDiscord(' + slot + ')"' + playDiscordDisabled + '>🔊 Play in Discord</button>'
+                        +     '<button type="button" class="btn btn-ghost btn-sm" onclick="openSunoLyrics(' + slot + ')" title="Show full lyrics">Lyrics</button>'
+                        +   '</div>'
+                        + '</div>';
+                    box.appendChild(div);
                 }
 
-                const saveDisabled = finalReady ? '' : ' disabled title="Wait for final MP3 before saving"';
-                return '<div style="display:flex;gap:0.75rem;padding:0.5rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:0.5rem;">'
-                    + '<img src="' + coverUrl + '" alt="cover" style="width:80px;height:80px;border-radius:var(--radius-sm);object-fit:cover;background:var(--surface);" onerror="this.style.display=\'none\'">'
-                    + '<div style="flex:1;display:flex;flex-direction:column;gap:0.35rem;min-width:0;">'
-                    +   '<div style="font-weight:500;">' + esc(title) + ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8rem;">' + esc(tags) + (dur ? ' · ' + esc(dur) : '') + '</span></div>'
-                    +   audioPlayer
-                    +   '<div style="display:flex;gap:0.4rem;">'
-                    +     '<button type="button" class="btn btn-primary btn-sm" onclick="saveSunoSlot(' + slot + ')"' + saveDisabled + '>Save</button>'
-                    +     '<button type="button" class="btn btn-ghost btn-sm" onclick="openSunoLyrics(' + slot + ')" title="Show full lyrics">Lyrics</button>'
-                    +   '</div>'
-                    + '</div>'
-                    + '</div>';
-            }).join('');
-            // Stash track data globally so saveSunoSlot/openSunoLyrics can read it
-            window._sunoTracks = tracks;
+                // Update the dynamic bits (audio src only when the target URL has changed)
+                const audioEl = document.getElementById(rowId + '_audio');
+                const hintEl = document.getElementById(rowId + '_hint');
+                const saveBtn = document.getElementById(rowId + '_saveBtn');
+                const discBtn = document.getElementById(rowId + '_discBtn');
+
+                const desiredSrc = localReady
+                    ? localPreviewUrl
+                    : streamUrl;
+
+                if (desiredSrc && audioEl && !audioEl.src.endsWith(desiredSrc)) {
+                    // Swap source once when the URL meaningfully changes (e.g. from streamUrl → localPreviewUrl on SUCCESS).
+                    // Preserve currentTime if the user was mid-play.
+                    const wasPlaying = !audioEl.paused;
+                    const wasTime = audioEl.currentTime || 0;
+                    audioEl.src = desiredSrc;
+                    audioEl.style.display = 'block';
+                    if (wasTime > 0) {
+                        audioEl.addEventListener('loadedmetadata', function once() {
+                            try { audioEl.currentTime = Math.min(wasTime, (audioEl.duration || wasTime)); } catch {}
+                            if (wasPlaying) audioEl.play().catch(() => {});
+                            audioEl.removeEventListener('loadedmetadata', once);
+                        });
+                    }
+                }
+                if (!desiredSrc && audioEl) {
+                    audioEl.style.display = 'none';
+                }
+                if (hintEl) {
+                    if (localReady) hintEl.textContent = '✓ Full MP3 downloaded locally.';
+                    else if (streamUrl) hintEl.textContent = '▶ Streaming live from Suno (the player buffers the partial audio it receives — if it stalls, press play again).';
+                    else hintEl.textContent = 'Audio not ready yet.';
+                }
+                if (saveBtn) saveBtn.disabled = !localReady;
+                if (discBtn) discBtn.disabled = !localReady;
+            }
+
+            // Remove orphan rows if Suno returned fewer tracks than last render
+            for (const child of Array.from(box.children)) {
+                if (child.id && child.id.startsWith('sunoTrack_')) {
+                    const s = parseInt(child.id.slice('sunoTrack_'.length), 10);
+                    if (!tracks.some(tr => (tr.slot != null ? tr.slot : 0) === s)) child.remove();
+                }
+            }
         }
 
         function openSunoLyrics(slot) {
@@ -6510,6 +6575,14 @@
             if (!res.ok) { showToast(data.error || 'Save failed', 'error'); return; }
             showToast('Saved as ' + data.filename, 'success');
             fetchSounds();
+        }
+
+        async function playSunoToDiscord(slot) {
+            if (!_sunoTaskId) return;
+            const res = await api('/api/suno/play/' + encodeURIComponent(_sunoTaskId) + '/' + slot, { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Discord playback failed', 'error'); return; }
+            showToast('Playing "' + data.displayName + '" in Discord', 'success');
         }
 
         async function regenerateSunoSound() {

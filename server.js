@@ -4312,6 +4312,47 @@ app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
     res.json({ ok: true });
 });
 
+// Play a Suno staging track straight to Discord without requiring Save first.
+// Limited to users with Suno access (same gate as /generate).
+app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async (req, res) => {
+    const slot = parseInt(req.params.slot, 10);
+    const audioPath = sunoGen.getSlotAudioPath(req.params.taskId, slot);
+    if (!audioPath) return res.status(404).json({ error: 'Final audio not downloaded yet — wait for SUCCESS.' });
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first' });
+
+    // Ensure voice connection is ready (same dance as /api/play)
+    const conn = getVoiceConnection(activeGuildId);
+    if (conn && conn.state.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15000); }
+        catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
+    }
+
+    // Pull the title/lyrics from staging meta for Now Playing display
+    const meta = sunoGen.getStagingMeta(req.params.taskId);
+    const track = meta && meta.tracks && meta.tracks[slot];
+    const displayName = (track && track.title) ? ('🎵 ' + track.title) : 'Suno preview';
+    const startedBy = { username: req.session.user.username, role: req.session.user.role };
+
+    try {
+        const ff = spawn('ffmpeg', ['-nostdin', '-i', audioPath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ff.stderr.on('data', () => {});
+        ff.on('error', (err) => console.error('[Suno play] ffmpeg error', err));
+        const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'suno_preview', displayName } });
+        resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume)));
+        player.play(resource);
+        playbackState = {
+            status: 'playing', filename: 'suno_preview', displayName,
+            startTime: Date.now(), startTimeOffset: 0,
+            duration: (track && track.duration) || null,
+            startedBy, tts: false,
+        };
+        res.json({ ok: true, displayName });
+    } catch (err) {
+        console.error('[Suno play] error:', err);
+        res.status(500).json({ error: 'Failed to start Discord playback' });
+    }
+});
+
 // Full suno metadata for one saved sound (used by the "regenerate" flow).
 app.get('/api/suno/sound/:filename', requireAuth, (req, res) => {
     const safe = path.basename(req.params.filename);
