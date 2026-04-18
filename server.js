@@ -4635,6 +4635,20 @@ app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) =
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+app.post('/api/superadmin/tts/train/:id/adopt', requireSuperadmin, (req, res) => {
+    try {
+        const meta = voiceTrainer.adoptOrphan(req.params.id);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-train.adopt-orphan',
+            target: String(req.params.id),
+            details: { voice_id: meta && meta.input && meta.input.voice_id, pipeline_job_dir: meta && meta.pipeline_job_dir },
+        });
+        res.json({ ok: true, meta });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.post('/api/superadmin/tts/train/:id/resume', requireSuperadmin, (req, res) => {
     try {
         const runAfter = (req.body && req.body.run_after) || null;

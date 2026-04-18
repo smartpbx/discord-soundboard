@@ -4141,6 +4141,7 @@
             }).join('');
             grid.classList.toggle('reorder-mode', reorderMode);
             grid.classList.toggle('compact-mode', compactMode);
+            applyPreviewIndicator();
             renderFavoritesBar();
             if (mobileView) renderMobileGrid();
             const msg = document.getElementById('userLockedMsg');
@@ -4569,6 +4570,10 @@
         let previewAudio = null;
         let previewBtn = null;
         let previewId = 0;
+        // The grid re-renders for filter / play-count refresh / heatmap toggle,
+        // which detaches the old preview button DOM. Tracking the filename
+        // lets us re-apply the .playing class to the freshly-rendered button.
+        let previewFilename = null;
 
         // Shared AudioContext for live-waveform analysis of preview playback.
         let liveWaveformCtx = null;
@@ -4716,21 +4721,33 @@
             draw();
         }
 
+        function _stopPreview() {
+            if (previewAudio) { try { previewAudio.pause(); } catch {} previewAudio = null; }
+            detachLiveWaveform();
+            previewFilename = null;
+            // Clear .playing on every preview button — covers both the cached
+            // ref (might be detached) and any current button for the same file.
+            document.querySelectorAll('.sound-preview.playing').forEach(b => b.classList.remove('playing'));
+            previewBtn = null;
+        }
+        // Re-apply .playing to the currently-active preview button after a
+        // grid re-render (filter change, heatmap toggle, play-count refresh).
+        // Called from renderSoundsGrid / renderMobileGrid.
+        function applyPreviewIndicator() {
+            if (!previewFilename) return;
+            const btns = document.querySelectorAll('.sound-preview[data-filename="' + CSS.escape(previewFilename) + '"]');
+            btns.forEach(b => b.classList.add('playing'));
+            if (btns.length) previewBtn = btns[0];
+        }
         function previewSound(filename, btn) {
             if (!filename) return;
-            if (previewBtn === btn && previewAudio) {
-                previewAudio.pause();
-                previewAudio = null;
-                detachLiveWaveform();
-                btn.classList.remove('playing');
+            // Same file already previewing → toggle stop.
+            if (previewFilename === filename && previewAudio) {
+                _stopPreview();
                 return;
             }
-            if (previewAudio) {
-                previewAudio.pause();
-                previewAudio = null;
-                detachLiveWaveform();
-                if (previewBtn) previewBtn.classList.remove('playing');
-            }
+            // Different file → swap.
+            _stopPreview();
             const id = ++previewId;
             const url = '/api/sounds/audio/' + encodeURIComponent(filename);
             fetch(url, { credentials: 'include' }).then(r => {
@@ -4740,15 +4757,15 @@
                 if (id !== previewId) return;
                 const blob = new Blob([buf]);
                 const audio = new Audio(URL.createObjectURL(blob));
-                audio.addEventListener('ended', () => { URL.revokeObjectURL(audio.src); previewAudio = null; detachLiveWaveform(); if (previewBtn) previewBtn.classList.remove('playing'); });
-                audio.addEventListener('error', () => { if (audio.src) URL.revokeObjectURL(audio.src); previewAudio = null; detachLiveWaveform(); if (previewBtn) previewBtn.classList.remove('playing'); });
-                audio.addEventListener('pause', () => { if (audio.ended) return; /* user-initiated pause; keep the canvas visible but frozen — stopping RAF is optional */ });
+                audio.addEventListener('ended', () => { URL.revokeObjectURL(audio.src); _stopPreview(); });
+                audio.addEventListener('error', () => { if (audio.src) URL.revokeObjectURL(audio.src); _stopPreview(); });
                 previewAudio = audio;
                 previewBtn = btn;
+                previewFilename = filename;
                 btn.classList.add('playing');
                 attachLiveWaveform(audio);
-                audio.play().catch(() => { previewAudio = null; detachLiveWaveform(); btn.classList.remove('playing'); });
-            }).catch(() => { if (id === previewId) { previewAudio = null; detachLiveWaveform(); btn.classList.remove('playing'); } });
+                audio.play().catch(() => { _stopPreview(); });
+            }).catch(() => { if (id === previewId) _stopPreview(); });
         }
 
         function closeSoundPanel() {
@@ -6527,9 +6544,16 @@
                 }
                 const canResume = (j.status === 'cancelled' || j.status === 'failed' || j.status === 'unknown_exit');
                 const canCancel = (j.status === 'running' || j.status === 'queued');
+                // unknown_exit / failed: the local Claude died. The CT 110
+                // pipeline may still be running. Offer Adopt; backend probes
+                // CT 110 to confirm and refuses if there's nothing to adopt.
+                const canAdopt = (j.status === 'unknown_exit' || j.status === 'failed');
                 let actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="reopenTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">View</button>';
                 if (canCancel) {
                     actions += ' <button type="button" class="btn btn-danger btn-sm" onclick="cancelTrainJobFromList(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">Cancel</button>';
+                }
+                if (canAdopt) {
+                    actions += ' <button type="button" class="btn btn-ghost btn-sm" onclick="adoptOrphanTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')" title="Re-attach to a CT 110 pipeline that\'s still running">Adopt</button>';
                 }
                 if (canResume) {
                     actions += ' <button type="button" class="btn btn-primary btn-sm" onclick="resumeTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')" title="Resume from last checkpoint">Resume</button>';
@@ -6556,6 +6580,15 @@
             document.getElementById('trainVoiceEvents').innerHTML = '';
             document.getElementById('trainVoiceOverlay').classList.remove('hidden');
             startTrainPoll();
+        }
+
+        async function adoptOrphanTrainJob(jobId, name) {
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/adopt', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Adopt failed', 'error'); return; }
+            showToast('Adopted "' + name + '" — tracking CT 110 directly', 'success');
+            reopenTrainJob(jobId, name);
+            fetchTrainJobs();
         }
 
         async function cancelTrainJobFromList(jobId, name) {
