@@ -4637,13 +4637,18 @@ app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) =
 
 app.post('/api/superadmin/tts/train/:id/resume', requireSuperadmin, (req, res) => {
     try {
-        const meta = voiceTrainer.resumeJob(req.params.id);
+        const runAfter = (req.body && req.body.run_after) || null;
+        const meta = voiceTrainer.resumeJob(req.params.id, { run_after: runAfter });
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
             action: 'voice-train.resume',
             target: String(req.params.id),
-            details: { voice_id: meta && meta.voice_id, status: meta && meta.status },
+            details: {
+                voice_id: meta && meta.voice_id,
+                status: meta && meta.status,
+                run_after: meta && meta.run_after,
+            },
         });
         res.json({ ok: true, meta });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }

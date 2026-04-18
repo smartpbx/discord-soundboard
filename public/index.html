@@ -6473,12 +6473,38 @@
         }
 
         async function resumeTrainJob(jobId, name) {
-            if (!confirm('Resume "' + (name || jobId) + '" from the last Applio checkpoint? A new Claude session spawns and training picks up from where it left off.')) return;
-            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/resume', { method: 'POST' });
+            // Same scheduling affordance as "Start training" — blank = now,
+            // or paste an ISO/local datetime to queue for later (e.g. after
+            // another job finishes, or overnight).
+            const sched = prompt(
+                'Resume "' + (name || jobId) + '" from the last Applio checkpoint.\n\n' +
+                'Schedule (optional): enter a datetime like 2026-04-17 03:00, or leave blank to resume now.\n\n' +
+                'Cancel to abort.',
+                ''
+            );
+            if (sched === null) return;
+            let runAfter = null;
+            const trimmed = sched.trim();
+            if (trimmed) {
+                const t = Date.parse(trimmed);
+                if (!Number.isFinite(t)) { showToast('Could not parse that datetime', 'error'); return; }
+                if (t < Date.now() - 60_000) { showToast('Scheduled time is in the past', 'error'); return; }
+                runAfter = t;
+            }
+            const body = runAfter ? { run_after: runAfter } : {};
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/resume', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(data.error || 'Resume failed', 'error'); return; }
-            showToast('Resumed as new job ' + data.meta.id, 'success');
-            // Open the new job for live status
+            if (runAfter) {
+                showToast('Resume queued for ' + new Date(runAfter).toLocaleString(), 'success');
+            } else {
+                showToast('Resumed as new job ' + data.meta.id, 'success');
+            }
+            // Open the new job for live status (queue state will show "queued" until due)
             reopenTrainJob(data.meta.id, name);
             fetchTrainJobs();
         }
