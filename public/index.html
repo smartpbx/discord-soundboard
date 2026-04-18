@@ -712,6 +712,10 @@
                 <canvas id="liveWaveformCanvas" width="600" height="48"></canvas>
                 <span class="live-waveform-label">🎧 Previewing (local)</span>
             </div>
+            <div class="live-waveform-wrap" id="ttsNowPlayingWaveformWrap" style="display: none;">
+                <canvas id="ttsNowPlayingWaveform" width="600" height="48"></canvas>
+                <span class="live-waveform-label">🗣 TTS speaking</span>
+            </div>
             <div class="progress-time" id="progressTime">0:00 / 0:00</div>
             <div class="multi-track-display hidden" id="multiTrackDisplay"></div>
             <div class="player-buttons">
@@ -785,7 +789,6 @@
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
             <audio id="ttsLocalAudio" muted preload="auto" style="display:none"></audio>
-            <canvas id="ttsLocalWaveform" style="display:none;width:100%;height:32px;margin-top:0.4rem;background:var(--surface);border-radius:var(--radius-sm);"></canvas>
             <div class="hidden" id="ttsQueueInfo" style="display:none;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem;">
                 <span id="ttsQueueText"></span>
             </div>
@@ -2072,6 +2075,8 @@
                 showToast(d.error || 'Replay failed', 'error');
                 return;
             }
+            const data = await res.json().catch(() => ({}));
+            if (data && data.localWavId) playTtsLocalWaveform(data.localWavId);
             showToast('Replaying TTS…', 'info');
         }
 
@@ -5679,17 +5684,26 @@
         }
 
         // Play the freshly-synthesized TTS WAV muted in the browser so the
-        // AnalyserNode can render a live waveform alongside the Discord
-        // playback. The audio element stays muted — this is only for visuals.
+        // AnalyserNode can render a live waveform in the Now Playing card
+        // alongside the Discord playback. The audio element stays muted —
+        // this is only for visuals, not a second audio source.
         function playTtsLocalWaveform(wavId) {
             const audio = document.getElementById('ttsLocalAudio');
-            const canvas = document.getElementById('ttsLocalWaveform');
-            if (!audio || !canvas || !wavId) return;
+            const canvas = document.getElementById('ttsNowPlayingWaveform');
+            const wrap = document.getElementById('ttsNowPlayingWaveformWrap');
+            if (!audio || !canvas || !wrap || !wavId) return;
+            // If a preview is running, its live-waveform draw loop fights with
+            // ours for the shared AudioContext — stop it first.
+            if (typeof previewAudio !== 'undefined' && previewAudio) {
+                try { previewAudio.pause(); } catch {}
+                if (typeof detachLiveWaveform === 'function') detachLiveWaveform();
+                if (typeof previewBtn !== 'undefined' && previewBtn) previewBtn.classList.remove('playing');
+            }
             try { audio.pause(); } catch {}
             audio.muted = true;
             audio.src = '/api/tts/wav/' + encodeURIComponent(wavId);
-            canvas.style.display = 'block';
-            const hide = () => { canvas.style.display = 'none'; };
+            wrap.style.display = 'block';
+            const hide = () => { wrap.style.display = 'none'; };
             audio.onended = hide;
             audio.onerror = hide;
             attachMiniWaveform(audio, canvas);

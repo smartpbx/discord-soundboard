@@ -3992,7 +3992,8 @@ app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
         target: String(row.id),
         details: { owner: row.owner, voiceId: row.voice_id, preview: String(row.text || '').slice(0, 80) },
     });
-    res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName });
+    const localWavId = ttsWavCacheStash(wavBuffer);
+    res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName, localWavId });
 });
 
 // Save a stored TTS recent as a permanent sound (WAV → MP3, adds tts metadata).
