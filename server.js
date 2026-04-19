@@ -1380,6 +1380,14 @@ player.on('stateChange', (oldState, newState) => {
         // ttsIsPlaying stuck true.)
         ttsIsPlaying = false;
         processTtsQueue();
+    } else if (
+        (newState.status === AudioPlayerStatus.Playing || newState.status === AudioPlayerStatus.Buffering) &&
+        ttsIsPlaying && newState.resource?.metadata?.filename !== 'tts'
+    ) {
+        // Resource swap mid-flight: a non-TTS sound took over the shared
+        // player before the old TTS hit Idle. Without this reset the UI
+        // keeps claiming "TTS playing" alongside the new sound.
+        ttsIsPlaying = false;
     }
 });
 

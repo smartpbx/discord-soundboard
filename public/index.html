@@ -4623,7 +4623,15 @@
         // given canvas. createMediaElementSource can only be called once per
         // element, so we cache the nodes on the audio itself and reuse them
         // across re-renders.
-        function attachMiniWaveform(audio, canvas) {
+        //
+        // Caller can pass `{ silent: true }` to analyze without routing audio
+        // to speakers — needed for the TTS Now-Playing waveform where the audio
+        // is already going to Discord and we don't want the browser playing
+        // it too. We use a GainNode(0) rather than HTMLMediaElement.muted,
+        // because muting an HTMLMediaElement sends SILENCE through its
+        // MediaElementSource (the AnalyserNode sees zeros). GainNode(0)
+        // silences only AFTER the analyser sees real samples.
+        function attachMiniWaveform(audio, canvas, opts = {}) {
             if (!audio || !canvas) return;
             const ctx = ensureLiveWaveformCtx();
             if (!ctx) return;
@@ -4636,8 +4644,18 @@
                 const analyser = ctx.createAnalyser();
                 analyser.fftSize = 1024;
                 source.connect(analyser);
-                analyser.connect(ctx.destination);
-                st = { analyser, canvas, raf: null, data: new Uint8Array(analyser.fftSize), playing: false };
+                if (opts.silent) {
+                    // source → analyser → gain(0) → destination: samples flow
+                    // for analysis, speakers hear nothing.
+                    const gain = ctx.createGain();
+                    gain.gain.value = 0;
+                    analyser.connect(gain);
+                    gain.connect(ctx.destination);
+                    st = { analyser, canvas, raf: null, data: new Uint8Array(analyser.fftSize), playing: false, gain };
+                } else {
+                    analyser.connect(ctx.destination);
+                    st = { analyser, canvas, raf: null, data: new Uint8Array(analyser.fftSize), playing: false };
+                }
                 audio.__miniWaveform = st;
                 const start = () => { st.playing = true; st.canvas.style.display = 'block'; drawMiniWaveform(st); };
                 const stop = () => { st.playing = false; if (st.raf) { cancelAnimationFrame(st.raf); st.raf = null; } };
@@ -5764,10 +5782,11 @@
             if (r && r.ok && typeof showToast === 'function') showToast('TTS queue cleared');
         }
 
-        // Play the freshly-synthesized TTS WAV muted in the browser so the
-        // AnalyserNode can render a live waveform in the Now Playing card
-        // alongside the Discord playback. The audio element stays muted —
-        // this is only for visuals, not a second audio source.
+        // Play the freshly-synthesized TTS WAV in the browser (silently via
+        // GainNode(0)) so the AnalyserNode can render a live waveform in the
+        // Now Playing card alongside the Discord playback. We can NOT use
+        // audio.muted = true — Chrome routes silence through MediaElementSource
+        // when the element is muted, so the analyser would see all zeros.
         function playTtsLocalWaveform(wavId) {
             const audio = document.getElementById('ttsLocalAudio');
             const canvas = document.getElementById('ttsNowPlayingWaveform');
@@ -5781,13 +5800,17 @@
                 if (typeof previewBtn !== 'undefined' && previewBtn) previewBtn.classList.remove('playing');
             }
             try { audio.pause(); } catch {}
-            audio.muted = true;
+            // IMPORTANT: do NOT mute the element; that gives the analyser
+            // silent samples. Instead attachMiniWaveform(..., { silent: true })
+            // routes through a gain-0 node downstream of the analyser.
+            audio.muted = false;
+            audio.volume = 1;
             audio.src = '/api/tts/wav/' + encodeURIComponent(wavId);
             wrap.style.display = 'block';
             const hide = () => { wrap.style.display = 'none'; };
             audio.onended = hide;
             audio.onerror = hide;
-            attachMiniWaveform(audio, canvas);
+            attachMiniWaveform(audio, canvas, { silent: true });
             audio.play().catch(() => { hide(); });
         }
 
