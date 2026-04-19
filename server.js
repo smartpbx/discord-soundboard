@@ -4281,6 +4281,37 @@ app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, asy
     }
 });
 
+// One-click: analyze the voice's dataset chunks and auto-pick a reference
+// clip per emotion (soft / neutral / excited / yell / angry / sad / happy).
+// Only works for voices that were trained via the RVC pipeline (dataset
+// archive lives at tts-server/models/datasets/<voice>/chunks/).
+app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    const overwrite = req.body?.overwrite !== false;
+    try {
+        const url = `${TTS_API_URL}/admin/voices/chatterbox/${encodeURIComponent(dirId)}/auto-emotion-refs?overwrite=${overwrite}`;
+        const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
+            // server analyzes ~50-500 chunks × librosa features; can take a minute
+            signal: AbortSignal.timeout(600_000),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) return res.status(r.status).json(body);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice.auto-emotion-refs',
+            target: dirId,
+            details: { chunks_analyzed: body.chunks_analyzed, emotions_picked: body.refs ? Object.keys(body.refs).length : 0 },
+        });
+        res.json(body);
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
 // One-click: create a GPT-SoVITS voice by cloning an existing Chatterbox
 // voice's reference clip. TTS server trims + whisper-transcribes.
 app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async (req, res) => {

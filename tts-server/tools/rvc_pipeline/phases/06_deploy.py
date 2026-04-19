@@ -314,6 +314,37 @@ def main():
             run.progress(action="chatterbox_voice_created", result=result)
             time.sleep(2)  # give engine cache a moment to invalidate
 
+        # 5b. Auto-pick per-emotion reference clips from the chunks dataset.
+        # Uses tts-server/tools/select_emotion_refs.py — heuristic scoring
+        # on RMS + pitch + spectral centroid. Populates refs/<emotion>.wav
+        # under the Chatterbox voice dir so the expression-aware synth path
+        # has material to swap between for yell / soft / excited / etc.
+        try:
+            chunks_dir = job_dir / "chunks"
+            if chunks_dir.is_dir() and any(chunks_dir.glob("*.wav")):
+                select_script = Path("/opt/discord-soundboard/tts-server/tools/select_emotion_refs.py")
+                if select_script.exists():
+                    run.progress(action="auto_selecting_emotion_refs")
+                    r = subprocess.run([
+                        "/opt/GPT-SoVITS/.venv/bin/python", str(select_script),
+                        "--voice-id", voice_id,
+                        "--chunks-dir", str(chunks_dir),
+                        "--cb-dir", str(TTS_CB_DIR),
+                        "--overwrite",
+                    ], capture_output=True, text=True, timeout=600)
+                    if r.returncode == 0:
+                        # parse last-line JSON report for the progress emit
+                        try:
+                            rep = json.loads(r.stdout.strip().splitlines()[-1])
+                            picked = list(rep.get("refs", {}).keys())
+                            run.progress(action="emotion_refs_picked", emotions=picked, count=len(picked))
+                        except Exception:
+                            run.progress(action="emotion_refs_picked", raw=r.stdout[-300:])
+                    else:
+                        run.progress(action="emotion_refs_failed", stderr=(r.stderr or "")[-400:])
+        except Exception as e:
+            run.progress(action="emotion_refs_exception", error=str(e)[:200])
+
         # 6. Synthesize benchmark audio
         bench_dir = job_dir / "benchmark"
         bench_dir.mkdir(parents=True, exist_ok=True)

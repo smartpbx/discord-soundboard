@@ -694,6 +694,58 @@ async def upload_chatterbox_emotion_ref(
     return {"ok": True, "voice_id": f"cb_{dir_id}", "emotion": emo, "bytes": len(audio_bytes)}
 
 
+@app.post("/admin/voices/chatterbox/{voice_id}/auto-emotion-refs")
+def auto_select_emotion_refs(voice_id: str, x_admin_token: Optional[str] = Header(None), overwrite: bool = True, chunks_dir: Optional[str] = None):
+    """Run select_emotion_refs.py over the voice's dataset archive to populate
+    refs/{soft,neutral,excited,yell,angry,sad,happy}.wav.
+
+    chunks_dir defaults to models/datasets/<voice>/chunks/ (produced by the
+    RVC training pipeline's retention step). Requires the voice's dataset
+    to have been trained via the Phase 10 RVC pipeline at some point.
+    """
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
+    if chunks_dir is None:
+        default_chunks = os.path.join(os.path.dirname(__file__), "models", "datasets", dir_id, "chunks")
+        if not os.path.isdir(default_chunks):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No dataset archive found at {default_chunks}. "
+                       f"Voice must have been trained via the RVC pipeline first "
+                       f"(Phase 6 archives chunks to models/datasets/<voice>/chunks/)."
+            )
+        chunks_dir = default_chunks
+    tool = os.path.join(os.path.dirname(__file__), "tools", "select_emotion_refs.py")
+    cb_dir = chatterbox_engine.get_models_dir()
+    py = "/opt/GPT-SoVITS/.venv/bin/python"
+    try:
+        args = [py, tool, "--voice-id", dir_id, "--chunks-dir", chunks_dir, "--cb-dir", cb_dir]
+        if overwrite: args.append("--overwrite")
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "")[-1500:]
+        stdout = (e.stdout or "")[-800:]
+        raise HTTPException(status_code=500, detail=f"emotion-ref selection failed: {stderr or stdout or 'no output'}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="emotion-ref selection timed out (600 s)")
+    try:
+        report = _json.loads(proc.stdout.strip().split("\n")[-1]) if "{" in proc.stdout else {}
+    except Exception:
+        # fall back: find the last JSON-looking blob
+        import re as _re
+        m = _re.search(r"\{[\s\S]*\}\s*$", proc.stdout)
+        report = _json.loads(m.group(0)) if m else {"raw": proc.stdout[-500:]}
+    # Drop caches so /voices + /synthesize see the new refs
+    for key in list(chatterbox_engine._conditionals.keys()):
+        if key[0] == f"cb_{dir_id}":
+            chatterbox_engine._conditionals.pop(key, None)
+    chatterbox_engine._voices_cache = None
+    return report
+
+
 @app.delete("/voices/chatterbox/{voice_id}/refs/{emotion}")
 def delete_chatterbox_emotion_ref(
     voice_id: str,
