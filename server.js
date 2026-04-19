@@ -3840,22 +3840,30 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         try {
             const { segmentText } = require('./lib/tts-expression');
             let segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
-            // LLM fallback: when the regex sees ONLY neutral and the text is
-            // non-trivial (>= 30 chars), give the configured LLM a shot at
-            // detecting tone the regex missed (sarcasm, sadness, excitement
-            // without !!!, etc.). Regex still wins for explicit cues.
+            // LLM fallback: when the regex sees ONLY neutral and the text has
+            // any real content (>=8 chars, ~3 words), give the configured LLM
+            // a shot at detecting tone the regex missed (sarcasm, sadness,
+            // excitement without !!!, etc.). Regex still wins for explicit cues.
             const needsLlm = !forcedEmotion
                 && segments && segments.length === 1
                 && segments[0].emotion === 'neutral'
-                && trimmed.length >= 30;
+                && trimmed.length >= 8;
             if (needsLlm) {
                 try {
                     const llm = require('./lib/tts-emotion-llm');
-                    if (llm.isAvailable()) {
+                    if (!llm.isAvailable()) {
+                        console.log('[TTS] LLM classifier disabled (EMOTION_LLM_ENABLED/URL/MODEL not set), keeping regex neutral');
+                    } else {
+                        const t0 = Date.now();
                         const llmSegs = await llm.classifyEmotion(trimmed);
-                        if (llmSegs && llmSegs.length && !(llmSegs.length === 1 && llmSegs[0].emotion === 'neutral')) {
+                        const dt = Date.now() - t0;
+                        if (!llmSegs) {
+                            console.log('[TTS] LLM classifier returned null in %dms (see prior warn for cause), keeping neutral', dt);
+                        } else if (llmSegs.length === 1 && llmSegs[0].emotion === 'neutral') {
+                            console.log('[TTS] LLM agreed: neutral (%dms)', dt);
+                        } else {
                             segments = llmSegs;
-                            console.log('[TTS] LLM emotion override segments=%d emotions=%s', llmSegs.length, llmSegs.map(s => s.emotion).join(','));
+                            console.log('[TTS] LLM emotion override (%dms) segments=%d emotions=%s', dt, llmSegs.length, llmSegs.map(s => s.emotion).join(','));
                         }
                     }
                 } catch (e) {
