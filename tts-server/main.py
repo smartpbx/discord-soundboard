@@ -189,6 +189,63 @@ class CloneToGsvRequest(BaseModel):
     trim_length_sec: float = 8.0
 
 
+@app.post("/admin/voices/fish/clone-from-chatterbox/{voice_id}")
+def clone_fish_from_chatterbox(voice_id: str):
+    """Create a fish_<voice> by reusing the Chatterbox reference clip
+    (no trim — Fish handles 5–30 s refs). Whisper-transcribes for
+    ref_text. Drops the engine cache so /voices picks it up."""
+    import os as _os, shutil as _shutil, subprocess as _sp
+    cb_id = voice_id.replace("cb_", "", 1)
+    cb_dir = _os.path.join(chatterbox_engine.get_models_dir(), cb_id)
+    cb_ref = _os.path.join(cb_dir, "reference.wav")
+    cb_meta_path = _os.path.join(cb_dir, "metadata.json")
+    if not _os.path.exists(cb_ref):
+        raise HTTPException(status_code=404, detail=f"Chatterbox reference not found for {voice_id}")
+    cb_meta = {}
+    if _os.path.exists(cb_meta_path):
+        try: cb_meta = json.loads(open(cb_meta_path).read())
+        except Exception: pass
+    fish_dir = _os.path.join(_os.path.dirname(__file__), "models", "fish", cb_id)
+    _os.makedirs(fish_dir, exist_ok=True)
+    fish_ref = _os.path.join(fish_dir, "reference.wav")
+    _shutil.copy(cb_ref, fish_ref)
+    # Transcribe via GPT-SoVITS venv's whisper (same pattern as GSV clone).
+    whisper_py = "/opt/GPT-SoVITS/.venv/bin/python"
+    if not _os.path.exists(whisper_py):
+        raise HTTPException(status_code=500, detail=f"Whisper venv not found at {whisper_py}")
+    script = (
+        "import whisper, json, sys\n"
+        "m = whisper.load_model('base')\n"
+        f"r = m.transcribe({fish_ref!r}, language='en', verbose=False)\n"
+        "sys.stdout.write(json.dumps({'text': r.get('text','').strip()}))\n"
+    )
+    try:
+        proc = _sp.run([whisper_py, "-c", script], capture_output=True, text=True, timeout=180, check=True)
+    except _sp.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Whisper transcription failed: {(e.stderr or '')[-300:]}")
+    except _sp.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Whisper transcription timed out")
+    try:
+        ref_text = json.loads(proc.stdout.strip().splitlines()[-1]).get("text", "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not parse whisper output: {e}")
+    if not ref_text:
+        raise HTTPException(status_code=500, detail="Whisper returned empty transcription")
+    meta = {
+        "name": cb_meta.get("name", cb_id.replace("_", " ").title()) + " (Fish)",
+        "gender": cb_meta.get("gender", "unknown"),
+        "group": cb_meta.get("group", "Celebrity"),
+        "ref_text": ref_text,
+        "language": "en",
+        "cloned_from": f"cb_{cb_id}",
+        "cloned_at": int(time.time()),
+    }
+    with open(_os.path.join(fish_dir, "metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    fish_engine.invalidate_cache()
+    return {"ok": True, "voice_id": f"fish_{cb_id}", "ref_text": ref_text, "ref_path": fish_ref}
+
+
 @app.post("/admin/voices/gsv/clone-from-chatterbox/{voice_id}")
 def clone_gsv_from_chatterbox(voice_id: str, req: CloneToGsvRequest = CloneToGsvRequest()):
     import os as _os, shutil as _shutil, json as _json

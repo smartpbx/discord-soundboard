@@ -4342,6 +4342,29 @@ app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, a
     }
 });
 
+// One-click: create a Fish v2 voice by cloning an existing Chatterbox
+// reference. Whisper-transcribes for ref_text. Fish accepts the full
+// 5-30s clip as-is so no trim needed.
+app.post('/api/superadmin/tts/voice/:id/clone-to-fish', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    try {
+        const r = await ttsFetch(`/admin/voices/fish/clone-from-chatterbox/${encodeURIComponent(dirId)}`, {
+            method: 'POST', timeout: 180000,
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) return res.status(r.status).json(body);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice.clone-to-fish',
+            target: dirId,
+            details: { ref_text_preview: String(body.ref_text || '').slice(0, 80) },
+        });
+        res.json(body);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 // One-click: create a GPT-SoVITS voice by cloning an existing Chatterbox
 // voice's reference clip. TTS server trims + whisper-transcribes.
 app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async (req, res) => {

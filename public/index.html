@@ -6016,6 +6016,7 @@
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Ref</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="autoPickEmotionRefs(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Analyze this voice\'s training dataset and auto-pick reference clips for all 7 emotions (soft/neutral/excited/yell/angry/sad/happy). Requires voice to have been trained via the RVC pipeline.">⚡ Auto refs</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToGsv(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a GPT-SoVITS voice using this voice\'s reference clip (trims to 8s, auto-transcribes)">→ GSV</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToFish(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a Fish v2 voice (openaudio-s1-mini) using this reference clip — natively handles emotion via inline tags, often more expressive than Chatterbox">→ Fish</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>';
                 } else if (isRvc) {
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
@@ -6334,6 +6335,21 @@
                 + (duplicates > 0 ? ' (' + duplicates + ' emotion' + (duplicates === 1 ? '' : 's') + ' share chunks — replace via Upload if needed)' : '');
             showToast(summary, 'success');
             fetchTtsVoicesAdmin();
+        }
+
+        async function cloneVoiceToFish(dirId, name) {
+            if (!confirm('Clone "' + name + '" to Fish v2?\n\nReuses the Chatterbox reference clip as-is and Whisper-transcribes it. Adds fish_' + dirId + ' as a new voice. Existing cb_' + dirId + ' stays unchanged.')) return;
+            const btn = event && event.currentTarget;
+            const originalHtml = btn ? btn.innerHTML : null;
+            if (btn) { btn.disabled = true; btn.innerHTML = '<span class="tts-spinner"></span> cloning…'; }
+            showToast('Cloning "' + name + '" → Fish (transcribing)…', 'info');
+            const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/clone-to-fish', { method: 'POST' });
+            if (btn && originalHtml) { btn.disabled = false; btn.innerHTML = originalHtml; }
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.error || d.detail || 'Clone to Fish failed', 'error'); return; }
+            showToast('Created fish_' + dirId + ' · "' + String(d.ref_text || '').slice(0, 60) + '…"', 'success');
+            fetchTtsVoicesAdmin();
+            if (typeof fetchTtsStatus === 'function') fetchTtsStatus();
         }
 
         async function cloneVoiceToGsv(dirId, name) {
