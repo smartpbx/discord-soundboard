@@ -6002,15 +6002,34 @@
                 const expCell = isCb
                     ? '<input type="number" min="0.25" max="2.0" step="0.05" value="' + defaultExp.toFixed(2) + '" onchange="setTtsVoiceDefaultExpression(\'' + esc(v.id) + '\', this.value)" style="width:4.5rem;padding:0.2rem 0.3rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.85rem;text-align:center;">'
                     : '<span style="color:var(--text-muted)">--</span>';
+                // Emotion refs badge: show which per-emotion clips are present.
+                // Clicking the voice name expands to an inline editor with upload slots.
+                const EMOS = ['soft','neutral','excited','yell','angry','sad','happy'];
+                const presentRefs = Array.isArray(v.emotion_refs) ? v.emotion_refs : [];
+                const refsBadge = isCb
+                    ? '<span class="emo-refs-badge" onclick="toggleEmoRefs(\'' + esc(v.id) + '\')" style="cursor:pointer;color:' + (presentRefs.length ? 'var(--accent)' : 'var(--text-muted)') + ';font-size:0.72rem;margin-left:0.4rem" title="Per-emotion reference clips (click to edit)">🎭 ' + (presentRefs.length ? (presentRefs.length + '/7') : 'set') + '</span>'
+                    : '';
+                const dirIdForRefs = v.id.replace(/^cb_/, '');
+                const refsRow = isCb
+                    ? '<tr class="emo-refs-row hidden" id="emo-refs-' + esc(v.id) + '"><td colspan="7" style="padding:0.5rem 1rem;background:var(--surface-hover);border-top:1px dashed var(--border)"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.4rem">Per-emotion reference clips (≥1 KB wav/mp3, 6–12s ideal). Missing emotions fall back to the main reference.</div><div style="display:flex;flex-wrap:wrap;gap:0.5rem">'
+                        + EMOS.map(e => {
+                            const has = presentRefs.includes(e);
+                            return '<div style="display:flex;flex-direction:column;gap:0.2rem;padding:0.3rem 0.5rem;background:var(--surface);border:1px solid ' + (has ? 'var(--accent)' : 'var(--border)') + ';border-radius:var(--radius-sm);min-width:8rem">'
+                                + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.72rem"><span style="font-weight:500;color:' + (has ? 'var(--accent)' : 'var(--text-muted)') + '">' + e + (has ? ' ✓' : '') + '</span>' + (has ? '<button type="button" class="btn btn-ghost btn-sm" onclick="deleteEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\')" style="padding:0.05rem 0.35rem;font-size:0.68rem">✕</button>' : '') + '</div>'
+                                + '<label style="font-size:0.68rem;cursor:pointer;color:var(--text-muted)">Upload<input type="file" accept="audio/*" style="display:none" onchange="uploadEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\',this)"></label>'
+                                + '</div>';
+                        }).join('')
+                        + '</div></td></tr>'
+                    : '';
                 return '<tr style="' + (disabled ? 'opacity:0.5' : '') + '">'
-                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + sourceLine + '</td>'
+                    + '<td style="padding:0.35rem 0.5rem">' + esc(v.name) + refsBadge + sourceLine + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + (isCb ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)">--</span>') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + expCell + '</td>'
                     + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap">' + actions + '</td>'
-                    + '</tr>';
+                    + '</tr>' + refsRow;
             }).join('');
         }
 
@@ -6216,6 +6235,34 @@
                 setVoiceModalStatus('Network error: ' + e.message, 'error');
                 btn.disabled = false;
             }
+        }
+
+        function toggleEmoRefs(voiceId) {
+            const row = document.getElementById('emo-refs-' + voiceId);
+            if (row) row.classList.toggle('hidden');
+        }
+        async function uploadEmotionRef(dirId, emotion, inputEl) {
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+            const form = new FormData();
+            form.append('audio', file);
+            showToast('Uploading ' + emotion + ' ref for ' + dirId + '…', 'info');
+            const r = await fetch('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion), {
+                method: 'PUT', body: form, credentials: 'include',
+            });
+            inputEl.value = '';
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { showToast(d.error || d.detail || 'Upload failed', 'error'); return; }
+            showToast('Uploaded ' + emotion + ' ref (' + Math.round((d.bytes || 0) / 1024) + ' KB)', 'success');
+            fetchTtsVoicesAdmin();
+        }
+        async function deleteEmotionRef(dirId, emotion) {
+            if (!confirm('Remove the ' + emotion + ' reference clip for ' + dirId + '? Synth for that emotion will fall back to neutral.')) return;
+            const r = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion), { method: 'DELETE' });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
+            showToast(d.deleted ? 'Removed ' + emotion + ' ref' : 'No ' + emotion + ' ref was present', 'info');
+            fetchTtsVoicesAdmin();
         }
 
         async function cloneVoiceToGsv(dirId, name) {

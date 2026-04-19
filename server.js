@@ -4231,6 +4231,56 @@ app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
     }
 });
 
+// Upload a per-emotion reference clip for a Chatterbox voice. Proxies to
+// PUT /voices/chatterbox/:id/refs/:emotion on the TTS server with the
+// admin token. Accepts multipart/form-data from the browser.
+app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    const emotion = String(req.params.emotion || '').toLowerCase();
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Audio file required (multipart field "audio")' });
+    try {
+        // Use Node 18+'s native FormData / Blob via undici — no extra npm dep.
+        const form = new FormData();
+        form.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' }), 'ref.wav');
+        const url = `${TTS_API_URL}/voices/chatterbox/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
+        const fetchRes = await fetch(url, {
+            method: 'PUT', body: form,
+            headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
+        });
+        const body = await fetchRes.json().catch(() => ({}));
+        if (!fetchRes.ok) return res.status(fetchRes.status).json(body);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice.upload-emotion-ref',
+            target: dirId,
+            details: { emotion, bytes: req.file.size },
+        });
+        res.json(body);
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
+app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    const emotion = String(req.params.emotion || '').toLowerCase();
+    try {
+        const url = `${TTS_API_URL}/voices/chatterbox/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
+        const fetchRes = await fetch(url, {
+            method: 'DELETE',
+            headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
+        });
+        const body = await fetchRes.json().catch(() => ({}));
+        if (!fetchRes.ok) return res.status(fetchRes.status).json(body);
+        res.json(body);
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
 // One-click: create a GPT-SoVITS voice by cloning an existing Chatterbox
 // voice's reference clip. TTS server trims + whisper-transcribes.
 app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async (req, res) => {
