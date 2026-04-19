@@ -57,10 +57,14 @@
         }
         .app { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
         @media (min-width: 1100px) {
-            .app { max-width: none; }
+            /* Cap the whole layout so on ultrawide displays the cards don't
+               stretch into unreadable line lengths. 1600 fits the sidebar +
+               main panel comfortably; anything wider just centers within the
+               viewport with empty margins. */
+            .app { max-width: 1600px; }
             .app .main-view:not(.hidden) { display: flex; gap: 1.5rem; align-items: flex-start; }
             .app .sidebar { width: 340px; min-width: 340px; position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; scrollbar-width: thin; }
-            .app .main-panel { flex: 1; min-width: 0; }
+            .app .main-panel { flex: 1; min-width: 0; max-width: 1200px; }
         }
         .app.hidden { display: none; }
         .hidden { display: none !important; }
