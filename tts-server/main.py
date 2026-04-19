@@ -219,14 +219,31 @@ def clone_gsv_from_chatterbox(voice_id: str, req: CloneToGsvRequest = CloneToGsv
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="ffmpeg trim timed out")
 
-    # Transcribe via whisper (same venv GPT-SoVITS lives in — already has it)
+    # Transcribe via the GPT-SoVITS venv's whisper (tts-server's own venv
+    # doesn't ship whisper to keep it lean — shell out instead).
+    whisper_py = "/opt/GPT-SoVITS/.venv/bin/python"
+    if not _os.path.exists(whisper_py):
+        raise HTTPException(status_code=500, detail=f"Whisper venv not found at {whisper_py}")
+    script = (
+        "import whisper, json, sys\n"
+        "m = whisper.load_model('base')\n"
+        f"r = m.transcribe({gsv_ref!r}, language='en', verbose=False)\n"
+        "sys.stdout.write(json.dumps({'text': r.get('text','').strip()}))\n"
+    )
     try:
-        import whisper  # type: ignore
-    except ImportError:
-        raise HTTPException(status_code=500, detail="whisper not installed in tts-server venv; run in GPT-SoVITS venv instead")
-    model = whisper.load_model("base")
-    r = model.transcribe(gsv_ref, language="en", verbose=False)
-    ref_text = (r.get("text") or "").strip()
+        proc = subprocess.run(
+            [whisper_py, "-c", script],
+            capture_output=True, text=True, timeout=180, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Whisper transcription failed: {e.stderr[-300:] if e.stderr else 'no stderr'}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Whisper transcription timed out (180 s)")
+    try:
+        payload = _json.loads(proc.stdout.strip().splitlines()[-1])
+        ref_text = payload.get("text", "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not parse whisper output: {e}")
     if not ref_text:
         raise HTTPException(status_code=500, detail="Whisper returned empty transcription")
 
