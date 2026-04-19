@@ -6293,16 +6293,37 @@
 
         async function autoPickEmotionRefs(dirId, name) {
             if (!confirm('Auto-pick reference clips for "' + name + '"?\n\nScans this voice\'s dataset archive (models/datasets/' + dirId + '/chunks/) and picks the best chunk per emotion using audio features (RMS, pitch, spectral centroid). Takes ~30-60 seconds. Existing refs will be overwritten.')) return;
-            showToast('Analyzing "' + name + '" chunks…', 'info');
-            const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/auto-emotion-refs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ overwrite: true }),
-            });
-            const d = await res.json().catch(() => ({}));
+            // Lock the button + all others on the same row so the operator can see
+            // work is happening. Auto-refs can take 30–60s depending on chunk
+            // count, and the endpoint is synchronous so we have no intermediate
+            // progress — best we can do is clear-loading + toast-on-done.
+            const btn = event && event.currentTarget;
+            const originalHtml = btn ? btn.innerHTML : null;
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="tts-spinner"></span> analyzing…';
+            }
+            showToast('Analyzing "' + name + '" chunks (librosa RMS + pitch + SC features, ~30–60 s)…', 'info');
+            let res, d = {};
+            try {
+                res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/auto-emotion-refs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ overwrite: true }),
+                });
+                d = await res.json().catch(() => ({}));
+            } catch (e) {
+                if (btn && originalHtml) { btn.disabled = false; btn.innerHTML = originalHtml; }
+                showToast('Auto-pick request failed: ' + (e.message || 'network'), 'error');
+                return;
+            }
+            if (btn && originalHtml) { btn.disabled = false; btn.innerHTML = originalHtml; }
             if (!res.ok) { showToast(d.error || d.detail || 'Auto-pick failed', 'error'); return; }
             const picked = d.refs ? Object.keys(d.refs).filter(k => !d.refs[k].skipped_existing).length : 0;
-            showToast('Picked ' + picked + '/7 refs from ' + (d.chunks_analyzed || '?') + ' chunks', 'success');
+            const duplicates = d.refs ? Object.keys(d.refs).length - new Set(Object.values(d.refs).map(r => r.chunk)).size : 0;
+            const summary = 'Picked ' + picked + '/7 refs from ' + (d.chunks_analyzed || '?') + ' chunks'
+                + (duplicates > 0 ? ' (' + duplicates + ' emotion' + (duplicates === 1 ? '' : 's') + ' share chunks — replace via Upload if needed)' : '');
+            showToast(summary, 'success');
             fetchTtsVoicesAdmin();
         }
 
@@ -6690,6 +6711,7 @@
                 // pipeline may still be running. Offer Adopt; backend probes
                 // CT 110 to confirm and refuses if there's nothing to adopt.
                 const canAdopt = (j.status === 'unknown_exit' || j.status === 'failed');
+                const canDelete = (j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled' || j.status === 'unknown_exit');
                 let actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="reopenTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">View</button>';
                 if (canCancel) {
                     actions += ' <button type="button" class="btn btn-danger btn-sm" onclick="cancelTrainJobFromList(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')">Cancel</button>';
@@ -6699,6 +6721,9 @@
                 }
                 if (canResume) {
                     actions += ' <button type="button" class="btn btn-primary btn-sm" onclick="resumeTrainJob(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\')" title="Resume from last checkpoint">Resume</button>';
+                }
+                if (canDelete) {
+                    actions += ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteTrainJobFromList(\'' + esc(j.id) + '\', \'' + esc(j.input.name) + '\', \'' + esc(j.status) + '\')" title="Remove this job entry (does not touch deployed voice artifacts)">🗑</button>';
                 }
                 return '<tr>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(j.input.name) + ' <span style="color:var(--text-muted);font-size:0.75rem">(' + esc(j.input.voice_id) + ')</span></td>'
@@ -6722,6 +6747,18 @@
             document.getElementById('trainVoiceEvents').innerHTML = '';
             document.getElementById('trainVoiceOverlay').classList.remove('hidden');
             startTrainPoll();
+        }
+
+        async function deleteTrainJobFromList(jobId, name, status) {
+            const warning = status === 'completed'
+                ? 'Delete the completed training job for "' + name + '"?\n\nThis removes the job history only. The deployed voice artifacts (model.pth / model.index / Chatterbox reference) stay intact.'
+                : 'Delete this ' + status + ' training job for "' + name + '"?\n\nAny partially-trained artifacts inside the job dir will be removed. The deployed voice (if any) is not touched.';
+            if (!confirm(warning)) return;
+            const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId), { method: 'DELETE' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
+            showToast('Deleted job ' + jobId, 'success');
+            fetchTrainJobs();
         }
 
         async function adoptOrphanTrainJob(jobId, name) {

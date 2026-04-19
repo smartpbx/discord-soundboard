@@ -4779,6 +4779,20 @@ app.post('/api/superadmin/tts/train/:id/cancel', requireSuperadmin, (req, res) =
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+app.delete('/api/superadmin/tts/train/:id', requireSuperadmin, (req, res) => {
+    try {
+        const result = voiceTrainer.deleteJob(req.params.id);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-train.delete',
+            target: String(req.params.id),
+            details: { voice_id: result.voice_id },
+        });
+        res.json({ ok: true, ...result });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.post('/api/superadmin/tts/train/:id/adopt', requireSuperadmin, (req, res) => {
     try {
         const meta = voiceTrainer.adoptOrphan(req.params.id);
