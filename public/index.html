@@ -815,6 +815,7 @@
                     <option value="happy">Happy</option>
                 </select>
                 <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
+                <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different. Click until you like one.">🔄 Again</button>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
             <audio id="ttsLocalAudio" muted preload="auto" style="display:none"></audio>
@@ -5767,6 +5768,10 @@
                     }
                     if (data.localWavId) playTtsLocalWaveform(data.localWavId);
                     fetchTtsRecents();
+                    // Expose 🔄 Again: same text, new random take. Chatterbox's
+                    // sampling is stochastic by default so each call varies.
+                    const again = document.getElementById('ttsAgainBtn');
+                    if (again) again.classList.remove('hidden');
                 }
             } catch (e) {
                 setTtsStatus('TTS request failed.', true);
@@ -5776,6 +5781,26 @@
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
             }
         }
+
+        // Re-speak the current text (same voice, same knobs, new random
+        // Chatterbox sample). Different acoustic output each time — the best
+        // cheap "regenerate" UX without exposing seeds to the user.
+        function ttsSpeakAgain() {
+            const textEl = document.getElementById('ttsTextInput');
+            if (!textEl || !textEl.value.trim()) { showToast('Nothing to re-speak — type first', 'info'); return; }
+            ttsSpeak();
+        }
+
+        // Hide the 🔄 Again button when the text field changes: retaking
+        // different text isn't "again", it's a new speak.
+        (function bindAgainBtnReset(){
+            const textEl = document.getElementById('ttsTextInput');
+            if (!textEl) return;
+            textEl.addEventListener('input', () => {
+                const again = document.getElementById('ttsAgainBtn');
+                if (again) again.classList.add('hidden');
+            });
+        })();
 
         async function clearTtsQueue() {
             const r = await api('/api/tts/queue/clear', { method: 'POST' });
