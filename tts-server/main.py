@@ -29,12 +29,70 @@ from engines import kokoro_engine, rvc_engine, chatterbox_engine, gptsovits_engi
 # Models
 # ---------------------------------------------------------------------------
 
+class SegmentSpec(BaseModel):
+    """One text segment + its emotion routing info.
+
+    The soundboard preprocesses text into segments (lib/tts-expression.js) so
+    each piece can be synthesized with its own reference clip + preset. When
+    the caller sends `segments`, the top-level `text` field is ignored for
+    Chatterbox; segments are concatenated with optional inter-segment gaps.
+    """
+    text: str = Field(..., min_length=1, max_length=2000)
+    emotion: str = "neutral"      # soft / neutral / excited / yell / angry / sad / happy
+    intensity: float = 0.5         # 0..1, scales the preset's exaggeration
+    pause_ms_after: int = 0        # silence gap after this segment (0–2000 ms)
+    # Explicit overrides (rare) — if set, these win over the preset for this segment
+    exaggeration: Optional[float] = None
+    cfg_weight: Optional[float] = None
+    temperature: Optional[float] = None
+
+
 class SynthesizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
     voice_id: str = Field(..., min_length=1)
     rvc_model_id: Optional[str] = None
     use_rvc: bool = True  # When True, pipe Chatterbox output through RVC if available
-    exaggeration: float = Field(0.5, ge=0.25, le=2.0)  # Chatterbox emotion intensity
+    exaggeration: float = Field(0.5, ge=0.25, le=2.0)  # Legacy top-level knob
+    cfg_weight: Optional[float] = None      # 0.3–0.8; falls back to preset/default
+    temperature: Optional[float] = None     # 0.6–1.0; falls back to preset/default
+    seed: Optional[int] = None              # for "regenerate 3 takes" flow
+    # Pre-segmented input from the Node-side emotion preprocessor. When present,
+    # server synthesizes each segment with its own preset and stitches.
+    segments: Optional[list[SegmentSpec]] = None
+
+
+# Per-emotion preset bundles (exag / cfg_weight / temperature). The
+# segment's `intensity` (0..1) scales exaggeration within the preset's
+# range so a mild yell isn't as cranked as an unhinged one.
+EMOTION_PRESETS = {
+    "soft":    {"exaggeration": 0.35, "cfg_weight": 0.55, "temperature": 0.7, "exag_max": 0.55},
+    "neutral": {"exaggeration": 0.50, "cfg_weight": 0.50, "temperature": 0.8, "exag_max": 0.75},
+    "excited": {"exaggeration": 1.20, "cfg_weight": 0.42, "temperature": 0.9, "exag_max": 1.50},
+    "yell":    {"exaggeration": 1.70, "cfg_weight": 0.35, "temperature": 0.95, "exag_max": 2.00},
+    "angry":   {"exaggeration": 1.80, "cfg_weight": 0.30, "temperature": 0.95, "exag_max": 2.00},
+    "sad":     {"exaggeration": 0.45, "cfg_weight": 0.55, "temperature": 0.75, "exag_max": 0.70},
+    "happy":   {"exaggeration": 0.95, "cfg_weight": 0.45, "temperature": 0.85, "exag_max": 1.30},
+}
+
+
+def _resolve_segment_params(seg: SegmentSpec):
+    """Collapse emotion + intensity + explicit overrides → final synth params."""
+    preset = EMOTION_PRESETS.get(seg.emotion, EMOTION_PRESETS["neutral"])
+    # Linear interpolation between preset base and exag_max based on intensity
+    base = preset["exaggeration"]
+    top = preset.get("exag_max", base + 0.25)
+    t = max(0.0, min(1.0, float(seg.intensity or 0.5)))
+    exag = base + (top - base) * t
+    cfg = preset["cfg_weight"]
+    temp = preset["temperature"]
+    if seg.exaggeration is not None: exag = float(seg.exaggeration)
+    if seg.cfg_weight is not None: cfg = float(seg.cfg_weight)
+    if seg.temperature is not None: temp = float(seg.temperature)
+    # Clamp
+    exag = max(0.25, min(2.0, exag))
+    cfg = max(0.25, min(0.9, cfg))
+    temp = max(0.5, min(1.1, temp))
+    return exag, cfg, temp
 
 
 class HealthResponse(BaseModel):
@@ -105,6 +163,13 @@ def get_training_mode():
     return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
 
 
+@app.get("/admin/emotion-presets")
+def get_emotion_presets():
+    """Return the server-side emotion preset bundles so the superadmin UI
+    can display defaults + let operators override per-voice."""
+    return {"presets": EMOTION_PRESETS}
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -172,7 +237,87 @@ def synthesize(req: SynthesizeRequest):
     return _do_synthesize(req)
 
 
+def _concat_wavs(wav_parts, pause_ms_list, crossfade_ms=30):
+    """Concatenate a list of WAV byte blobs with optional inter-part silence.
+
+    pause_ms_list[i] is the silence to insert AFTER part i (len == len(wav_parts)).
+    A short linear crossfade at each join masks ffmpeg-style click artifacts.
+    Falls back to plain concat if soundfile/numpy aren't available (shouldn't
+    happen — the engines already require them).
+    """
+    import io as _io
+    import soundfile as sf
+    import numpy as np
+
+    decoded = []
+    sr = None
+    for blob in wav_parts:
+        data, rate = sf.read(_io.BytesIO(blob), dtype="float32", always_2d=False)
+        if sr is None:
+            sr = rate
+        elif rate != sr:
+            # Rare — engines should all return the same rate. Log + skip resample.
+            log.warning("concat_wavs: sample-rate mismatch %d vs %d (using first)", rate, sr)
+        decoded.append(data)
+    if not decoded:
+        return b""
+    fade_n = max(1, int(sr * crossfade_ms / 1000))
+    out = decoded[0]
+    for i in range(1, len(decoded)):
+        pause_ms = pause_ms_list[i - 1] if i - 1 < len(pause_ms_list) else 0
+        if pause_ms > 0:
+            gap = np.zeros(int(sr * pause_ms / 1000), dtype="float32")
+            out = np.concatenate([out, gap])
+        nxt = decoded[i]
+        if len(out) >= fade_n and len(nxt) >= fade_n and pause_ms == 0:
+            # Linear crossfade at the join
+            ramp_down = np.linspace(1.0, 0.0, fade_n, dtype="float32")
+            ramp_up = np.linspace(0.0, 1.0, fade_n, dtype="float32")
+            tail = out[-fade_n:] * ramp_down
+            head = nxt[:fade_n] * ramp_up
+            out = np.concatenate([out[:-fade_n], tail + head, nxt[fade_n:]])
+        else:
+            out = np.concatenate([out, nxt])
+    buf = _io.BytesIO()
+    sf.write(buf, out, sr, format="WAV")
+    return buf.getvalue()
+
+
+def _synthesize_segmented(req: SynthesizeRequest):
+    """Run each segment through Chatterbox with its own ref + preset, stitch."""
+    cb_ids = chatterbox_engine.get_voice_ids()
+    if req.voice_id not in cb_ids:
+        raise HTTPException(status_code=400, detail=f"Segmented synth only supports Chatterbox voices for now (got {req.voice_id})")
+    parts = []
+    pauses = []
+    for seg in req.segments:
+        exag, cfg, temp = _resolve_segment_params(seg)
+        try:
+            wav = chatterbox_engine.synthesize(
+                seg.text, req.voice_id,
+                exaggeration=exag, cfg_weight=cfg, temperature=temp,
+                emotion=seg.emotion, seed=req.seed,
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        parts.append(wav)
+        pauses.append(max(0, min(2000, int(seg.pause_ms_after or 0))))
+    wav_combined = _concat_wavs(parts, pauses)
+    # Optional RVC pass on the stitched output
+    rvc_ids = rvc_engine.get_rvc_model_ids()
+    rvc_model_id = req.voice_id.replace("cb_", "rvc_", 1)
+    skip_rvc = chatterbox_engine.should_skip_rvc(req.voice_id)
+    if req.use_rvc and not skip_rvc and rvc_model_id in rvc_ids:
+        try:
+            wav_combined = rvc_engine.convert(wav_combined, rvc_model_id)
+        except Exception as e:
+            log.warning("RVC refinement of stitched output failed (keeping raw): %s", e)
+    return Response(content=wav_combined, media_type="audio/wav")
+
+
 def _do_synthesize(req: SynthesizeRequest):
+    if req.segments:
+        return _synthesize_segmented(req)
     text = req.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text is empty")
@@ -194,7 +339,13 @@ def _do_synthesize(req: SynthesizeRequest):
                  voice_id, len(text), text)
 
         try:
-            wav_bytes = chatterbox_engine.synthesize(text, voice_id, exaggeration=req.exaggeration)
+            wav_bytes = chatterbox_engine.synthesize(
+                text, voice_id,
+                exaggeration=req.exaggeration,
+                cfg_weight=(req.cfg_weight if req.cfg_weight is not None else 0.5),
+                temperature=(req.temperature if req.temperature is not None else 0.8),
+                seed=req.seed,
+            )
         except Exception as e:
             log.error("Chatterbox synthesis failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Chatterbox synthesis failed: {e}")

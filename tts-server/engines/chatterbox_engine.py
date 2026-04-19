@@ -17,7 +17,14 @@ log = logging.getLogger("tts-server")
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "chatterbox")
 
 _model = None
-_conditionals = {}  # cache: voice_id -> pre-computed conditionals
+# Conditionals are keyed by (voice_id, emotion) so per-emotion reference
+# clips each get their own cached prepared state. "neutral" is the legacy
+# single-ref key and also the fallback when no emotion-specific ref exists.
+_conditionals = {}  # (voice_id, emotion) -> pre-computed conditionals
+
+# Emotions we look for in a voice's refs/ subdirectory. Missing ones fall
+# back to "neutral" (the legacy reference.wav).
+EMOTION_REFS = ("soft", "neutral", "excited", "yell", "angry", "sad", "happy")
 
 
 def _get_model():
@@ -35,15 +42,20 @@ def _get_model():
     return _model
 
 
-def _get_conditionals(voice_id: str, ref_path: str):
-    """Pre-compute and cache voice conditionals for faster repeated synthesis."""
-    if voice_id in _conditionals:
-        return _conditionals[voice_id]
+def _get_conditionals(voice_id: str, ref_path: str, emotion: str = "neutral"):
+    """Pre-compute and cache voice conditionals for faster repeated synthesis.
+
+    Keyed by (voice_id, emotion) so a voice with refs/angry.wav + refs/sad.wav
+    gets one prepared state per emotion rather than clobbering one cache slot.
+    """
+    key = (voice_id, emotion)
+    if key in _conditionals:
+        return _conditionals[key]
 
     model = _get_model()
-    log.info("Pre-computing conditionals for %s from %s", voice_id, ref_path)
+    log.info("Pre-computing conditionals for %s [%s] from %s", voice_id, emotion, ref_path)
     conds = model.prepare_conditionals(ref_path, exaggeration=0.5)
-    _conditionals[voice_id] = conds
+    _conditionals[key] = conds
     return conds
 
 
@@ -93,6 +105,14 @@ def _scan_voices():
                 voice["default_exaggeration"] = round(de, 2)
         except (TypeError, ValueError):
             pass
+        # Emotion-tagged reference clips (refs/<emotion>.wav).
+        refs_dir = os.path.join(voice_dir, "refs")
+        emo_refs = []
+        if os.path.isdir(refs_dir):
+            for emo in EMOTION_REFS:
+                if os.path.exists(os.path.join(refs_dir, f"{emo}.wav")):
+                    emo_refs.append(emo)
+        voice["emotion_refs"] = emo_refs
         voices.append(voice)
 
     return voices
@@ -159,36 +179,90 @@ def should_skip_rvc(voice_id: str) -> bool:
     return False
 
 
-def get_ref_path(voice_id: str) -> str:
-    """Get the reference audio path for a voice ID."""
+def get_ref_path(voice_id: str, emotion: str = "neutral") -> str:
+    """Get the reference audio path for a voice, optionally per-emotion.
+
+    Lookup order:
+      1. models/chatterbox/<voice>/refs/<emotion>.wav  (per-emotion)
+      2. models/chatterbox/<voice>/reference.wav        (legacy single ref)
+    """
     vid = voice_id.replace("cb_", "", 1)
-    ref = os.path.join(MODELS_DIR, vid, "reference.wav")
-    if os.path.exists(ref):
-        return ref
-    raise FileNotFoundError(f"Reference audio not found: {ref}")
+    voice_dir = os.path.join(MODELS_DIR, vid)
+    if emotion and emotion != "neutral":
+        per_emo = os.path.join(voice_dir, "refs", f"{emotion}.wav")
+        if os.path.exists(per_emo):
+            return per_emo
+    neutral_per_emo = os.path.join(voice_dir, "refs", "neutral.wav")
+    if os.path.exists(neutral_per_emo):
+        return neutral_per_emo
+    legacy = os.path.join(voice_dir, "reference.wav")
+    if os.path.exists(legacy):
+        return legacy
+    raise FileNotFoundError(f"Reference audio not found for {voice_id} ({emotion})")
 
 
-def synthesize(text: str, voice_id: str, exaggeration: float = 0.5) -> bytes:
+def list_refs(voice_id: str) -> dict:
+    """Return {emotion: path} for every ref present for this voice.
+
+    Includes the legacy reference.wav as 'neutral' if no refs/ dir exists.
+    """
+    vid = voice_id.replace("cb_", "", 1)
+    voice_dir = os.path.join(MODELS_DIR, vid)
+    refs = {}
+    refs_dir = os.path.join(voice_dir, "refs")
+    if os.path.isdir(refs_dir):
+        for emo in EMOTION_REFS:
+            p = os.path.join(refs_dir, f"{emo}.wav")
+            if os.path.exists(p):
+                refs[emo] = p
+    if "neutral" not in refs:
+        legacy = os.path.join(voice_dir, "reference.wav")
+        if os.path.exists(legacy):
+            refs["neutral"] = legacy
+    return refs
+
+
+def synthesize(
+    text: str,
+    voice_id: str,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+    temperature: float = 0.8,
+    emotion: str = "neutral",
+    seed: int = None,
+) -> bytes:
     """Generate speech cloning the reference voice. Returns WAV bytes.
 
     Args:
         text: Text to speak
         voice_id: Chatterbox voice ID (cb_trump, cb_obama, etc.)
         exaggeration: Emotion intensity (0.25=calm, 0.5=neutral, 2.0=very expressive)
+        cfg_weight: How strictly to follow the reference prosody (0.3-0.8, lower=more variation)
+        temperature: Sampling randomness (0.6-1.0, lower=more deterministic)
+        emotion: Which emotion-tagged reference clip to use (falls back to neutral/legacy)
+        seed: Optional torch seed for reproducible takes (used by regenerate button)
     """
     model = _get_model()
-    ref_path = get_ref_path(voice_id)
+    ref_path = get_ref_path(voice_id, emotion=emotion)
 
-    log.info("Chatterbox synthesize: voice=%s exaggeration=%.2f text_len=%d",
-             voice_id, exaggeration, len(text))
+    log.info("Chatterbox synthesize: voice=%s emotion=%s ref=%s exag=%.2f cfg=%.2f temp=%.2f text_len=%d",
+             voice_id, emotion, os.path.basename(ref_path), exaggeration, cfg_weight, temperature, len(text))
+
+    if seed is not None:
+        try:
+            torch.manual_seed(int(seed))
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(int(seed))
+        except Exception as e:
+            log.warning("Chatterbox: failed to set seed %s: %s", seed, e)
 
     with torch.inference_mode():
         wav = model.generate(
             text,
             audio_prompt_path=ref_path,
             exaggeration=exaggeration,
-            cfg_weight=0.5,
-            temperature=0.8,
+            cfg_weight=cfg_weight,
+            temperature=temperature,
         )
 
     # Convert tensor to WAV bytes using soundfile (avoids torchcodec dependency)
