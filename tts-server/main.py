@@ -732,12 +732,12 @@ def auto_select_emotion_refs(voice_id: str, x_admin_token: Optional[str] = Heade
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="emotion-ref selection timed out (600 s)")
     try:
-        report = _json.loads(proc.stdout.strip().split("\n")[-1]) if "{" in proc.stdout else {}
+        report = json.loads(proc.stdout.strip().split("\n")[-1]) if "{" in proc.stdout else {}
     except Exception:
         # fall back: find the last JSON-looking blob
         import re as _re
         m = _re.search(r"\{[\s\S]*\}\s*$", proc.stdout)
-        report = _json.loads(m.group(0)) if m else {"raw": proc.stdout[-500:]}
+        report = json.loads(m.group(0)) if m else {"raw": proc.stdout[-500:]}
     # Drop caches so /voices + /synthesize see the new refs
     for key in list(chatterbox_engine._conditionals.keys()):
         if key[0] == f"cb_{dir_id}":
