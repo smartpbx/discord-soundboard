@@ -22,7 +22,7 @@ app = FastAPI(title="TTS Service", version="2.0.0")
 # Engine loading (lazy -- first request triggers model load)
 # ---------------------------------------------------------------------------
 
-from engines import kokoro_engine, rvc_engine, chatterbox_engine, gptsovits_engine  # noqa: E402
+from engines import kokoro_engine, rvc_engine, chatterbox_engine, gptsovits_engine, fish_engine  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +295,7 @@ def voices():
         if rv["id"].replace("rvc_", "") not in cb_base_ids:
             all_voices.append(rv)
     all_voices.extend(gptsovits_engine.get_voices())
+    all_voices.extend(fish_engine.get_voices())
     return all_voices
 
 
@@ -426,6 +427,7 @@ def _do_synthesize(req: SynthesizeRequest):
     rvc_ids = rvc_engine.get_rvc_model_ids()
     kokoro_ids = kokoro_engine.get_voice_ids()
     gsv_ids = gptsovits_engine.get_voice_ids()
+    fish_ids = fish_engine.get_voice_ids()
 
     # -----------------------------------------------------------------------
     # Route 1: Chatterbox celebrity voice (cb_trump, cb_obama, etc.)
@@ -507,6 +509,21 @@ def _do_synthesize(req: SynthesizeRequest):
 
         t_tts = time.time() - t0
         log.info("GPT-SoVITS done in %.2fs, %d bytes", t_tts, len(wav_bytes))
+
+    # -----------------------------------------------------------------------
+    # Route 3b: Fish-Speech v2 (fish_*) — openaudio-s1-mini, native inline
+    # emotion tags, runs out-of-process (fish-speech.service on :8881).
+    # -----------------------------------------------------------------------
+    elif voice_id in fish_ids:
+        log.info("synthesize [fish] voice=%s text_len=%d text_preview=%.60s",
+                 voice_id, len(text), text)
+        try:
+            wav_bytes = fish_engine.synthesize(text, voice_id)
+        except Exception as e:
+            log.error("Fish synthesis failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"Fish synthesis failed: {e}")
+        t_tts = time.time() - t0
+        log.info("Fish done in %.2fs, %d bytes", t_tts, len(wav_bytes))
 
     # -----------------------------------------------------------------------
     # Route 4: Plain Kokoro voice (af_heart, am_adam, etc.)
