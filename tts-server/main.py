@@ -171,6 +171,82 @@ def get_emotion_presets():
 
 
 # ---------------------------------------------------------------------------
+# GPT-SoVITS voice bootstrapping from an existing Chatterbox voice.
+#
+# Creates a matching gsv_<voice> by trimming the Chatterbox reference to
+# ~8 s (GSV requires 3–10 s refs) and Whisper-transcribing it so the
+# engine has a prompt_text. One-click hands-off conversion so every
+# trained voice gets a second engine to A/B against.
+# ---------------------------------------------------------------------------
+import subprocess
+
+class CloneToGsvRequest(BaseModel):
+    trim_start_sec: float = 0.0
+    trim_length_sec: float = 8.0
+
+
+@app.post("/admin/voices/gsv/clone-from-chatterbox/{voice_id}")
+def clone_gsv_from_chatterbox(voice_id: str, req: CloneToGsvRequest = CloneToGsvRequest()):
+    import os as _os, shutil as _shutil, json as _json
+    cb_id = voice_id.replace("cb_", "", 1)
+    cb_dir = _os.path.join(chatterbox_engine.get_models_dir(), cb_id)
+    cb_ref = _os.path.join(cb_dir, "reference.wav")
+    cb_meta_path = _os.path.join(cb_dir, "metadata.json")
+    if not _os.path.exists(cb_ref):
+        raise HTTPException(status_code=404, detail=f"Chatterbox reference not found for {voice_id}")
+    cb_meta = {}
+    if _os.path.exists(cb_meta_path):
+        try: cb_meta = _json.loads(open(cb_meta_path).read())
+        except Exception: pass
+
+    gsv_models_dir = _os.path.join(_os.path.dirname(__file__), "models", "gptsovits")
+    gsv_dir = _os.path.join(gsv_models_dir, cb_id)
+    _os.makedirs(gsv_dir, exist_ok=True)
+    gsv_ref = _os.path.join(gsv_dir, "reference.wav")
+
+    # Trim with ffmpeg: start=req.trim_start_sec, length=req.trim_length_sec.
+    # Also force 32 kHz mono to match GSV defaults.
+    length = max(3.0, min(10.0, float(req.trim_length_sec or 8.0)))
+    start = max(0.0, float(req.trim_start_sec or 0.0))
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+            "-ss", str(start), "-i", cb_ref, "-t", str(length),
+            "-ar", "32000", "-ac", "1", gsv_ref,
+        ], check=True, timeout=60)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"ffmpeg trim failed: {e}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="ffmpeg trim timed out")
+
+    # Transcribe via whisper (same venv GPT-SoVITS lives in — already has it)
+    try:
+        import whisper  # type: ignore
+    except ImportError:
+        raise HTTPException(status_code=500, detail="whisper not installed in tts-server venv; run in GPT-SoVITS venv instead")
+    model = whisper.load_model("base")
+    r = model.transcribe(gsv_ref, language="en", verbose=False)
+    ref_text = (r.get("text") or "").strip()
+    if not ref_text:
+        raise HTTPException(status_code=500, detail="Whisper returned empty transcription")
+
+    meta = {
+        "name": cb_meta.get("name", cb_id.replace("_", " ").title()) + " (GSV)",
+        "gender": cb_meta.get("gender", "unknown"),
+        "group": cb_meta.get("group", "Celebrity"),
+        "ref_text": ref_text,
+        "language": "en",
+        "cloned_from": f"cb_{cb_id}",
+        "cloned_at": int(time.time()),
+    }
+    with open(_os.path.join(gsv_dir, "metadata.json"), "w") as f:
+        _json.dump(meta, f, indent=2)
+    # Force voice cache refresh so /voices picks it up immediately
+    gptsovits_engine._voices_cache = None
+    return {"ok": True, "voice_id": f"gsv_{cb_id}", "ref_text": ref_text, "ref_len_sec": length, "ref_path": gsv_ref}
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 

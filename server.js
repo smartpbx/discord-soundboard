@@ -4223,6 +4223,35 @@ app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
     }
 });
 
+// One-click: create a GPT-SoVITS voice by cloning an existing Chatterbox
+// voice's reference clip. TTS server trims + whisper-transcribes.
+app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async (req, res) => {
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    const trimStart = Number(req.body?.trim_start_sec) || 0;
+    const trimLength = Number(req.body?.trim_length_sec) || 8;
+    try {
+        const r = await ttsFetch(`/admin/voices/gsv/clone-from-chatterbox/${encodeURIComponent(dirId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trim_start_sec: trimStart, trim_length_sec: trimLength }),
+            timeout: 180000,
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) return res.status(r.status).json(body);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice.clone-to-gsv',
+            target: dirId,
+            details: { ref_text_preview: String(body.ref_text || '').slice(0, 80), ref_len_sec: body.ref_len_sec },
+        });
+        res.json(body);
+    } catch (err) {
+        ttsAdminError(res, err);
+    }
+});
+
 app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
