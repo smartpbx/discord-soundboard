@@ -1,0 +1,22 @@
+[Unit]
+Description=Fish-Speech S2 Pro API server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/fish-speech
+# S2 Pro is ~4.4B params; fp16 fits comfortably on the 3090.
+ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
+    --mode tts \
+    --llama-checkpoint-path checkpoints/s2-pro \
+    --decoder-checkpoint-path checkpoints/s2-pro/codec.pth \
+    --decoder-config-name modded_dac_vq \
+    --listen 0.0.0.0:8881 \
+    --device cuda \
+    --half
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
