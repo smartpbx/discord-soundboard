@@ -57,14 +57,10 @@
         }
         .app { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
         @media (min-width: 1100px) {
-            /* Cap the whole layout so on ultrawide displays the cards don't
-               stretch into unreadable line lengths. 1600 fits the sidebar +
-               main panel comfortably; anything wider just centers within the
-               viewport with empty margins. */
-            .app { max-width: 1600px; }
+            .app { max-width: none; }
             .app .main-view:not(.hidden) { display: flex; gap: 1.5rem; align-items: flex-start; }
             .app .sidebar { width: 340px; min-width: 340px; position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; scrollbar-width: thin; }
-            .app .main-panel { flex: 1; min-width: 0; max-width: 1200px; }
+            .app .main-panel { flex: 1; min-width: 0; }
         }
         .app.hidden { display: none; }
         .hidden { display: none !important; }
@@ -608,8 +604,15 @@
         .tts-close-btn:hover { color: var(--text); }
         .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
         .tts-textarea:focus { outline: none; border-color: var(--accent); }
+        /* TTS controls: fixed widths on the knobs so on ultrawide monitors the
+           voice dropdown doesn't span 1500px and the sliders don't swallow the
+           rest of the row. Speak + Again stay right-aligned via margin-left:auto
+           on the action group below. */
         .tts-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
-        .tts-controls select { flex: 1; min-width: 140px; padding: 0.45rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.85rem; }
+        .tts-controls > select#ttsVoiceSelect { flex: 0 1 280px; min-width: 200px; padding: 0.45rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.85rem; }
+        .tts-controls > select#ttsForcedEmotion { flex: 0 0 auto; min-width: 6rem; padding: 0.3rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; }
+        .tts-controls #ttsVolumeSlider, .tts-controls #ttsExpressionSlider { flex: 0 0 140px; }
+        .tts-controls .tts-action-group { margin-left: auto; display: flex; gap: 0.4rem; }
         .tts-char-count { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
         .tts-char-count.over-limit { color: var(--danger); }
         .tts-status { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; }
@@ -808,7 +811,7 @@
                     <input type="range" id="ttsExpressionSlider" min="0.25" max="2.0" step="0.05" value="0.5" style="flex:1;accent-color:var(--accent);height:6px;">
                     <span id="ttsExpressionLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">0.50</span>
                 </div>
-                <select id="ttsForcedEmotion" title="Force an emotion (otherwise auto-detected from text: ALL CAPS = yell, ... = soft, [angry]/[sad]/... tags, etc.)" style="padding:0.3rem 0.4rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.8rem;">
+                <select id="ttsForcedEmotion" title="Force an emotion (otherwise auto-detected from text: ALL CAPS = yell, ... = soft, [angry]/[sad]/... tags, etc.)">
                     <option value="">🎭 Auto</option>
                     <option value="neutral">Neutral</option>
                     <option value="soft">Soft</option>
@@ -818,8 +821,10 @@
                     <option value="sad">Sad</option>
                     <option value="happy">Happy</option>
                 </select>
-                <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
-                <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different. Click until you like one.">🔄 Again</button>
+                <div class="tts-action-group">
+                    <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
+                    <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different. Click until you like one.">🔄 Again</button>
+                </div>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
             <audio id="ttsLocalAudio" muted preload="auto" style="display:none"></audio>
