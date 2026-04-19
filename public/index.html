@@ -804,6 +804,16 @@
                     <input type="range" id="ttsExpressionSlider" min="0.25" max="2.0" step="0.05" value="0.5" style="flex:1;accent-color:var(--accent);height:6px;">
                     <span id="ttsExpressionLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">0.50</span>
                 </div>
+                <select id="ttsForcedEmotion" title="Force an emotion (otherwise auto-detected from text: ALL CAPS = yell, ... = soft, [angry]/[sad]/... tags, etc.)" style="padding:0.3rem 0.4rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.8rem;">
+                    <option value="">🎭 Auto</option>
+                    <option value="neutral">Neutral</option>
+                    <option value="soft">Soft</option>
+                    <option value="excited">Excited</option>
+                    <option value="yell">Yell</option>
+                    <option value="angry">Angry</option>
+                    <option value="sad">Sad</option>
+                    <option value="happy">Happy</option>
+                </select>
                 <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
@@ -5715,7 +5725,11 @@
                 const r = await api('/api/tts/speak', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, voiceId, volume: ttsVolume, ...(isCb ? { exaggeration: ttsExpression } : {}) }),
+                    body: JSON.stringify({
+                        text, voiceId, volume: ttsVolume,
+                        ...(isCb ? { exaggeration: ttsExpression } : {}),
+                        ...(document.getElementById('ttsForcedEmotion')?.value ? { forcedEmotion: document.getElementById('ttsForcedEmotion').value } : {}),
+                    }),
                 });
                 if (!r) return;
                 const data = await r.json();

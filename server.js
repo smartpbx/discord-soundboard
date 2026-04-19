@@ -3743,11 +3743,16 @@ app.get('/api/tts/voices', requireAuth, async (req, res) => {
 });
 
 app.post('/api/tts/speak', requireAuth, async (req, res) => {
-    const { text, voiceId, volume: reqVolume, exaggeration: reqExag } = req.body;
+    const { text, voiceId, volume: reqVolume, exaggeration: reqExag, forcedEmotion, useExpression } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
     const ttsVolume = typeof reqVolume === 'number' ? Math.max(0, Math.min(2, reqVolume)) : 1;
     const exaggeration = typeof reqExag === 'number' ? Math.max(0.25, Math.min(2.0, reqExag)) : 0.5;
+    // Expression preprocessor: on by default for Chatterbox voices unless the
+    // caller explicitly disables via useExpression=false. Bracketed tags, caps
+    // runs, trailing ellipses etc. become separate segments with their own
+    // emotion preset on the TTS-server side.
+    const expressionEnabled = useExpression !== false && voiceId.startsWith('cb_');
 
     // Check TTS availability
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
@@ -3818,16 +3823,37 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         }
     }
 
+    // Build the synth payload. When expression preprocessing is on, segments[]
+    // overrides top-level exaggeration on the server side. Segments come from
+    // lib/tts-expression.js which parses ALL CAPS / bracketed tags / ellipses /
+    // !!! into emotion-tagged chunks; the TTS server maps each to a preset.
+    const synthPayload = { text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration };
+    if (expressionEnabled) {
+        try {
+            const { segmentText } = require('./lib/tts-expression');
+            const segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
+            if (segments && segments.length > 1) {
+                synthPayload.segments = segments;
+                console.log('[TTS] expression segments=%d preview=%s', segments.length, segments.map(s => s.emotion).join(','));
+            } else if (segments && segments.length === 1 && segments[0].emotion !== 'neutral') {
+                // Even a single non-neutral segment benefits from the preset.
+                synthPayload.segments = segments;
+                console.log('[TTS] expression single-segment emotion=%s', segments[0].emotion);
+            }
+        } catch (e) {
+            console.warn('[TTS] expression preprocess failed, falling back to flat synth:', e.message);
+        }
+    }
+
     // Call TTS service (serialized — parallel generations on the same GPU garble).
-    console.log('[TTS] queued for synthesis voice=%s text_len=%d pending=%d', voiceId, trimmed.length, ttsSynthPending);
+    console.log('[TTS] queued for synthesis voice=%s text_len=%d pending=%d expr=%s', voiceId, trimmed.length, ttsSynthPending, !!synthPayload.segments);
     let ttsRes;
     try {
         ttsRes = await runTtsSynthSerially(() => {
-            console.log('[TTS] synthesize voice=%s text_len=%d', voiceId, trimmed.length);
             return ttsFetch('/synthesize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration }),
+                body: JSON.stringify(synthPayload),
                 timeout: 120000,
             });
         });
