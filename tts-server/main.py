@@ -647,6 +647,72 @@ async def upload_chatterbox_voice(
     }
 
 
+@app.put("/voices/chatterbox/{voice_id}/refs/{emotion}")
+async def upload_chatterbox_emotion_ref(
+    voice_id: str,
+    emotion: str,
+    audio: UploadFile = File(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Upload a per-emotion reference clip for a Chatterbox voice.
+
+    Stored at models/chatterbox/<voice>/refs/<emotion>.wav alongside the
+    main reference.wav. The synth path picks this file when a segment's
+    emotion matches; falls back to neutral / legacy reference.wav otherwise.
+
+    Valid emotions: soft, neutral, excited, yell, angry, sad, happy.
+    """
+    _check_admin(x_admin_token)
+    emo = emotion.lower().strip()
+    if emo not in chatterbox_engine.EMOTION_REFS:
+        raise HTTPException(status_code=400, detail=f"Unknown emotion '{emo}'. Valid: {', '.join(chatterbox_engine.EMOTION_REFS)}")
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
+    refs_dir = os.path.join(voice_dir, "refs")
+    os.makedirs(refs_dir, exist_ok=True)
+    audio_bytes = await audio.read()
+    if len(audio_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
+    tmp_path = os.path.join(refs_dir, f"{emo}.wav.tmp")
+    final_path = os.path.join(refs_dir, f"{emo}.wav")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(audio_bytes)
+        os.replace(tmp_path, final_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try: os.remove(tmp_path)
+            except OSError: pass
+    # Drop cached conditionals for this (voice, emotion) so next synth
+    # uses the new clip.
+    key = (f"cb_{dir_id}", emo)
+    chatterbox_engine._conditionals.pop(key, None)
+    chatterbox_engine._voices_cache = None  # force /voices refresh
+    log.info("Chatterbox emotion-ref uploaded: %s [%s] (%d bytes)", dir_id, emo, len(audio_bytes))
+    return {"ok": True, "voice_id": f"cb_{dir_id}", "emotion": emo, "bytes": len(audio_bytes)}
+
+
+@app.delete("/voices/chatterbox/{voice_id}/refs/{emotion}")
+def delete_chatterbox_emotion_ref(
+    voice_id: str,
+    emotion: str,
+    x_admin_token: Optional[str] = Header(None),
+):
+    _check_admin(x_admin_token)
+    emo = emotion.lower().strip()
+    dir_id = _normalize_voice_dir_id(voice_id)
+    refs_path = os.path.join(chatterbox_engine.get_models_dir(), dir_id, "refs", f"{emo}.wav")
+    if os.path.exists(refs_path):
+        os.remove(refs_path)
+        key = (f"cb_{dir_id}", emo)
+        chatterbox_engine._conditionals.pop(key, None)
+        chatterbox_engine._voices_cache = None
+        return {"ok": True, "deleted": True}
+    return {"ok": True, "deleted": False}
+
+
 class ChatterboxMetadataPatch(BaseModel):
     name: Optional[str] = None
     gender: Optional[str] = None
