@@ -6033,7 +6033,7 @@
                 const EMOS = ['soft','neutral','excited','yell','angry','sad','happy'];
                 const presentRefs = Array.isArray(v.emotion_refs) ? v.emotion_refs : [];
                 const refsBadge = isCb
-                    ? '<span class="emo-refs-badge" onclick="toggleEmoRefs(\'' + esc(v.id) + '\')" style="cursor:pointer;color:' + (presentRefs.length ? 'var(--accent)' : 'var(--text-muted)') + ';font-size:0.72rem;margin-left:0.4rem" title="Per-emotion reference clips (click to edit)">🎭 ' + (presentRefs.length ? (presentRefs.length + '/7') : 'set') + '</span>'
+                    ? '<span class="emo-refs-badge" onclick="toggleEmoRefs(\'' + esc(v.id) + '\')" style="cursor:pointer;color:' + (presentRefs.length ? 'var(--accent)' : 'var(--text-muted)') + ';font-size:0.72rem;margin-left:0.4rem" title="Per-emotion reference clips (click to edit). ' + (presentRefs.length ? presentRefs.join(\', \') : 'none uploaded yet') + '">🎭 ' + (presentRefs.length ? (presentRefs.length + '/7') : 'none') + '</span>'
                     : '';
                 const dirIdForRefs = v.id.replace(/^cb_/, '');
                 const refsRow = isCb

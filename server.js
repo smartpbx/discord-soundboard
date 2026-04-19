@@ -3839,7 +3839,29 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     if (expressionEnabled) {
         try {
             const { segmentText } = require('./lib/tts-expression');
-            const segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
+            let segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
+            // LLM fallback: when the regex sees ONLY neutral and the text is
+            // non-trivial (>= 30 chars), give the configured LLM a shot at
+            // detecting tone the regex missed (sarcasm, sadness, excitement
+            // without !!!, etc.). Regex still wins for explicit cues.
+            const needsLlm = !forcedEmotion
+                && segments && segments.length === 1
+                && segments[0].emotion === 'neutral'
+                && trimmed.length >= 30;
+            if (needsLlm) {
+                try {
+                    const llm = require('./lib/tts-emotion-llm');
+                    if (llm.isAvailable()) {
+                        const llmSegs = await llm.classifyEmotion(trimmed);
+                        if (llmSegs && llmSegs.length && !(llmSegs.length === 1 && llmSegs[0].emotion === 'neutral')) {
+                            segments = llmSegs;
+                            console.log('[TTS] LLM emotion override segments=%d emotions=%s', llmSegs.length, llmSegs.map(s => s.emotion).join(','));
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[TTS] LLM classifier error (using regex result):', e.message);
+                }
+            }
             if (segments && segments.length > 1) {
                 synthPayload.segments = segments;
                 console.log('[TTS] expression segments=%d preview=%s', segments.length, segments.map(s => s.emotion).join(','));

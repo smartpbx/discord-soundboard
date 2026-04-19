@@ -114,6 +114,10 @@ class VoiceInfo(BaseModel):
     source_end: Optional[float] = None
     updated_at: Optional[int] = None
     default_exaggeration: Optional[float] = None
+    # Per-emotion reference clips present on disk (subset of soft, neutral,
+    # excited, yell, angry, sad, happy). Missing emotions fall back to neutral
+    # then to the legacy reference.wav at synth time.
+    emotion_refs: Optional[list[str]] = None
 
 
 # ---------------------------------------------------------------------------
