@@ -189,6 +189,27 @@ class CloneToGsvRequest(BaseModel):
     trim_length_sec: float = 8.0
 
 
+@app.delete("/admin/voices/{engine}/{voice_id}")
+def delete_engine_voice(engine: str, voice_id: str, x_admin_token: Optional[str] = Header(None)):
+    """Remove a non-Chatterbox/non-RVC voice by engine + dir name. Only
+    blows away the voice dir under models/<engine>/<id>/ — no effect on
+    other engines' copies of the same celebrity."""
+    _check_admin(x_admin_token)
+    import shutil as _shutil
+    if engine not in ("gptsovits", "fish"):
+        raise HTTPException(status_code=400, detail="Unsupported engine")
+    dir_id = _normalize_voice_dir_id(voice_id)
+    base = os.path.join(os.path.dirname(__file__), "models", engine, dir_id)
+    if not os.path.isdir(base):
+        raise HTTPException(status_code=404, detail=f"{engine} voice not found: {voice_id}")
+    _shutil.rmtree(base)
+    if engine == "gptsovits":
+        gptsovits_engine._voices_cache = None
+    elif engine == "fish":
+        fish_engine.invalidate_cache()
+    return {"ok": True, "engine": engine, "voice_id": voice_id, "deleted": True}
+
+
 @app.post("/admin/voices/fish/clone-from-chatterbox/{voice_id}")
 def clone_fish_from_chatterbox(voice_id: str):
     """Create a fish_<voice> by reusing the Chatterbox reference clip

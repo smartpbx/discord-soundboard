@@ -6020,10 +6020,20 @@
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>';
                 } else if (isRvc) {
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteRvcVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this RVC model (Chatterbox pair if any kept intact)">Delete</button>';
+                } else if (v.engine === 'gptsovits') {
+                    const dirId = v.id.replace(/^gsv_/, '');
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
+                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'gptsovits\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this GPT-SoVITS voice (clone again from Chatterbox if you want it back)">Delete</button>';
+                } else if (v.engine === 'fish') {
+                    const dirId = v.id.replace(/^fish_/, '');
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
+                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'fish\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this Fish voice">Delete</button>';
                 } else {
-                    // Kokoro / gptsovits — built-in, non-editable
-                    actions = '<span style="color:var(--text-muted);font-size:0.75rem">built-in</span>';
+                    // Kokoro built-in voices — try them via Test only
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
+                        + ' <span style="color:var(--text-muted);font-size:0.75rem;margin-left:0.5rem">built-in</span>';
                 }
                 let sourceLine = '';
                 if (isCb && v.source_kind) {
@@ -6334,6 +6344,38 @@
             const summary = 'Picked ' + picked + '/7 refs from ' + (d.chunks_analyzed || '?') + ' chunks'
                 + (duplicates > 0 ? ' (' + duplicates + ' emotion' + (duplicates === 1 ? '' : 's') + ' share chunks — replace via Upload if needed)' : '');
             showToast(summary, 'success');
+            fetchTtsVoicesAdmin();
+        }
+
+        // Synth a short test clip locally + play it (silent mute via gain).
+        // Useful for auditioning new voices without going to Discord.
+        async function testTtsVoice(voiceId, voiceName) {
+            const text = "Hello, this is a quick test of " + voiceName + ".";
+            showToast('Synthesizing test clip…', 'info');
+            const r = await fetch('/api/tts/test-synth', {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voiceId }),
+            });
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                showToast(d.error || ('Test failed (' + r.status + ')'), 'error');
+                return;
+            }
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.onended = () => URL.revokeObjectURL(url);
+            try { await audio.play(); showToast('Playing test for ' + voiceName, 'success'); }
+            catch (e) { showToast('Playback blocked: ' + e.message, 'error'); }
+        }
+
+        async function deleteEngineVoice(engine, dirId, name) {
+            if (!confirm('Delete the ' + engine + ' voice for "' + name + '"?\n\nThe Chatterbox pair (if any) is NOT touched. You can re-clone via the → ' + (engine === 'fish' ? 'Fish' : 'GSV') + ' button later.')) return;
+            const r = await api('/api/superadmin/tts/voice-engine/' + engine + '/' + encodeURIComponent(dirId), { method: 'DELETE' });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
+            showToast('Deleted ' + engine + ' voice ' + dirId, 'success');
             fetchTtsVoicesAdmin();
         }
 

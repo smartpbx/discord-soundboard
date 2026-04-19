@@ -4342,6 +4342,59 @@ app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, a
     }
 });
 
+// Synth a short test clip and return raw WAV bytes for in-browser preview.
+// Doesn't queue to Discord — purely for auditioning a voice before using it.
+app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot synthesize tests.' });
+    const { text, voiceId } = req.body || {};
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
+    if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'voiceId required' });
+    if (text.length > 300) return res.status(400).json({ error: 'Test text capped at 300 chars' });
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
+    try {
+        const r = await ttsFetch('/synthesize', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text.trim(), voice_id: voiceId, use_rvc: false }),
+            timeout: 90000,
+        });
+        if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            return res.status(r.status).json(d);
+        }
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(buf);
+    } catch (e) {
+        res.status(503).json({ error: 'TTS service unreachable: ' + e.message });
+    }
+});
+
+// Delete a per-engine voice (gptsovits / fish). Just rm -rf the voice dir
+// on the TTS server. Chatterbox + RVC have their own deletion flows.
+app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, async (req, res) => {
+    const engine = req.params.engine;
+    if (!['gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine for this delete route' });
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    try {
+        const r = await ttsFetch(`/admin/voices/${engine}/${encodeURIComponent(dirId)}`, {
+            method: 'DELETE',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) return res.status(r.status).json(body);
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice.delete-' + engine,
+            target: dirId,
+            details: body,
+        });
+        res.json(body);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 // One-click: create a Fish v2 voice by cloning an existing Chatterbox
 // reference. Whisper-transcribes for ref_text. Fish accepts the full
 // 5-30s clip as-is so no trim needed.
