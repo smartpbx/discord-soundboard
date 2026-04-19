@@ -5977,8 +5977,10 @@
                 const isRvc = v.engine === 'rvc';
                 let actions = '';
                 if (isCb) {
+                    const cbDirId = v.id.replace(/^cb_/, '');
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Ref</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToGsv(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a GPT-SoVITS voice using this voice\'s reference clip (trims to 8s, auto-transcribes)">→ GSV</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>';
                 } else if (isRvc) {
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
@@ -6214,6 +6216,21 @@
                 setVoiceModalStatus('Network error: ' + e.message, 'error');
                 btn.disabled = false;
             }
+        }
+
+        async function cloneVoiceToGsv(dirId, name) {
+            if (!confirm('Clone "' + name + '" to GPT-SoVITS?\n\nTrims the Chatterbox reference to 8 s, Whisper-transcribes, and creates gsv_' + dirId + '. Adds a new voice selectable in the TTS dropdown — existing cb_' + dirId + ' stays unchanged.')) return;
+            showToast('Cloning "' + name + '" → GSV (transcribing…)', 'info');
+            const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/clone-to-gsv', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trim_length_sec: 8 }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(d.error || d.detail || 'Clone to GSV failed', 'error'); return; }
+            showToast('Created gsv_' + dirId + ' · "' + String(d.ref_text || '').slice(0, 60) + '…"', 'success');
+            fetchTtsVoicesAdmin();
+            if (typeof fetchTtsStatus === 'function') fetchTtsStatus();
         }
 
         async function deleteChatterboxVoice(voiceId, name) {
