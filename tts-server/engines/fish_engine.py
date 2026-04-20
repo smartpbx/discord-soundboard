@@ -79,6 +79,7 @@ def _scan_voices():
             "_ref_path": ref_path,
             "_ref_text": meta["ref_text"],
             "_dir": entry,
+            "_skip_rvc": meta.get("skip_rvc", False),
             "source_kind": meta.get("source_kind"),
             "source_url": meta.get("source_url"),
             "source_filename": meta.get("source_filename"),
@@ -112,6 +113,15 @@ def free_caches():
     """Fish models live in fish-speech.service's process — nothing to free
     inside tts-server. Provided for parity with chatterbox/rvc engines."""
     pass
+
+
+def should_skip_rvc(voice_id: str) -> bool:
+    """Per-voice opt-out from Fish→RVC refinement (stored as skip_rvc in
+    metadata.json). Matches chatterbox_engine's API for parity."""
+    for v in get_voices():
+        if v["id"] == voice_id:
+            return v.get("_skip_rvc", False)
+    return False
 
 
 def _find_voice(voice_id: str) -> dict:

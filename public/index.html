@@ -6198,10 +6198,26 @@
             if (voices.length === 0) { tbody.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return; }
             if (empty) empty.classList.add('hidden');
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            // Build the set of available RVC model ids (without prefix) so we
+            // can decide which Fish rows should show the refinement checkbox.
+            const _rvcModelStems = new Set(voices
+                .filter(vv => vv.engine === 'rvc')
+                .map(vv => vv.id.replace(/^rvc_/, '')));
+            // Also include RVC models that were hidden by the /voices filter
+            // (RVC voices that have a Chatterbox pair aren't surfaced — but
+            // they DO exist on disk and work for Fish refinement).
+            voices.forEach(vv => {
+                if (vv.engine === 'chatterbox') _rvcModelStems.add(vv.id.replace(/^cb_/, ''));
+            });
             tbody.innerHTML = voices.map(v => {
                 const disabled = _ttsAdminDisabled.includes(v.id);
                 const isCb = v.engine === 'chatterbox';
-                const rvcOn = isCb ? (_ttsAdminRvcOverrides[v.id] ?? true) : false;
+                const isFish = v.engine === 'fish';
+                const fishStem = isFish ? v.id.replace(/^fish_/, '') : null;
+                const fishHasRvc = isFish && _rvcModelStems.has(fishStem);
+                const rvcOn = isCb
+                    ? (_ttsAdminRvcOverrides[v.id] ?? true)
+                    : (fishHasRvc ? (_ttsAdminRvcOverrides[v.id] ?? true) : false);
                 const isKokoro = v.engine === 'kokoro';
                 const isRvc = v.engine === 'rvc';
                 let actions = '';
@@ -6270,7 +6286,7 @@
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
-                    + '<td style="text-align:center;padding:0.35rem 0.5rem">' + (isCb ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)">--</span>') + '</td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem">' + ((isCb || fishHasRvc) ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" title="' + (isFish ? 'Pipe Fish output through rvc_' + esc(fishStem) + ' for target-timbre refinement' : 'Enable RVC refinement') + '" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)" title="' + (isFish ? 'No matching rvc_' + esc(fishStem || '?') + ' model trained — train one via Voice Management → Target engine: RVC' : '') + '">--</span>') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + expCell + '</td>'
                     + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap">' + actions + '</td>'
                     + '</tr>' + refsRow;
@@ -6996,10 +7012,10 @@
             const startBtn = document.getElementById('trainVoiceStartBtn');
             const titleEl = document.getElementById('trainVoiceTitle');
             if (eng === 'rvc') {
-                if (help) help.textContent = 'RVC: 6-phase pipeline. ~70 min on the 3090. Produces a celebrity-quality clone.';
+                if (help) help.innerHTML = 'RVC: 6-phase pipeline, ~70 min on the 3090. Produces a target-timbre conversion model. Safe to re-train with an existing Chatterbox or Fish voice id — the new rvc_&lt;id&gt; will be auto-picked up as a refinement stage for that voice without re-adding it.';
                 if (markersField) markersField.style.display = '';
-                if (startBtn) startBtn.textContent = 'Start training';
-                if (titleEl) titleEl.textContent = 'Train new RVC voice';
+                if (startBtn) startBtn.textContent = 'Start RVC training';
+                if (titleEl) titleEl.textContent = 'Train RVC model (new or upgrade existing voice)';
             } else {
                 const label = eng === 'fish' ? 'Fish v2 S2 Pro' : eng === 'gptsovits' ? 'GPT-SoVITS' : 'Chatterbox';
                 if (help) help.textContent = label + ' (lite): finds audio, picks a 5–15 s clean window, deploys. Ready in ~3 min. No GPU training.';

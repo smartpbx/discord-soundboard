@@ -1009,6 +1009,20 @@ def _do_synthesize(req: SynthesizeRequest):
         t_tts = time.time() - t0
         log.info("Fish done in %.2fs, %d bytes", t_tts, len(wav_bytes))
 
+        # Fish → RVC refinement (same two-stage trick Chatterbox uses).
+        # Fish supplies prosody + [tag] expressivity; RVC pins the timbre
+        # to the trained target voice. Skip when voice metadata has
+        # skip_rvc=true or the operator toggled RVC off for this voice.
+        rvc_model_id = voice_id.replace("fish_", "rvc_", 1)
+        skip_rvc = fish_engine.should_skip_rvc(voice_id)
+        if req.use_rvc and not skip_rvc and rvc_model_id in rvc_ids:
+            t1 = time.time()
+            try:
+                wav_bytes = rvc_engine.convert(wav_bytes, rvc_model_id)
+                log.info("Fish+RVC refinement done in %.2fs, %d bytes", time.time() - t1, len(wav_bytes))
+            except Exception as e:
+                log.warning("Fish+RVC refinement failed (using raw Fish output): %s", e)
+
     # -----------------------------------------------------------------------
     # Route 4: Plain Kokoro voice (af_heart, am_adam, etc.)
     # -----------------------------------------------------------------------
