@@ -167,4 +167,32 @@ def synthesize(text: str, voice_id: str, emotion: str = "neutral", seed: int = N
         raise RuntimeError(f"Fish returned unexpected content-type: {resp.headers.get('content-type')}")
     wav_bytes = resp.content
     log.info("Fish synthesis complete: %d bytes", len(wav_bytes))
+    # Fish ships at noticeably lower loudness than Chatterbox/RVC outputs, so
+    # the soundboard's volume slider has to be cranked. Apply a peak-normalize
+    # pass to bring it in line with the other engines (-1 dBFS ceiling, no
+    # compression — keeps the dynamic range Fish chose intact).
+    try:
+        wav_bytes = _peak_normalize(wav_bytes, target_dbfs=-1.0)
+    except Exception as e:
+        log.warning("Fish post-synth normalize failed (returning raw): %s", e)
     return wav_bytes
+
+
+def _peak_normalize(wav_bytes: bytes, target_dbfs: float = -1.0) -> bytes:
+    """Boost a WAV blob so its peak hits target_dbfs. Pure NumPy — no ffmpeg
+    spin-up cost. Returns original bytes if peak is already ≥ target."""
+    import io as _io
+    import soundfile as _sf
+    import numpy as _np
+    data, sr = _sf.read(_io.BytesIO(wav_bytes), dtype="float32", always_2d=False)
+    peak = float(_np.max(_np.abs(data))) if data.size else 0.0
+    if peak <= 0.0:
+        return wav_bytes  # silent — nothing to scale
+    target_lin = 10 ** (target_dbfs / 20.0)
+    gain = target_lin / peak
+    if gain <= 1.05:
+        return wav_bytes  # already loud enough; don't waste cycles
+    boosted = _np.clip(data * gain, -1.0, 1.0)
+    buf = _io.BytesIO()
+    _sf.write(buf, boosted, sr, format="WAV")
+    return buf.getvalue()

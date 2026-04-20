@@ -799,6 +799,7 @@
             </div>
             <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
             <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
+            <div id="ttsEngineHint" class="hidden" style="font-size:0.72rem; color:var(--text-muted); margin:-0.2rem 0 0.4rem; line-height:1.4;"></div>
             <div class="tts-controls">
                 <select id="ttsVoiceSelect"><option value="">Loading voices...</option></select>
                 <div style="display:flex;align-items:center;gap:0.4rem;min-width:120px;">
@@ -5764,6 +5765,29 @@
                 if (slider) slider.value = def;
                 const label = document.getElementById('ttsExpressionLabel');
                 if (label) label.textContent = def.toFixed(2);
+            }
+            // Per-engine usage hint (mostly for Fish, which uses inline tags
+            // that the other engines ignore). Hidden if no voice picked.
+            const hint = document.getElementById('ttsEngineHint');
+            if (hint) {
+                if (!v) { hint.classList.add('hidden'); hint.innerHTML = ''; }
+                else if (v.engine === 'fish') {
+                    hint.classList.remove('hidden');
+                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags:</span> '
+                        + '<code style="color:#7ce0a4">(shouting)</code> · '
+                        + '<code style="color:#7ce0a4">(whispering)</code> · '
+                        + '<code style="color:#7ce0a4">(laughing)</code> · '
+                        + '<code style="color:#7ce0a4">(sadly)</code> · '
+                        + '<code style="color:#7ce0a4">(angrily)</code> '
+                        + '— prepend or interleave to colour the delivery.';
+                } else if (v.engine === 'chatterbox') {
+                    hint.classList.remove('hidden');
+                    hint.innerHTML = '<span style="color:var(--accent);">Chatterbox cues:</span> '
+                        + 'ALL CAPS ⇒ yell · trailing <code>...</code> ⇒ soft · '
+                        + '<code>!!!</code> ⇒ excited · <code>[angry]</code> / <code>[sad]</code> / <code>[happy]</code> tags supported.';
+                } else {
+                    hint.classList.add('hidden'); hint.innerHTML = '';
+                }
             }
         }
 
