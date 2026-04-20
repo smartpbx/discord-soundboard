@@ -4452,6 +4452,14 @@ app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, as
 // One-click: create a Fish v2 voice by cloning an existing Chatterbox
 // reference. Whisper-transcribes for ref_text. Fish accepts the full
 // 5-30s clip as-is so no trim needed.
+app.get('/api/superadmin/tts/engines/health', requireSuperadmin, async (req, res) => {
+    try {
+        const r = await ttsFetch('/health/engines', { timeout: 5000 });
+        const body = await r.json().catch(() => ({}));
+        res.status(r.status).json(body);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 app.post('/api/superadmin/tts/voice/:id/clone-to-fish', requireSuperadmin, async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });

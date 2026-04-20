@@ -10,10 +10,11 @@ WorkingDirectory=/opt/fish-speech
 # a contiguous block — critical on the shared 3090 where Chatterbox/GSV/ollama
 # also live. Without this, fragmentation OOMs Fish during model load.
 Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# S2 Pro is ~4.4B params; fp16 fits in ~7-8 GiB on the 3090.
-# NOTE: --compile gives 2-3x synth speedup but inflates VRAM to ~19 GiB,
-# which OOMs Chatterbox + GSV on the shared 3090. Disabled until we wire
-# proper engine eviction.
+# S2 Pro is ~4.4B params at fp16. With --compile, the allocator reserves the
+# full max_seq_len KV cache up-front, inflating resident VRAM to ~19 GiB. The
+# tts-server evicts Chatterbox/RVC (and stops Fish entirely when a non-Fish
+# engine is invoked) via systemctl so only one heavy engine holds VRAM at a
+# time. That makes --compile safe again while keeping its 2-3x synth speedup.
 ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --mode tts \
     --llama-checkpoint-path checkpoints/s2-pro \
@@ -21,9 +22,12 @@ ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --decoder-config-name modded_dac_vq \
     --listen 0.0.0.0:8881 \
     --device cuda \
-    --half
+    --half \
+    --compile
 Restart=on-failure
 RestartSec=5
+# torch.compile warmup adds ~30 s to first boot; 5 min is a generous ceiling.
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

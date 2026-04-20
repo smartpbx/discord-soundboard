@@ -175,6 +175,134 @@ def get_emotion_presets():
 
 
 # ---------------------------------------------------------------------------
+# Engine eviction — the 3090 can't host Fish (~19 GiB with --compile) AND
+# Chatterbox (~5.5 GiB) AND ollama (~3.3 GiB) simultaneously. To keep all
+# engines usable we enforce mutual exclusion: when a Fish synth comes in we
+# drop Chatterbox/RVC weights from tts-server and make sure fish-speech is
+# running; when anything else synths we stop fish-speech entirely. GSV is
+# small (~1.5 GiB) so it can coexist with either.
+# ---------------------------------------------------------------------------
+
+import subprocess as _sp
+
+FISH_SERVICE = os.environ.get("FISH_SERVICE_UNIT", "fish-speech.service")
+FISH_HEALTH_URL = os.environ.get("FISH_HEALTH_URL", "http://localhost:8881/v1/models")
+_fish_ready_lock = threading.Lock()
+
+
+def _systemctl(action: str, unit: str = FISH_SERVICE, timeout: int = 30) -> bool:
+    """Run `systemctl <action> <unit>` inside the tts-server container.
+    Returns True on exit 0. Swallows errors — caller decides policy."""
+    try:
+        r = _sp.run(["systemctl", action, unit], capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            log.warning("systemctl %s %s failed: %s", action, unit, (r.stderr or r.stdout or "")[:200])
+        return r.returncode == 0
+    except Exception as e:
+        log.warning("systemctl %s %s raised: %s", action, unit, e)
+        return False
+
+
+def _fish_is_active() -> bool:
+    try:
+        r = _sp.run(["systemctl", "is-active", FISH_SERVICE], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _fish_is_responsive(timeout: float = 2.0) -> bool:
+    try:
+        import requests
+        r = requests.get(FISH_HEALTH_URL, timeout=timeout)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _wait_for_fish(timeout_sec: int = 180) -> bool:
+    """Poll Fish HTTP until it responds (post-compile warmup can take ~60 s)."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if _fish_is_responsive(timeout=2.0):
+            return True
+        time.sleep(2.0)
+    return False
+
+
+def _evict_for_fish():
+    """Free Chatterbox/RVC so Fish has room, then ensure Fish is up and ready."""
+    try: chatterbox_engine.free_caches()
+    except Exception as e: log.warning("evict->fish: chatterbox free_caches failed: %s", e)
+    try: rvc_engine.free_caches()
+    except Exception as e: log.warning("evict->fish: rvc free_caches failed: %s", e)
+    # Serialize the "is Fish up?" check so concurrent synth requests don't
+    # trigger duplicate starts.
+    with _fish_ready_lock:
+        if not _fish_is_active():
+            log.info("evict->fish: starting fish-speech.service")
+            _systemctl("start")
+        if not _wait_for_fish(timeout_sec=180):
+            raise HTTPException(status_code=503, detail="Fish-Speech failed to become ready within 180s")
+
+
+def _evict_for_non_fish():
+    """Stop fish-speech to free its ~19 GiB for Chatterbox/RVC/GSV."""
+    with _fish_ready_lock:
+        if _fish_is_active():
+            log.info("evict->non-fish: stopping fish-speech.service to free VRAM")
+            _systemctl("stop")
+
+
+def _evict_for_voice(voice_id: str):
+    """Dispatch eviction based on which engine the target voice lives on."""
+    fish_ids = fish_engine.get_voice_ids()
+    if voice_id in fish_ids:
+        _evict_for_fish()
+    else:
+        _evict_for_non_fish()
+
+
+@app.get("/health/engines")
+def health_engines():
+    """Status snapshot for every TTS engine — used by superadmin UI pills."""
+    import requests
+    def _ping(url: str, timeout: float = 1.5) -> bool:
+        try:
+            r = requests.get(url, timeout=timeout)
+            return r.status_code < 500
+        except Exception:
+            return False
+
+    chatterbox_loaded = chatterbox_engine._model is not None
+    fish_active = _fish_is_active()
+    fish_ready = _fish_is_responsive(timeout=1.0) if fish_active else False
+    gsv_ready = _ping(os.environ.get("GPT_SOVITS_URL", "http://localhost:9880").rstrip("/") + "/", timeout=1.0)
+    ollama_url = os.environ.get("EMOTION_LLM_URL", "").rsplit("/v1", 1)[0] if os.environ.get("EMOTION_LLM_URL") else None
+
+    return {
+        "ts": int(time.time()),
+        "training_mode": _TRAINING_MODE,
+        "engines": {
+            "kokoro": {"status": "ready", "note": "CPU"},
+            "chatterbox": {
+                "status": "ready" if chatterbox_loaded else "cold",
+                "note": f"{len(chatterbox_engine._conditionals)} voice-conds cached" if chatterbox_loaded else "will lazy-load on next synth",
+            },
+            "rvc": {"status": "lazy", "note": "loads per-voice on demand"},
+            "gptsovits": {
+                "status": "ready" if gsv_ready else "down",
+                "note": "external service on :9880",
+            },
+            "fish": {
+                "status": "ready" if fish_ready else ("loading" if fish_active else "stopped"),
+                "note": "evicted when other engines synth" if not fish_active else ("warming up (compile JIT ~30s)" if not fish_ready else "warm"),
+            },
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # GPT-SoVITS voice bootstrapping from an existing Chatterbox voice.
 #
 # Creates a matching gsv_<voice> by trimming the Chatterbox reference to
@@ -577,6 +705,8 @@ def _synthesize_segmented(req: SynthesizeRequest):
     cb_ids = chatterbox_engine.get_voice_ids()
     if req.voice_id not in cb_ids:
         raise HTTPException(status_code=400, detail=f"Segmented synth only supports Chatterbox voices for now (got {req.voice_id})")
+    if not _TRAINING_MODE:
+        _evict_for_voice(req.voice_id)
     parts = []
     pauses = []
     for seg in req.segments:
@@ -612,6 +742,10 @@ def _do_synthesize(req: SynthesizeRequest):
         raise HTTPException(status_code=400, detail="Text is empty")
 
     voice_id = req.voice_id
+    # Enforce engine mutual-exclusion before we touch any weights so the GPU
+    # has headroom regardless of which engine was previously warm.
+    if not _TRAINING_MODE:
+        _evict_for_voice(voice_id)
     t0 = time.time()
 
     cb_ids = chatterbox_engine.get_voice_ids()
