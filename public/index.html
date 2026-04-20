@@ -1658,38 +1658,36 @@
                     <!-- Target engine first: it governs what the rest of the form means. -->
                     <div class="field">
                         <label for="trainVoiceEngine">Target engine</label>
-                        <select id="trainVoiceEngine" onchange="onTrainEngineChange()" style="width:100%; max-width:360px;">
+                        <select id="trainVoiceEngine" onchange="onTrainEngineChange()" style="width:100%;">
                             <option value="rvc">RVC (full 6-phase pipeline · ~70 min)</option>
                             <option value="chatterbox">Chatterbox (lite · 5–15 s ref · ~3 min)</option>
                             <option value="fish">Fish v2 S2 Pro (lite · ~3 min)</option>
                             <option value="gptsovits">GPT-SoVITS (lite · ~3 min)</option>
                         </select>
-                        <div class="field-help" id="trainVoiceEngineHelp" style="max-width:600px;">RVC trains a celebrity-quality voice clone over 50–80 min. Lite engines just deploy one clean reference clip; ready in minutes.</div>
+                        <div class="field-help" id="trainVoiceEngineHelp">RVC trains a celebrity-quality voice clone over 50–80 min. Lite engines just deploy one clean reference clip; ready in minutes.</div>
                     </div>
-                    <div class="row">
-                        <div class="field" style="flex:1; min-width:180px;">
+                    <!-- Uniform 2-column grid: labels + inputs align even when one side has help text below. -->
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem 1rem; margin-bottom:0.75rem;">
+                        <div class="field" style="margin:0;">
                             <label for="trainVoiceName">Display name</label>
                             <input type="text" id="trainVoiceName" placeholder="e.g. Joe Rogan">
                         </div>
-                        <div class="field" style="flex:1; min-width:180px;">
+                        <div class="field" style="margin:0;">
                             <label for="trainVoiceId">Voice id</label>
                             <input type="text" id="trainVoiceId" placeholder="e.g. joe_rogan">
-                            <div class="field-help">Lowercase, underscore-separated.</div>
                         </div>
-                    </div>
-                    <div class="row">
-                        <div class="field" style="flex:1; min-width:140px;">
+                        <div class="field" style="margin:0;">
                             <label for="trainVoiceGroup">Group</label>
-                            <select id="trainVoiceGroup">
+                            <select id="trainVoiceGroup" style="width:100%;">
                                 <option>Celebrity</option>
                                 <option>Cartoon</option>
                                 <option>Gaming</option>
                                 <option>Other</option>
                             </select>
                         </div>
-                        <div class="field" style="flex:1; min-width:140px;">
+                        <div class="field" style="margin:0;">
                             <label for="trainVoiceGender">Gender</label>
-                            <select id="trainVoiceGender">
+                            <select id="trainVoiceGender" style="width:100%;">
                                 <option value="male">male</option>
                                 <option value="female">female</option>
                                 <option value="unknown">unknown</option>
