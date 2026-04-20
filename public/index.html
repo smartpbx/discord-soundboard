@@ -6093,6 +6093,7 @@
         // per panel-open + on every voice-admin refresh; the operator clicks
         // a pill to toggle Fish on/off manually if they want to pre-warm it.
         async function fetchTtsEngineHealth() {
+            const _esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const row = document.getElementById('ttsEngineHealthRow');
             if (!row) return;
             const res = await api('/api/superadmin/tts/engines/health');
@@ -6115,9 +6116,9 @@
             const cells = order.filter(k => eng[k]).map(k => {
                 const e = eng[k];
                 const c = COLORS[e.status] || COLORS.cold;
-                return '<span title="' + esc(e.note || '') + '" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.2rem 0.55rem; border-radius:999px; background:' + c.bg + '; color:' + c.fg + ';">'
+                return '<span title="' + _esc(e.note || '') + '" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.2rem 0.55rem; border-radius:999px; background:' + c.bg + '; color:' + c.fg + ';">'
                     + '<span style="width:6px; height:6px; border-radius:50%; background:' + c.dot + ';"></span>'
-                    + esc(k) + ' · ' + esc(e.status)
+                    + _esc(k) + ' · ' + _esc(e.status)
                     + '</span>';
             });
             const tmode = data.training_mode ? '<span style="color:#e9a833; padding:0.2rem 0.55rem;">⚙️ training mode</span>' : '';
@@ -6529,19 +6530,22 @@
         };
 
         function _renderEngineHelp(engine) {
+            // esc() is function-local in other callers; inline a minimal version
+            // here so this top-level helper doesn't reach into another scope.
+            const _esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const body = document.getElementById('engineVoiceHelpBody');
             const h = ENGINE_HELP[engine];
             if (!body) return;
             if (!h) { body.innerHTML = ''; return; }
             const tagsHtml = h.tags && h.tags.length
-                ? '<table style="margin:0.3rem 0 0.5rem; border-collapse:collapse;">' + h.tags.map(([t, d]) => '<tr><td style="padding:1px 8px 1px 0; font-family:monospace; color:#7ce0a4;">' + esc(t) + '</td><td style="padding:1px 0; color:var(--text-muted);">' + esc(d) + '</td></tr>').join('') + '</table>'
+                ? '<table style="margin:0.3rem 0 0.5rem; border-collapse:collapse;">' + h.tags.map(([t, d]) => '<tr><td style="padding:1px 8px 1px 0; font-family:monospace; color:#7ce0a4;">' + _esc(t) + '</td><td style="padding:1px 0; color:var(--text-muted);">' + _esc(d) + '</td></tr>').join('') + '</table>'
                 : '';
             body.innerHTML =
-                '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Reference clip:</b> ' + esc(h.ref) + '</div>'
-                + '<div style="margin-bottom:0.2rem;"><b style="color:var(--text);">Expression:</b> ' + esc(h.expression) + '</div>'
+                '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Reference clip:</b> ' + _esc(h.ref) + '</div>'
+                + '<div style="margin-bottom:0.2rem;"><b style="color:var(--text);">Expression:</b> ' + _esc(h.expression) + '</div>'
                 + tagsHtml
-                + '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Knobs:</b> ' + esc(h.knobs) + '</div>'
-                + '<div><b style="color:var(--text);">Speed/VRAM:</b> ' + esc(h.speed) + '</div>';
+                + '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Knobs:</b> ' + _esc(h.knobs) + '</div>'
+                + '<div><b style="color:var(--text);">Speed/VRAM:</b> ' + _esc(h.speed) + '</div>';
         }
 
         function _setEngineVoicePreviewStatus(msg, kind) {
