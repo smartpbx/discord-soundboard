@@ -1599,6 +1599,9 @@
 
                 <div class="preview-box">
                     <div class="status-line" id="voiceModalStatus">No preview yet.</div>
+                    <div id="voiceModalProgressWrap" style="display:none; height:6px; background:var(--surface-hover); border-radius:3px; overflow:hidden; margin:0.25rem 0;">
+                        <div id="voiceModalProgressBar" style="height:100%; width:0%; background:var(--accent); transition:width 0.4s;"></div>
+                    </div>
                     <audio id="voiceModalAudio" controls preload="none" style="display:none"></audio>
                 </div>
 
@@ -1836,6 +1839,9 @@
                 <div class="field-help" id="engineVoiceAudioHelp">Recommended: 10–30 s for Fish. Source window cap: 5 min — usable when Isolate vocals + Extract speaker will filter a conversation down to ~1 min of clean target. Whisper auto-transcribes.</div>
                 <div class="preview-box">
                     <div class="status-line" id="engineVoicePreviewStatus">No preview yet.</div>
+                    <div id="engineVoicePreviewProgressWrap" style="display:none; height:6px; background:var(--surface-hover); border-radius:3px; overflow:hidden; margin:0.25rem 0;">
+                        <div id="engineVoicePreviewProgressBar" style="height:100%; width:0%; background:var(--accent); transition:width 0.4s;"></div>
+                    </div>
                     <audio id="engineVoicePreviewAudio" controls preload="none" style="display:none"></audio>
                 </div>
                 <div class="field">
@@ -6376,6 +6382,39 @@
             fetchTtsStatus();
         }
 
+        // Kick off the async isolate/extract pipeline on a preview token.
+        // setStatus(msg, kind, progressPct) is called to update the caller's
+        // status line + optional progress bar. Returns the final job info
+        // (or throws on error).
+        async function processPreviewAsync(token, { isolate, extractSpeaker }, setStatus) {
+            const postRes = await api('/api/superadmin/tts/preview/' + token + '/process', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ isolate, extractSpeaker }),
+            });
+            const postData = await postRes.json().catch(() => ({}));
+            if (!postRes.ok) throw new Error(postData.error || ('Process failed ' + postRes.status));
+            const jobId = postData.jobId;
+            const STEP_LABEL = { isolate: 'Isolating vocals (demucs, CPU)', extract: 'Extracting dominant speaker (diarize)' };
+            for (;;) {
+                await new Promise(r => setTimeout(r, 1500));
+                const r = await api('/api/superadmin/tts/preview-jobs/' + jobId);
+                if (!r || !r.ok) throw new Error('Job status check failed');
+                const j = await r.json();
+                if (j.status === 'queued') {
+                    setStatus('Queued (' + (j.queuedBehind || 0) + ' ahead)…', null, 0);
+                } else if (j.status === 'running') {
+                    const pct = Math.round((j.progress || 0) * 100);
+                    const label = STEP_LABEL[j.step] || j.step || 'Processing';
+                    setStatus(label + '… ' + pct + '%', null, pct);
+                } else if (j.status === 'done') {
+                    setStatus('Done', 'success', 100);
+                    return j;
+                } else if (j.status === 'error') {
+                    throw new Error(j.error || 'Job failed');
+                }
+            }
+        }
+
         // --- Voice creation/replacement modal ---
         let _voiceModalMode = 'create';
         let _voiceModalSource = 'youtube';
@@ -6471,23 +6510,20 @@
                 let res, data;
                 const isolate = document.getElementById('voiceModalIsolate')?.checked || false;
                 const extractSpeaker = document.getElementById('voiceModalExtractSpeaker')?.checked || false;
-                if (isolate || extractSpeaker) {
-                    const steps = [isolate && 'isolate vocals', extractSpeaker && 'extract speaker'].filter(Boolean).join(' + ');
-                    setVoiceModalStatus('Fetching + ' + steps + '…');
-                }
+                setVoiceModalStatus('Fetching + trimming…');
                 if (_voiceModalSource === 'youtube') {
                     const url = document.getElementById('voiceModalUrl').value.trim();
                     if (!url) { setVoiceModalStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec, isolate, extractSpeaker })
+                        body: JSON.stringify({ url, startSec, endSec })
                     });
                 } else {
                     const fileInput = document.getElementById('voiceModalFile');
                     if (_voiceModalSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec, isolate, extractSpeaker })
+                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { setVoiceModalStatus('Choose an audio file first.', 'error'); return; }
@@ -6495,8 +6531,6 @@
                         fd.append('audio', fileInput.files[0]);
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
-                        if (isolate) fd.append('isolate', 'true');
-                        if (extractSpeaker) fd.append('extractSpeaker', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6519,10 +6553,30 @@
                 audio.style.display = 'block';
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
-                const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
-                const extNote = data.extractedSpeaker ? (data.extractInfo && data.extractInfo.durationSec ? ' (dominant-speaker kept: ' + data.extractInfo.durationSec.toFixed(1) + 's of ' + dur + 's)' : ' (dominant-speaker kept)') : '';
-                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + isoNote + extNote + '. Listen, then save or re-cut.', 'success');
+                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + (isolate || extractSpeaker ? '. Starting processing…' : '. Listen, then save or re-cut.'), 'success');
                 document.getElementById('voiceModalSaveBtn').disabled = false;
+
+                if (isolate || extractSpeaker) {
+                    const wrap = document.getElementById('voiceModalProgressWrap');
+                    const bar = document.getElementById('voiceModalProgressBar');
+                    if (wrap) wrap.style.display = 'block';
+                    if (bar) bar.style.width = '0%';
+                    try {
+                        const jobResult = await processPreviewAsync(_voiceModalToken, { isolate, extractSpeaker }, (msg, kind, pct) => {
+                            setVoiceModalStatus(msg, kind);
+                            if (bar && typeof pct === 'number') bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+                        });
+                        audio.src = data.previewUrl + '?t=' + Date.now();  // cache-bust after overwrite
+                        const iso = jobResult.isolateInfo;
+                        const ext = jobResult.extractInfo;
+                        const isoNote = iso && iso.elapsed ? ' (vocals isolated in ' + Math.round(iso.elapsed) + 's)' : (isolate ? ' (vocals isolated)' : '');
+                        const extNote = ext && ext.durationSec ? ' (dominant-speaker kept: ' + ext.durationSec.toFixed(1) + 's)' : (extractSpeaker ? ' (dominant-speaker kept)' : '');
+                        setVoiceModalStatus('Preview ready' + isoNote + extNote + '. Listen, then save or re-cut.', 'success');
+                        if (wrap) setTimeout(() => { wrap.style.display = 'none'; }, 1500);
+                    } catch (e) {
+                        setVoiceModalStatus('Processing failed: ' + e.message, 'error');
+                    }
+                }
             } catch (e) {
                 setVoiceModalStatus('Network error: ' + e.message, 'error');
             } finally {
@@ -6791,23 +6845,20 @@
                 let res;
                 const isolate = document.getElementById('engineVoiceIsolate')?.checked || false;
                 const extractSpeaker = document.getElementById('engineVoiceExtractSpeaker')?.checked || false;
-                if (isolate || extractSpeaker) {
-                    const steps = [isolate && 'isolate vocals', extractSpeaker && 'extract speaker'].filter(Boolean).join(' + ');
-                    _setEngineVoicePreviewStatus('Fetching + ' + steps + '…');
-                }
+                _setEngineVoicePreviewStatus('Fetching + trimming…');
                 if (_engineVoiceSource === 'youtube') {
                     const url = document.getElementById('engineVoiceUrl').value.trim();
                     if (!url) { _setEngineVoicePreviewStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec, isolate, extractSpeaker })
+                        body: JSON.stringify({ url, startSec, endSec })
                     });
                 } else {
                     const fileInput = document.getElementById('engineVoiceFile');
                     if (_engineVoiceSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec, isolate, extractSpeaker })
+                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { _setEngineVoicePreviewStatus('Choose an audio file first.', 'error'); return; }
@@ -6815,8 +6866,6 @@
                         fd.append('audio', fileInput.files[0]);
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
-                        if (isolate) fd.append('isolate', 'true');
-                        if (extractSpeaker) fd.append('extractSpeaker', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6839,9 +6888,29 @@
                 audio.style.display = 'block';
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
-                const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
-                const extNote = data.extractedSpeaker ? (data.extractInfo && data.extractInfo.durationSec ? ' (dominant-speaker kept: ' + data.extractInfo.durationSec.toFixed(1) + 's of ' + dur + 's)' : ' (dominant-speaker kept)') : '';
-                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + isoNote + extNote + '. Listen, then Save (or re-cut).', 'success');
+                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + (isolate || extractSpeaker ? '. Starting processing…' : '. Listen, then Save (or re-cut).'), 'success');
+
+                if (isolate || extractSpeaker) {
+                    const wrap = document.getElementById('engineVoicePreviewProgressWrap');
+                    const bar = document.getElementById('engineVoicePreviewProgressBar');
+                    if (wrap) wrap.style.display = 'block';
+                    if (bar) bar.style.width = '0%';
+                    try {
+                        const jobResult = await processPreviewAsync(_engineVoiceToken, { isolate, extractSpeaker }, (msg, kind, pct) => {
+                            _setEngineVoicePreviewStatus(msg, kind);
+                            if (bar && typeof pct === 'number') bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+                        });
+                        audio.src = data.previewUrl + '?t=' + Date.now();
+                        const iso = jobResult.isolateInfo;
+                        const ext = jobResult.extractInfo;
+                        const isoNote = iso && iso.elapsed ? ' (vocals isolated in ' + Math.round(iso.elapsed) + 's)' : (isolate ? ' (vocals isolated)' : '');
+                        const extNote = ext && ext.durationSec ? ' (dominant-speaker kept: ' + ext.durationSec.toFixed(1) + 's)' : (extractSpeaker ? ' (dominant-speaker kept)' : '');
+                        _setEngineVoicePreviewStatus('Preview ready' + isoNote + extNote + '. Listen, then Save (or re-cut).', 'success');
+                        if (wrap) setTimeout(() => { wrap.style.display = 'none'; }, 1500);
+                    } catch (e) {
+                        _setEngineVoicePreviewStatus('Processing failed: ' + e.message, 'error');
+                    }
+                }
             } catch (e) {
                 _setEngineVoicePreviewStatus('Network error: ' + e.message, 'error');
             } finally {

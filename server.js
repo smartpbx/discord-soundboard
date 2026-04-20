@@ -4185,6 +4185,159 @@ function ttsAdminError(res, err) {
     return res.status(status).json({ error: msg });
 }
 
+// ---------------------------------------------------------------------------
+// Admin voice-preview job queue. Long-running ops (demucs isolate, diarize
+// extract) blow past Cloudflare's 100 s edge timeout, and if the operator
+// triggers two at once they'd compete for tts-server threads. So the UI
+// kicks them off as async jobs: synchronous endpoint returns { jobId }
+// immediately, the worker drains one at a time, the client polls for
+// status + progress. Same pattern can host future long ops (Fish LoRA,
+// batch preprocess, etc.) without rewiring the UI flow.
+// ---------------------------------------------------------------------------
+const PREVIEW_JOBS = new Map();   // jobId -> job state
+const PREVIEW_JOB_QUEUE = [];     // pending jobIds
+const PREVIEW_JOB_TTL_MS = 30 * 60 * 1000;   // drop completed jobs after 30 min
+let PREVIEW_JOB_WORKER_RUNNING = false;
+
+function _sweepPreviewJobs() {
+    const now = Date.now();
+    for (const [id, j] of PREVIEW_JOBS) {
+        if ((j.status === 'done' || j.status === 'error') && (now - (j.finishedAt || j.startedAt || now)) > PREVIEW_JOB_TTL_MS) {
+            PREVIEW_JOBS.delete(id);
+        }
+    }
+}
+setInterval(_sweepPreviewJobs, 5 * 60 * 1000);
+
+function _expectedStepMs(step, durationSec) {
+    // Rough upper bounds for the progress-bar UI. demucs ~0.4x realtime,
+    // resemblyzer+KMeans ~0.06x. Never 0 so the UI always shows motion.
+    const d = Math.max(1, durationSec || 10);
+    if (step === 'isolate') return Math.round(d * 400 + 4000);
+    if (step === 'extract') return Math.round(d * 80 + 2000);
+    return 5000;
+}
+
+async function _runIsolateStep(job) {
+    job.step = 'isolate';
+    job.stepStartedAt = Date.now();
+    job.stepExpectedMs = _expectedStepMs('isolate', job.durationSec);
+    const info = await maybeIsolatePreview(job.token);
+    job.isolateInfo = info;
+}
+
+async function _runExtractStep(job) {
+    job.step = 'extract';
+    job.stepStartedAt = Date.now();
+    job.stepExpectedMs = _expectedStepMs('extract', job.durationSec);
+    const info = await maybeExtractSpeakerPreview(job.token);
+    job.extractInfo = info;
+}
+
+async function _runPreviewJob(job) {
+    job.status = 'running';
+    job.startedAt = Date.now();
+    try {
+        if (job.steps.includes('isolate')) await _runIsolateStep(job);
+        if (job.steps.includes('extract')) await _runExtractStep(job);
+        job.status = 'done';
+        job.step = null;
+    } catch (err) {
+        job.status = 'error';
+        job.error = (err && err.message) || String(err);
+    } finally {
+        job.finishedAt = Date.now();
+    }
+}
+
+async function _drainPreviewJobQueue() {
+    if (PREVIEW_JOB_WORKER_RUNNING) return;
+    PREVIEW_JOB_WORKER_RUNNING = true;
+    try {
+        while (PREVIEW_JOB_QUEUE.length) {
+            const jobId = PREVIEW_JOB_QUEUE.shift();
+            const job = PREVIEW_JOBS.get(jobId);
+            if (!job || job.status === 'cancelled') continue;
+            await _runPreviewJob(job);
+        }
+    } finally {
+        PREVIEW_JOB_WORKER_RUNNING = false;
+    }
+}
+
+function _enqueuePreviewJob({ token, durationSec, steps }) {
+    const jobId = require('crypto').randomBytes(8).toString('hex');
+    const job = {
+        id: jobId, token,
+        steps,                  // ['isolate'] or ['extract'] or ['isolate','extract']
+        durationSec,
+        status: 'queued',       // queued | running | done | error | cancelled
+        step: null,             // current step while running
+        createdAt: Date.now(),
+        startedAt: null,
+        stepStartedAt: null,
+        stepExpectedMs: null,
+        finishedAt: null,
+        isolateInfo: null,
+        extractInfo: null,
+        error: null,
+    };
+    PREVIEW_JOBS.set(jobId, job);
+    PREVIEW_JOB_QUEUE.push(jobId);
+    _drainPreviewJobQueue();
+    return job;
+}
+
+app.post('/api/superadmin/tts/preview/:token/process', requireSuperadmin, async (req, res) => {
+    const { token } = req.params;
+    const isolate = !!(req.body && req.body.isolate);
+    const extractSpeaker = !!(req.body && req.body.extractSpeaker);
+    if (!isolate && !extractSpeaker) return res.status(400).json({ error: 'Nothing to do (neither isolate nor extractSpeaker set)' });
+    const previewPath = ttsVoiceAdmin.getPreviewPath(token);
+    if (!previewPath) return res.status(404).json({ error: 'Preview not found' });
+    const durationSec = await ttsVoiceAdmin.probeDuration(previewPath);
+    const steps = [];
+    if (isolate) steps.push('isolate');
+    if (extractSpeaker) steps.push('extract');
+    const job = _enqueuePreviewJob({ token, durationSec, steps });
+    res.json({
+        jobId: job.id,
+        status: job.status,
+        steps: job.steps,
+        durationSec,
+        queuedBehind: Math.max(0, PREVIEW_JOB_QUEUE.length - 1),
+    });
+});
+
+app.get('/api/superadmin/tts/preview-jobs/:jobId', requireSuperadmin, (req, res) => {
+    const job = PREVIEW_JOBS.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found or expired' });
+    // Derive a coarse progress number so the UI can show a bar. For queued
+    // jobs it's 0; for running jobs it's elapsed-step/expected-step within
+    // the step's slice of the total pipeline.
+    let progress = 0;
+    if (job.status === 'done') progress = 1;
+    else if (job.status === 'running' && job.step && job.stepExpectedMs) {
+        const elapsed = Date.now() - job.stepStartedAt;
+        const stepProgress = Math.min(0.99, elapsed / job.stepExpectedMs);
+        const stepIdx = job.steps.indexOf(job.step);
+        const perStep = 1 / job.steps.length;
+        progress = stepIdx * perStep + stepProgress * perStep;
+    }
+    res.json({
+        id: job.id,
+        status: job.status,
+        step: job.step,
+        steps: job.steps,
+        progress: Math.round(progress * 100) / 100,
+        error: job.error,
+        isolateInfo: job.isolateInfo,
+        extractInfo: job.extractInfo,
+        queuedBehind: job.status === 'queued' ? PREVIEW_JOB_QUEUE.indexOf(job.id) : 0,
+        elapsedMs: job.startedAt ? (job.finishedAt || Date.now()) - job.startedAt : 0,
+    });
+});
+
 // When the operator checks "Extract dominant speaker", POST the preview to
 // tts-server's /admin/util/extract-speaker (resemblyzer + KMeans n=2 in the
 // GPT-SoVITS venv) and overwrite the staged preview with the dominant-
@@ -4244,19 +4397,18 @@ async function maybeIsolatePreview(token) {
     };
 }
 
+// NOTE: isolate/extract are now run as async jobs via
+// POST /api/superadmin/tts/preview/:token/process after a preview token is
+// returned. These source/* endpoints only do the cheap fetch+trim path so
+// they always finish well under Cloudflare's 100 s edge timeout.
 app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, res) => {
-    const { url, startSec, endSec, isolate, extractSpeaker } = req.body || {};
+    const { url, startSec, endSec } = req.body || {};
     if (!ttsVoiceAdmin.validateYouTubeUrl(url)) return res.status(400).json({ error: 'Provide a youtube.com or youtu.be URL.' });
     try {
         const { sourcePath, cached } = await ttsVoiceAdmin.fetchYouTubeSource(url);
         const sourceDuration = await ttsVoiceAdmin.probeDuration(sourcePath);
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null, extractInfo = null;
-        // Isolate first (music/noise off) then diarize — diarization is way
-        // more reliable on clean vocals.
-        if (isolate) isolateInfo = await maybeIsolatePreview(token);
-        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
-        res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo, extractedSpeaker: !!extractSpeaker, extractInfo });
+        res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}` });
     } catch (err) {
         ttsAdminError(res, err);
     }
@@ -4265,8 +4417,6 @@ app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, re
 app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No audio file uploaded' });
     const { startSec, endSec } = req.body || {};
-    const isolate = String(req.body && req.body.isolate) === 'true';
-    const extractSpeaker = String(req.body && req.body.extractSpeaker) === 'true';
     ttsVoiceAdmin.ensureStaging();
     const sourceId = require('crypto').randomBytes(8).toString('hex');
     const sourcePath = require('path').join(ttsVoiceAdmin.STAGING_DIR, `source-upload-${sourceId}.bin`);
@@ -4278,18 +4428,14 @@ app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.
             return res.status(400).json({ error: 'Could not read audio file (unsupported format?)' });
         }
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null, extractInfo = null;
-        if (isolate) isolateInfo = await maybeIsolatePreview(token);
-        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
-        // Keep the uploaded source around so retrim works without re-uploading.
-        res.json({ token, duration, sourceDuration, sourceRef: sourceId, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: isolate, isolateInfo, extractedSpeaker: extractSpeaker, extractInfo });
+        res.json({ token, duration, sourceDuration, sourceRef: sourceId, previewUrl: `/api/superadmin/tts/preview/${token}` });
     } catch (err) {
         ttsAdminError(res, err);
     }
 });
 
 app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res) => {
-    const { url, sourceRef, startSec, endSec, isolate, extractSpeaker } = req.body || {};
+    const { url, sourceRef, startSec, endSec } = req.body || {};
     try {
         let sourcePath;
         if (sourceRef) {
@@ -4303,10 +4449,7 @@ app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res
             return res.status(400).json({ error: 'Need url or sourceRef' });
         }
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null, extractInfo = null;
-        if (isolate) isolateInfo = await maybeIsolatePreview(token);
-        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
-        res.json({ token, duration, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo, extractedSpeaker: !!extractSpeaker, extractInfo });
+        res.json({ token, duration, previewUrl: `/api/superadmin/tts/preview/${token}` });
     } catch (err) {
         ttsAdminError(res, err);
     }
