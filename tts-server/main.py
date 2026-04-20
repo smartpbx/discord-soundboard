@@ -922,14 +922,36 @@ def auto_select_emotion_refs(voice_id: str, x_admin_token: Optional[str] = Heade
         raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
     if chunks_dir is None:
         default_chunks = os.path.join(os.path.dirname(__file__), "models", "datasets", dir_id, "chunks")
-        if not os.path.isdir(default_chunks):
-            raise HTTPException(
-                status_code=404,
-                detail=f"No dataset archive found at {default_chunks}. "
-                       f"Voice must have been trained via the RVC pipeline first "
-                       f"(Phase 6 archives chunks to models/datasets/<voice>/chunks/)."
-            )
-        chunks_dir = default_chunks
+        if os.path.isdir(default_chunks) and any(p.endswith(".wav") for p in os.listdir(default_chunks)):
+            chunks_dir = default_chunks
+        else:
+            # Older voices were trained before we started archiving chunks. Fall
+            # back to splitting the existing reference.wav into 3 s windows so
+            # the auto-pick has *something* to score. Less variety than a full
+            # dataset but better than failing — operator can replace individual
+            # emotion slots manually after.
+            ref = os.path.join(voice_dir, "reference.wav")
+            if not os.path.exists(ref):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No dataset archive at {default_chunks} AND no reference.wav. "
+                           f"Voice has no audio to score from — upload emotion clips manually via the per-slot Upload buttons."
+                )
+            tmp_dir = os.path.join("/tmp", f"emo_fallback_{dir_id}_{int(time.time())}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            try:
+                # Split into ≤3 s windows with 1 s overlap; gives ~5-15 candidate
+                # snippets even for a 6–15 s reference clip.
+                subprocess.run([
+                    "ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", ref,
+                    "-f", "segment", "-segment_time", "3", "-ar", "24000", "-ac", "1",
+                    os.path.join(tmp_dir, "win_%03d.wav"),
+                ], check=True, timeout=60)
+            except subprocess.CalledProcessError as e:
+                raise HTTPException(status_code=500, detail=f"ffmpeg fallback split failed: {e}")
+            chunks_dir = tmp_dir
+            log.info("auto-emotion-refs: no dataset for %s; using %d windows split from reference.wav",
+                     dir_id, len([p for p in os.listdir(tmp_dir) if p.endswith('.wav')]))
     tool = os.path.join(os.path.dirname(__file__), "tools", "select_emotion_refs.py")
     cb_dir = chatterbox_engine.get_models_dir()
     py = "/opt/GPT-SoVITS/.venv/bin/python"
