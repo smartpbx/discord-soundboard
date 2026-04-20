@@ -3702,8 +3702,16 @@ async function ttsFetch(urlPath, opts = {}) {
     const controller = new AbortController();
     const timeoutMs = opts.timeout || 30000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Auto-attach the admin token for any /admin/* call so individual
+    // proxies don't have to remember it (forgetting it returns 401 from
+    // the TTS server, which the soundboard UI used to interpret as a
+    // session expiry and kick to login).
+    const headers = { ...(opts.headers || {}) };
+    if (urlPath.startsWith('/admin/') && !headers['X-Admin-Token'] && !headers['x-admin-token']) {
+        headers['X-Admin-Token'] = TTS_ADMIN_TOKEN || '';
+    }
     try {
-        const res = await fetch(`${TTS_API_URL}${urlPath}`, { ...opts, signal: controller.signal });
+        const res = await fetch(`${TTS_API_URL}${urlPath}`, { ...opts, headers, signal: controller.signal });
         return res;
     } catch (e) {
         if (e.name === 'AbortError') {
@@ -4381,9 +4389,16 @@ app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, as
     try {
         const r = await ttsFetch(`/admin/voices/${engine}/${encodeURIComponent(dirId)}`, {
             method: 'DELETE',
+            headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
         });
         const body = await r.json().catch(() => ({}));
-        if (!r.ok) return res.status(r.status).json(body);
+        if (!r.ok) {
+            // Repackage upstream errors so a 401 from the TTS server doesn't
+            // get re-emitted as a 401 to the browser (the soundboard UI
+            // interprets any 401 as "session expired" → kicks to login).
+            const upstreamStatus = r.status === 401 ? 502 : r.status;
+            return res.status(upstreamStatus).json({ error: body.detail || body.error || `TTS server returned ${r.status}` });
+        }
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
