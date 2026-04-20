@@ -5925,9 +5925,14 @@
                 if (humanize) {
                     setTtsStatus('<span class="tts-spinner"></span> Humanizing text…');
                     try {
+                        // Pass the voice NAME (not id) so the LLM can tailor
+                        // disfluencies to the character's real speech pattern
+                        // (e.g. Jordan Peterson gets "precisely" not "like").
+                        const v = ttsVoices.find(x => x.id === voiceId);
+                        const voiceName = v && v.name ? v.name : '';
                         const hr = await api('/api/tts/humanize', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text }),
+                            body: JSON.stringify({ text, voiceName }),
                         });
                         if (hr && hr.ok) {
                             const hd = await hr.json().catch(() => ({}));
