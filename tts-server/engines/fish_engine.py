@@ -83,6 +83,7 @@ def _scan_voices():
             "_skip_rvc": meta.get("skip_rvc", False),
             "_rvc_model_id": meta.get("rvc_model_id"),
             "rvc_model_id": meta.get("rvc_model_id"),
+            "skip_rvc": meta.get("skip_rvc", False),
             "source_kind": meta.get("source_kind"),
             "source_url": meta.get("source_url"),
             "source_filename": meta.get("source_filename"),

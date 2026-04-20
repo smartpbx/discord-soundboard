@@ -6230,7 +6230,12 @@
                 const fishStem = isFish ? v.id.replace(/^fish_/, '') : null;
                 const fishAutoMatch = isFish && _rvcModelStems.has(fishStem);
                 const fishExplicitRvc = isFish && v.rvc_model_id ? v.rvc_model_id : null;
-                const fishEffectiveRvc = fishExplicitRvc || (fishAutoMatch ? 'rvc_' + fishStem : null);
+                // skip_rvc=true means operator explicitly chose "no RVC" — honor it
+                // instead of falling back to the stem-match convention.
+                const fishSkipRvc = isFish && v.rvc_model_id === null && (v.skip_rvc === true);
+                const fishEffectiveRvc = fishSkipRvc
+                    ? null
+                    : (fishExplicitRvc || (fishAutoMatch ? 'rvc_' + fishStem : null));
                 const fishCanRefine = isFish && _rvcModelStems.size > 0;
                 const rvcOn = isCb
                     ? (_ttsAdminRvcOverrides[v.id] ?? true)
@@ -6350,11 +6355,17 @@
         async function setFishRvcModel(voiceId, rvcModelId) {
             const dirId = voiceId.replace(/^fish_/, '');
             const existing = (window._lastTtsVoices || []).find(vv => vv.id === voiceId) || {};
+            // Empty string = operator picked "(none — skip RVC)". Persist both
+            // rvc_model_id=null AND skip_rvc=true so the synth code doesn't
+            // fall back to the stem-match convention — that fallback was
+            // making "none" silently revert to the auto-match rvc_<stem>.
+            const skipRvc = !rvcModelId;
             const meta = {
                 name: existing.name || dirId,
                 group: existing.group || 'Celebrity',
                 gender: existing.gender || 'unknown',
                 rvc_model_id: rvcModelId || null,
+                skip_rvc: skipRvc,
             };
             const form = new FormData();
             form.append('metadata', JSON.stringify(meta));
@@ -6363,7 +6374,7 @@
             });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { showToast(d.error || 'Failed to set RVC model', 'error'); return; }
-            showToast(rvcModelId ? 'Fish ' + voiceId + ' will use ' + rvcModelId : 'RVC cleared for ' + voiceId, 'success');
+            showToast(rvcModelId ? 'Fish ' + voiceId + ' will use ' + rvcModelId : 'RVC disabled for ' + voiceId, 'success');
             fetchTtsVoicesAdmin();
         }
 

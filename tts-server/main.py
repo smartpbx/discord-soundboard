@@ -121,6 +121,9 @@ class VoiceInfo(BaseModel):
     # Explicit RVC model to pipe Fish output through when the stem-match
     # convention (fish_X → rvc_X) doesn't apply. Only meaningful for Fish voices.
     rvc_model_id: Optional[str] = None
+    # Operator-set "don't RVC-refine this voice" — overrides the stem-match
+    # fallback so picking (none) in the UI actually takes effect.
+    skip_rvc: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
