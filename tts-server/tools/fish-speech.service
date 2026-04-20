@@ -6,7 +6,10 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/fish-speech
-# S2 Pro is ~4.4B params; fp16 fits comfortably on the 3090.
+# S2 Pro is ~4.4B params; fp16 fits in ~7-8 GiB on the 3090.
+# NOTE: --compile gives 2-3x synth speedup but inflates VRAM to ~19 GiB,
+# which OOMs Chatterbox + GSV on the shared 3090. Disabled until we wire
+# proper engine eviction.
 ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --mode tts \
     --llama-checkpoint-path checkpoints/s2-pro \
@@ -14,14 +17,9 @@ ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --decoder-config-name modded_dac_vq \
     --listen 0.0.0.0:8881 \
     --device cuda \
-    --half \
-    --compile
-# torch.compile JIT — adds ~30 s to first startup, gives 2-3x synth speedup
-# after warmup. Worth it on a long-running service.
+    --half
 Restart=on-failure
 RestartSec=5
-# Compile bumps RAM during startup; 4 min is comfortable for the warm-up
-TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
