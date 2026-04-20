@@ -2,6 +2,25 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 
+// Client-initiated socket aborts (clicking Stop on a long TTS synth, closing
+// the tab during a download, etc.) raise EPIPE/ECONNRESET/ECONNABORTED when we
+// continue writing. These are transport-level noise — never fatal to the
+// server — so swallow them. Anything else we log and re-throw. Express doesn't
+// give us a clean per-response error channel for these, hence the global hook.
+process.on('uncaughtException', (err) => {
+    const benign = err && (err.code === 'EPIPE' || err.code === 'ECONNRESET' || err.code === 'ECONNABORTED');
+    if (benign) {
+        console.warn('[net]', err.code, 'from client-side abort — ignored:', (err.syscall || '') + ' ' + (err.message || ''));
+        return;
+    }
+    console.error('[fatal] uncaughtException:', err && err.stack || err);
+    // Re-throw asynchronously so node still logs it + systemd restarts us
+    setImmediate(() => { throw err; });
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[fatal] unhandledRejection:', reason && reason.stack || reason);
+});
+
 // Discord voice requires an encryption lib to be ready *before* the first connection.
 // Load it first so @discordjs/voice can use it.
 const sodium = require('libsodium-wrappers');
