@@ -4227,8 +4227,8 @@ async function maybeIsolatePreview(token) {
     const r = await fetch(`${TTS_API_URL}/admin/util/isolate-vocals`, {
         method: 'POST', body: form,
         headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
-        // demucs on CPU can take up to ~60 s for long clips
-        signal: AbortSignal.timeout(120_000),
+        // demucs on CPU: ~25s for 60s, ~2min for 300s clips
+        signal: AbortSignal.timeout(360_000),
     });
     if (!r.ok) {
         const body = await r.json().catch(() => ({}));

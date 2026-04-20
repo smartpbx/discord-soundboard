@@ -25,6 +25,7 @@ import time
 
 import torch
 import torchaudio
+import soundfile as sf
 from demucs.apply import apply_model
 from demucs.pretrained import get_model
 from demucs.audio import AudioFile
@@ -65,7 +66,13 @@ def isolate(input_path: str, output_path: str, device: str = "cpu", target_sr: i
         # Boost quiet vocals so the downstream engines get good input
         gain = min(4.0, 0.95 / peak)
         vocals_mono = (vocals_mono * gain).clamp(-1.0, 1.0)
-    torchaudio.save(output_path, vocals_mono, target_sr, encoding="PCM_S", bits_per_sample=16)
+    # Use soundfile instead of torchaudio.save — newer torchaudio routes WAV
+    # writes through torchcodec which isn't installed and would fail here.
+    # soundfile needs [samples, channels] layout so transpose then squeeze.
+    out_np = vocals_mono.cpu().numpy()
+    if out_np.ndim == 2:
+        out_np = out_np.T  # [samples, channels]
+    sf.write(output_path, out_np, target_sr, subtype="PCM_16")
     return {
         "duration_sec": vocals_mono.shape[-1] / target_sr,
         "elapsed_sec": round(time.time() - t0, 2),

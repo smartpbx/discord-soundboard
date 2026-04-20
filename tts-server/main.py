@@ -463,9 +463,10 @@ async def extract_speaker_endpoint(
         if not os.path.exists(py):
             raise HTTPException(status_code=500, detail="GPT-SoVITS venv missing — can't run diarization")
         tool = os.path.join(os.path.dirname(__file__), "tools", "diarize_extract.py")
+        # 5-min clip cap → resemblyzer needs ~5s per min + KMeans; 300s ceiling
         proc = subprocess.run(
             [py, tool, "--input", in_path, "--output", out_path, "--target-sr", str(target_sr)],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=300,
         )
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "")[-400:]

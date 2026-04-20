@@ -1595,7 +1595,7 @@
                         <span>Extract dominant speaker (diarize) — keeps only the longest-speaking voice. Useful for conversations. Adds ~10 s.</span>
                     </label>
                 </div>
-                <div class="field-help">Recommended: 6–30 seconds of one speaker, no music or background noise. Max 60s.</div>
+                <div class="field-help">Recommended: 6–30 seconds of one speaker. Source window cap: 5 min (useful with Isolate + Extract speaker to filter a conversation down).</div>
 
                 <div class="preview-box">
                     <div class="status-line" id="voiceModalStatus">No preview yet.</div>
@@ -1833,7 +1833,7 @@
                         <span>Extract dominant speaker (diarize) — keeps only the longest-speaking voice. Useful for conversations. Adds ~10 s.</span>
                     </label>
                 </div>
-                <div class="field-help" id="engineVoiceAudioHelp">Recommended: 10–30 s for Fish (S2 Pro handles up to ~60 s). Single speaker, minimal background. Whisper auto-transcribes.</div>
+                <div class="field-help" id="engineVoiceAudioHelp">Recommended: 10–30 s for Fish. Source window cap: 5 min — usable when Isolate vocals + Extract speaker will filter a conversation down to ~1 min of clean target. Whisper auto-transcribes.</div>
                 <div class="preview-box">
                     <div class="status-line" id="engineVoicePreviewStatus">No preview yet.</div>
                     <audio id="engineVoicePreviewAudio" controls preload="none" style="display:none"></audio>
