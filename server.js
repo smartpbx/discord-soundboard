@@ -4403,13 +4403,20 @@ async function maybeIsolatePreview(token) {
 // they always finish well under Cloudflare's 100 s edge timeout.
 app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, res) => {
     const { url, startSec, endSec } = req.body || {};
-    if (!ttsVoiceAdmin.validateYouTubeUrl(url)) return res.status(400).json({ error: 'Provide a youtube.com or youtu.be URL.' });
+    console.log('[voice-source/youtube] user=%s url=%s range=%s..%s',
+        req.session.user.username, String(url || '').slice(0, 80), startSec, endSec);
+    if (!ttsVoiceAdmin.validateYouTubeUrl(url)) {
+        console.log('[voice-source/youtube] rejected invalid URL: %s', url);
+        return res.status(400).json({ error: 'Provide a youtube.com or youtu.be URL.' });
+    }
     try {
         const { sourcePath, cached } = await ttsVoiceAdmin.fetchYouTubeSource(url);
         const sourceDuration = await ttsVoiceAdmin.probeDuration(sourcePath);
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
+        console.log('[voice-source/youtube] ok token=%s duration=%.2fs sourceDur=%.2fs cached=%s', token, duration, sourceDuration, cached);
         res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}` });
     } catch (err) {
+        console.error('[voice-source/youtube] failed:', (err && err.stack) || err);
         ttsAdminError(res, err);
     }
 });
