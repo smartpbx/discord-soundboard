@@ -4011,7 +4011,9 @@ app.get('/api/tts/wav/:id', requireAuth, (req, res) => {
 // Guests see none. Non-guests see every user's clips so shared TTS history is visible.
 app.get('/api/tts/recents', requireAuth, (req, res) => {
     if (req.session.user.role === 'guest') return res.json([]);
-    const rows = statsDb.listTtsRecentsGlobal(TTS_RECENTS_GLOBAL_LIMIT);
+    // UI only surfaces 5 most recent globally — keep the per-request cap in
+    // sync so we don't haul 30 rows over the wire every poll.
+    const rows = statsDb.listTtsRecentsGlobal(5);
     const me = req.session.user.username;
     res.json(rows.map(r => ({
         id: r.id,

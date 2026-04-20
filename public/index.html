@@ -6195,6 +6195,11 @@
             // so a slow tts-server doesn't gate the rest of the panel.
             fetchTtsEngineHealth();
             fetchAllRvcModels();
+            // Keep the main TTS card's voice dropdown in sync. Every voice
+            // mutation (add / clone / delete / edit) refreshes this panel, so
+            // piggy-backing the call here means the dropdown updates without
+            // needing a manual page reload.
+            fetchTtsStatus();
             const res = await api('/api/tts/status');
             if (!res || !res.ok) return;
             const data = await res.json();
@@ -7936,6 +7941,11 @@
             fetchChannels();
             fetchSounds();
             fetchTtsRecents();
+            // Poll recents every 10 s so freshly-played clips by other users
+            // show up without needing a manual page refresh.
+            setInterval(() => {
+                if (user && user.role !== 'guest' && document.visibilityState === 'visible') fetchTtsRecents();
+            }, 10000);
             updateNowPlaying();
             updatePlayPauseButton();
             window.addEventListener('resize', () => { if (mobileView) renderMobileGrid(); });
