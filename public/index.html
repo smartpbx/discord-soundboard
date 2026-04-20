@@ -1738,7 +1738,11 @@
         <div id="engineVoiceOverlay" class="voice-modal-overlay hidden" onclick="if(event.target===this)closeEngineVoiceModal()">
             <div class="voice-modal" style="width: 560px;">
                 <h3 id="engineVoiceTitle">Add Fish voice</h3>
-                <p id="engineVoiceSubtitle" style="font-size:0.85rem; color:var(--text-muted); margin:0 0 0.75rem;">Upload a 5–15 s clean reference clip. The text the speaker says in the clip will be auto-transcribed.</p>
+                <p id="engineVoiceSubtitle" style="font-size:0.85rem; color:var(--text-muted); margin:0 0 0.5rem;">Upload a 5–15 s clean reference clip. The text the speaker says in the clip will be auto-transcribed.</p>
+                <details id="engineVoiceHelpDetails" style="margin:0 0 0.75rem; padding:0.4rem 0.55rem; background:rgba(120,120,200,0.08); border:1px solid var(--border); border-radius:var(--radius-sm);">
+                    <summary style="cursor:pointer; font-size:0.78rem; color:var(--text-muted); user-select:none;">ℹ Engine help &amp; supported tags</summary>
+                    <div id="engineVoiceHelpBody" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.5rem; line-height:1.45;"></div>
+                </details>
                 <div class="row">
                     <div class="field" style="flex:1; min-width:200px;">
                         <label for="engineVoiceId">Voice id</label>
@@ -6488,6 +6492,48 @@
             document.getElementById('engineVoiceSourceUpload').classList.toggle('active', kind === 'upload');
         }
 
+        // Per-engine help text. Lists ref-clip recommendations + inline expression
+        // tags + which synth-time knobs are honored. Surfaced in the create/edit
+        // modal so operators don't have to read the docs to know what's supported.
+        const ENGINE_HELP = {
+            fish: {
+                ref: 'Reference: 5–15 s of clean speech, single speaker, no music. Whisper transcribes for the prompt automatically.',
+                expression: 'Inline expression tags (typed into the message text):',
+                tags: [
+                    ['(shouting) ...',   'loud / yell delivery'],
+                    ['(whispering) ...', 'whispered, intimate'],
+                    ['(laughing) ...',   'happy / chuckling'],
+                    ['(sadly) ...',      'sad / subdued'],
+                    ['(angrily) ...',    'angry / forceful'],
+                ],
+                knobs: 'Synth knobs: temperature 0.8, top_p 0.8 (defaults). Fish ignores per-emotion ref clips — its tags drive expression.',
+                speed: 'Heaviest engine (~19 GiB VRAM). Auto-stopped when other engines synth, auto-restarted on next Fish call (~30 s warmup with --compile).',
+            },
+            gptsovits: {
+                ref: 'Reference: 3–10 s, mono, 32 kHz (auto-trimmed/resampled). Quality matters more than length — pick a clean, expressive line.',
+                expression: 'No inline tags. Expression comes from the reference clip prosody + your prompt text. Pick a ref that matches the vibe you want.',
+                tags: [],
+                knobs: 'Synth knobs: prompt_text (auto-transcribed by Whisper unless overridden). Per-voice GPT/SoVITS weight paths supported via metadata.json.',
+                speed: 'Lightweight (~1.5 GiB VRAM). Coexists with Chatterbox or Fish without eviction.',
+            },
+        };
+
+        function _renderEngineHelp(engine) {
+            const body = document.getElementById('engineVoiceHelpBody');
+            const h = ENGINE_HELP[engine];
+            if (!body) return;
+            if (!h) { body.innerHTML = ''; return; }
+            const tagsHtml = h.tags && h.tags.length
+                ? '<table style="margin:0.3rem 0 0.5rem; border-collapse:collapse;">' + h.tags.map(([t, d]) => '<tr><td style="padding:1px 8px 1px 0; font-family:monospace; color:#7ce0a4;">' + esc(t) + '</td><td style="padding:1px 0; color:var(--text-muted);">' + esc(d) + '</td></tr>').join('') + '</table>'
+                : '';
+            body.innerHTML =
+                '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Reference clip:</b> ' + esc(h.ref) + '</div>'
+                + '<div style="margin-bottom:0.2rem;"><b style="color:var(--text);">Expression:</b> ' + esc(h.expression) + '</div>'
+                + tagsHtml
+                + '<div style="margin-bottom:0.4rem;"><b style="color:var(--text);">Knobs:</b> ' + esc(h.knobs) + '</div>'
+                + '<div><b style="color:var(--text);">Speed/VRAM:</b> ' + esc(h.speed) + '</div>';
+        }
+
         function _setEngineVoicePreviewStatus(msg, kind) {
             const el = document.getElementById('engineVoicePreviewStatus');
             el.textContent = msg;
@@ -6504,6 +6550,7 @@
             _engineVoiceLastEnd = 0;
             const isEdit = !!dirIdOrNull;
             const label = _engineVoiceLabel(engine);
+            _renderEngineHelp(engine);
             document.getElementById('engineVoiceTitle').textContent = isEdit ? ('Edit ' + label + ' voice: ' + dirIdOrNull) : ('Add ' + label + ' voice');
             document.getElementById('engineVoiceSubtitle').textContent = isEdit
                 ? 'Pull a fresh clip from YouTube/upload (or skip the source step to only edit metadata). Whisper auto-transcribes new clips.'
