@@ -1655,6 +1655,17 @@
                 <h3 id="trainVoiceTitle">Train new RVC voice</h3>
 
                 <div id="trainVoiceForm">
+                    <!-- Target engine first: it governs what the rest of the form means. -->
+                    <div class="field">
+                        <label for="trainVoiceEngine">Target engine</label>
+                        <select id="trainVoiceEngine" onchange="onTrainEngineChange()" style="width:100%; max-width:360px;">
+                            <option value="rvc">RVC (full 6-phase pipeline · ~70 min)</option>
+                            <option value="chatterbox">Chatterbox (lite · 5–15 s ref · ~3 min)</option>
+                            <option value="fish">Fish v2 S2 Pro (lite · ~3 min)</option>
+                            <option value="gptsovits">GPT-SoVITS (lite · ~3 min)</option>
+                        </select>
+                        <div class="field-help" id="trainVoiceEngineHelp" style="max-width:600px;">RVC trains a celebrity-quality voice clone over 50–80 min. Lite engines just deploy one clean reference clip; ready in minutes.</div>
+                    </div>
                     <div class="row">
                         <div class="field" style="flex:1; min-width:180px;">
                             <label for="trainVoiceName">Display name</label>
@@ -1663,7 +1674,7 @@
                         <div class="field" style="flex:1; min-width:180px;">
                             <label for="trainVoiceId">Voice id</label>
                             <input type="text" id="trainVoiceId" placeholder="e.g. joe_rogan">
-                            <div class="field-help">Lowercase, underscore-separated. Auto-prefixed with <code>cb_</code> in dropdowns.</div>
+                            <div class="field-help">Lowercase, underscore-separated.</div>
                         </div>
                     </div>
                     <div class="row">
@@ -1683,16 +1694,6 @@
                                 <option value="female">female</option>
                                 <option value="unknown">unknown</option>
                             </select>
-                        </div>
-                        <div class="field" style="flex:1; min-width:160px;">
-                            <label for="trainVoiceEngine">Target engine</label>
-                            <select id="trainVoiceEngine" onchange="onTrainEngineChange()">
-                                <option value="rvc">RVC (full 6-phase pipeline · ~70 min)</option>
-                                <option value="chatterbox">Chatterbox (lite · 5–15 s ref · ~3 min)</option>
-                                <option value="fish">Fish v2 S2 Pro (lite · ~3 min)</option>
-                                <option value="gptsovits">GPT-SoVITS (lite · ~3 min)</option>
-                            </select>
-                            <div class="field-help" id="trainVoiceEngineHelp">RVC trains a celebrity-quality voice clone over 50–80 min. Lite engines just deploy one clean reference clip; ready in minutes.</div>
                         </div>
                     </div>
                     <div class="field">

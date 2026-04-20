@@ -126,6 +126,24 @@ def whisper_transcribe(wav_path):
         raise RuntimeError(f"Whisper output unparseable: {e}; raw: {proc.stdout[:200]}")
 
 
+def _read_admin_token():
+    """Pull the admin token from env (several names) or directly from
+    tts-server/.env. The Claude agent's SSH env doesn't inherit the service's
+    EnvironmentFile, so we fall back to reading the file."""
+    for name in ("TTS_ADMIN_TOKEN", "ADMIN_TOKEN"):
+        v = os.environ.get(name)
+        if v: return v.strip()
+    try:
+        env_path = "/opt/discord-soundboard/tts-server/.env"
+        if os.path.exists(env_path):
+            for line in open(env_path):
+                if line.startswith("TTS_ADMIN_TOKEN="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
 def invalidate_cache(engine):
     """Tell tts-server to drop its in-process voice cache for this engine."""
     try:
@@ -133,9 +151,10 @@ def invalidate_cache(engine):
         req = urllib.request.Request(
             f"{TTS_API}/admin/voices/{engine}/_cache-bust",
             method="POST",
-            headers={"X-Admin-Token": os.environ.get("ADMIN_TOKEN", "")},
+            headers={"X-Admin-Token": _read_admin_token()},
         )
         urllib.request.urlopen(req, timeout=5).read()
+        emit("cache_invalidated", engine=engine)
     except Exception as e:
         emit("cache_invalidate_warning", engine=engine, error=str(e))
 
