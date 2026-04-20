@@ -5773,13 +5773,25 @@
                 if (!v) { hint.classList.add('hidden'); hint.innerHTML = ''; }
                 else if (v.engine === 'fish') {
                     hint.classList.remove('hidden');
-                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags:</span> '
-                        + '<code style="color:#7ce0a4">(shouting)</code> · '
-                        + '<code style="color:#7ce0a4">(whispering)</code> · '
-                        + '<code style="color:#7ce0a4">(laughing)</code> · '
-                        + '<code style="color:#7ce0a4">(sadly)</code> · '
-                        + '<code style="color:#7ce0a4">(angrily)</code> '
-                        + '— prepend or interleave to colour the delivery.';
+                    // Fish S2 Pro uses [tag] syntax and supports 15,000+ free-form
+                    // descriptors (per its README). These are the documented common
+                    // ones; the user can also invent tags like [pitch up] or
+                    // [professional broadcast tone].
+                    const fishTags = [
+                        '[pause]','[short pause]','[emphasis]',
+                        '[whisper]','[low voice]','[low volume]',
+                        '[shouting]','[screaming]','[loud]','[volume up]','[volume down]',
+                        '[excited]','[excited tone]','[delight]',
+                        '[laughing]','[laughing tone]','[chuckle]','[chuckling]','[audience laughter]',
+                        '[sad]','[angry]','[surprised]','[shocked]',
+                        '[sigh]','[inhale]','[exhale]','[panting]','[moaning]',
+                        '[singing]','[tsk]','[clearing throat]','[interrupting]',
+                        '[echo]','[with strong accent]',
+                    ];
+                    const tagPills = fishTags.map(t => '<code style="color:#7ce0a4">' + t + '</code>').join(' ');
+                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags (' + fishTags.length + ' common, 15k+ free-form supported):</span><br>'
+                        + '<span style="line-height:1.8">' + tagPills + '</span><br>'
+                        + '<span style="color:var(--text-muted);font-style:italic">Put them inline: <code>hello [whisper] let\'s be quiet</code>. Or invent your own: <code>[pitch up]</code>, <code>[professional tone]</code>, <code>[in a small voice]</code>.</span>';
                 } else if (v.engine === 'chatterbox') {
                     hint.classList.remove('hidden');
                     hint.innerHTML = '<span style="color:var(--accent);">Chatterbox cues:</span> '
@@ -6533,13 +6545,25 @@
         const ENGINE_HELP = {
             fish: {
                 ref: 'Reference: 5–15 s of clean speech, single speaker, no music. Whisper transcribes for the prompt automatically.',
-                expression: 'Inline expression tags (typed into the message text):',
+                expression: 'Inline [tag] syntax (square brackets). S2 Pro supports 15,000+ free-form descriptors — these are just the common ones:',
                 tags: [
-                    ['(shouting) ...',   'loud / yell delivery'],
-                    ['(whispering) ...', 'whispered, intimate'],
-                    ['(laughing) ...',   'happy / chuckling'],
-                    ['(sadly) ...',      'sad / subdued'],
-                    ['(angrily) ...',    'angry / forceful'],
+                    ['[pause] / [short pause]', 'insert a silence'],
+                    ['[emphasis]',              'stress the next word'],
+                    ['[whisper] / [low voice]', 'whispered, intimate'],
+                    ['[shouting] / [screaming] / [loud]', 'yell delivery'],
+                    ['[volume up] / [volume down]', 'relative loudness shifts'],
+                    ['[excited] / [delight]',   'animated / happy energy'],
+                    ['[laughing] / [chuckle] / [chuckling]', 'laugh vocalisations'],
+                    ['[audience laughter]',     'background laugh-track effect'],
+                    ['[sad] / [angry] / [surprised] / [shocked]', 'broad emotions'],
+                    ['[sigh] / [inhale] / [exhale]', 'breath sounds'],
+                    ['[panting] / [moaning]',   'heavy breath / vocal effort'],
+                    ['[singing]',               'sing instead of speaking'],
+                    ['[tsk] / [clearing throat]', 'mouth sounds'],
+                    ['[interrupting]',          'cut-in delivery'],
+                    ['[echo]',                  'echo effect on the line'],
+                    ['[with strong accent]',    'heavy accent styling'],
+                    ['[pitch up] / [in a small voice] / [professional tone]', 'free-form — invent your own'],
                 ],
                 knobs: 'Synth knobs: temperature 0.8, top_p 0.8 (defaults). Fish ignores per-emotion ref clips — its tags drive expression.',
                 speed: 'Heaviest engine (~19 GiB VRAM). Auto-stopped when other engines synth, auto-restarted on next Fish call (~30 s warmup with --compile).',

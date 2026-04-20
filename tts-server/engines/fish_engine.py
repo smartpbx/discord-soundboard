@@ -31,16 +31,20 @@ MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", 
 API_URL = os.environ.get("FISH_API_URL", "http://localhost:8881").rstrip("/")
 _SYNTH_TIMEOUT = 120
 
-# Map our preset emotions to Fish's native inline markers. A segment
-# tagged "yell" gets prepended with "(shouting) " before being sent.
+# Map our preset emotions to Fish's native inline markers. S2 Pro uses
+# [tag] syntax (square brackets — see its README) and supports 15,000+
+# free-form descriptors; these are just the canonical short forms we
+# reach for when the segmenter assigns a broad preset emotion. Users can
+# type arbitrary tags directly (e.g. "[professional broadcast tone]") in
+# the message text and those flow through untouched.
 EMOTION_TAGS = {
-    "soft":    "(whispering)",
+    "soft":    "[whisper]",
     "neutral": "",
-    "excited": "(excited)",
-    "yell":    "(shouting)",
-    "angry":   "(angrily)",
-    "sad":     "(sadly)",
-    "happy":   "(laughing)",
+    "excited": "[excited]",
+    "yell":    "[shouting]",
+    "angry":   "[angry]",
+    "sad":     "[sad]",
+    "happy":   "[laughing]",
 }
 
 
