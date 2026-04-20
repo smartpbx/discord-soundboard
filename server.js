@@ -4926,6 +4926,7 @@ app.post('/api/superadmin/tts/train', requireSuperadmin, (req, res) => {
                 voice_id: job && job.voice_id,
                 run_after: (req.body && req.body.run_after) || null,
                 urls: Array.isArray(req.body && req.body.urls) ? req.body.urls.length : undefined,
+                target_engine: job && job.input && job.input.target_engine,
             },
         });
         res.json({ ok: true, job });

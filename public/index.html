@@ -1670,6 +1670,16 @@
                                 <option value="unknown">unknown</option>
                             </select>
                         </div>
+                        <div class="field" style="flex:1; min-width:160px;">
+                            <label for="trainVoiceEngine">Target engine</label>
+                            <select id="trainVoiceEngine" onchange="onTrainEngineChange()">
+                                <option value="rvc">RVC (full 6-phase pipeline · ~70 min)</option>
+                                <option value="chatterbox">Chatterbox (lite · 5–15 s ref · ~3 min)</option>
+                                <option value="fish">Fish v2 S2 Pro (lite · ~3 min)</option>
+                                <option value="gptsovits">GPT-SoVITS (lite · ~3 min)</option>
+                            </select>
+                            <div class="field-help" id="trainVoiceEngineHelp">RVC trains a celebrity-quality voice clone over 50–80 min. Lite engines just deploy one clean reference clip; ready in minutes.</div>
+                        </div>
                     </div>
                     <div class="field">
                         <label for="trainVoiceUrls">Source YouTube URLs (optional, one per line)</label>
@@ -6874,9 +6884,31 @@
             ['trainVoiceName','trainVoiceId','trainVoiceUrls','trainVoiceMarkers','trainVoiceNotes','trainVoiceScheduleAt'].forEach(id => { document.getElementById(id).value = ''; });
             document.getElementById('trainVoiceGroup').value = 'Celebrity';
             document.getElementById('trainVoiceGender').value = 'male';
+            document.getElementById('trainVoiceEngine').value = 'rvc';
+            onTrainEngineChange();
             document.getElementById('trainVoiceStartBtn').disabled = false;
             document.getElementById('trainVoiceStartBtn').textContent = 'Start training';
             document.getElementById('trainVoiceOverlay').classList.remove('hidden');
+        }
+
+        function onTrainEngineChange() {
+            const eng = document.getElementById('trainVoiceEngine').value;
+            const help = document.getElementById('trainVoiceEngineHelp');
+            const markersField = document.getElementById('trainVoiceMarkers').closest('.field');
+            const startBtn = document.getElementById('trainVoiceStartBtn');
+            const titleEl = document.getElementById('trainVoiceTitle');
+            if (eng === 'rvc') {
+                if (help) help.textContent = 'RVC: 6-phase pipeline. ~70 min on the 3090. Produces a celebrity-quality clone.';
+                if (markersField) markersField.style.display = '';
+                if (startBtn) startBtn.textContent = 'Start training';
+                if (titleEl) titleEl.textContent = 'Train new RVC voice';
+            } else {
+                const label = eng === 'fish' ? 'Fish v2 S2 Pro' : eng === 'gptsovits' ? 'GPT-SoVITS' : 'Chatterbox';
+                if (help) help.textContent = label + ' (lite): finds audio, picks a 5–15 s clean window, deploys. Ready in ~3 min. No GPU training.';
+                if (markersField) markersField.style.display = 'none'; // not used by lite deploy
+                if (startBtn) startBtn.textContent = 'Add ' + label + ' voice';
+                if (titleEl) titleEl.textContent = 'Add new ' + label + ' voice (lite)';
+            }
         }
 
         function closeTrainVoiceModal() {
@@ -6901,9 +6933,10 @@
             const btn = document.getElementById('trainVoiceStartBtn');
             btn.disabled = true; btn.textContent = 'Starting...';
 
+            const targetEngine = document.getElementById('trainVoiceEngine').value || 'rvc';
             const res = await api('/api/superadmin/tts/train', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ voice_id: voiceId, name, group, gender, urls, speaker_markers: markers, notes, run_after: runAfter }),
+                body: JSON.stringify({ voice_id: voiceId, name, group, gender, urls, speaker_markers: markers, notes, run_after: runAfter, target_engine: targetEngine }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {

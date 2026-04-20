@@ -430,6 +430,25 @@ async def upsert_engine_voice(
     return {"ok": True, "voice_id": prefix + dir_id, "ref_text": merged["ref_text"], "name": merged["name"]}
 
 
+@app.post("/admin/voices/{engine}/_cache-bust")
+def cache_bust_engine(engine: str, x_admin_token: Optional[str] = Header(None)):
+    """Force-rescan an engine's voice directory. Used by the lite voice
+    deploy script after it drops a new reference.wav + metadata.json so
+    /voices picks up the new entry without restarting tts-server."""
+    _check_admin(x_admin_token)
+    if engine == "chatterbox":
+        chatterbox_engine._voices_cache = None
+    elif engine == "gptsovits":
+        gptsovits_engine._voices_cache = None
+    elif engine == "fish":
+        fish_engine.invalidate_cache()
+    elif engine == "rvc":
+        pass  # RVC re-reads its manifest on every /voices call; no cache to bust
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown engine: {engine}")
+    return {"ok": True, "engine": engine, "cache_busted": True}
+
+
 @app.delete("/admin/voices/{engine}/{voice_id}")
 def delete_engine_voice(engine: str, voice_id: str, x_admin_token: Optional[str] = Header(None)):
     """Remove a non-Chatterbox/non-RVC voice by engine + dir name. Only
