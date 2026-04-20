@@ -14,9 +14,14 @@ ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --decoder-config-name modded_dac_vq \
     --listen 0.0.0.0:8881 \
     --device cuda \
-    --half
+    --half \
+    --compile
+# torch.compile JIT — adds ~30 s to first startup, gives 2-3x synth speedup
+# after warmup. Worth it on a long-running service.
 Restart=on-failure
 RestartSec=5
+# Compile bumps RAM during startup; 4 min is comfortable for the warm-up
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

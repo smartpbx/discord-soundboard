@@ -189,6 +189,119 @@ class CloneToGsvRequest(BaseModel):
     trim_length_sec: float = 8.0
 
 
+async def _ensure_engine_dir(engine: str, voice_id: str):
+    if engine not in ("gptsovits", "fish"):
+        raise HTTPException(status_code=400, detail="Unsupported engine")
+    dir_id = _normalize_voice_dir_id(voice_id)
+    base = os.path.join(os.path.dirname(__file__), "models", engine, dir_id)
+    return dir_id, base
+
+
+def _engine_invalidate(engine: str):
+    if engine == "gptsovits": gptsovits_engine._voices_cache = None
+    elif engine == "fish": fish_engine.invalidate_cache()
+
+
+def _whisper_transcribe(wav_path: str) -> str:
+    """Shell out to GPT-SoVITS venv's whisper (tts-server venv doesn't ship it)."""
+    whisper_py = "/opt/GPT-SoVITS/.venv/bin/python"
+    if not os.path.exists(whisper_py):
+        raise HTTPException(status_code=500, detail=f"Whisper venv not found at {whisper_py}")
+    script = (
+        "import whisper, json, sys\n"
+        "m = whisper.load_model('base')\n"
+        f"r = m.transcribe({wav_path!r}, language='en', verbose=False)\n"
+        "sys.stdout.write(json.dumps({'text': r.get('text','').strip()}))\n"
+    )
+    try:
+        proc = subprocess.run([whisper_py, "-c", script], capture_output=True, text=True, timeout=180, check=True)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Whisper failed: {(e.stderr or '')[-300:]}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Whisper timed out")
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1]).get("text", "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not parse whisper output: {e}")
+
+
+@app.put("/admin/voices/{engine}/{voice_id}")
+async def upsert_engine_voice(
+    engine: str,
+    voice_id: str,
+    audio: Optional[UploadFile] = File(None),
+    metadata: Optional[str] = Form(None),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Create or replace a Fish/GSV voice by uploading a reference clip.
+
+    Either `audio` (file) or `metadata` (JSON) — or both — may be present:
+      - audio only: replaces reference.wav, re-transcribes for ref_text.
+        For Fish, no trim. For GSV, trims to 8 s + resamples to 32 kHz mono
+        (GSV's required range).
+      - metadata only: edits name / gender / group / ref_text without
+        touching the audio. Useful to tweak the prompt text after upload.
+      - both: full upsert.
+    """
+    _check_admin(x_admin_token)
+    dir_id, base = await _ensure_engine_dir(engine, voice_id)
+    os.makedirs(base, exist_ok=True)
+    ref_path = os.path.join(base, "reference.wav")
+    meta_path = os.path.join(base, "metadata.json")
+    existing_meta = {}
+    if os.path.exists(meta_path):
+        try: existing_meta = json.loads(open(meta_path).read())
+        except Exception: pass
+    user_meta = {}
+    if metadata:
+        try: user_meta = json.loads(metadata)
+        except Exception: raise HTTPException(status_code=400, detail="metadata must be valid JSON")
+        if not isinstance(user_meta, dict):
+            raise HTTPException(status_code=400, detail="metadata must be an object")
+    new_audio_written = False
+    if audio is not None:
+        audio_bytes = await audio.read()
+        if len(audio_bytes) < 1024:
+            raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
+        # Always write the raw upload; for GSV trim+resample after
+        with open(ref_path, "wb") as f: f.write(audio_bytes)
+        if engine == "gptsovits":
+            tmp = ref_path + ".tmp.wav"
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                    "-i", ref_path, "-t", "8", "-ar", "32000", "-ac", "1", tmp,
+                ], check=True, timeout=60)
+                os.replace(tmp, ref_path)
+            except subprocess.CalledProcessError as e:
+                raise HTTPException(status_code=500, detail=f"ffmpeg trim failed for GSV: {e}")
+        new_audio_written = True
+    # Re-transcribe if (a) audio was changed AND ref_text not provided, or
+    # (b) explicit user_meta.regenerate_ref_text=true
+    if (new_audio_written and "ref_text" not in user_meta) or user_meta.get("regenerate_ref_text"):
+        if not os.path.exists(ref_path):
+            raise HTTPException(status_code=400, detail="No reference.wav present and none uploaded")
+        user_meta["ref_text"] = _whisper_transcribe(ref_path)
+    elif "ref_text" not in user_meta and "ref_text" not in existing_meta:
+        if os.path.exists(ref_path):
+            user_meta["ref_text"] = _whisper_transcribe(ref_path)
+    user_meta.pop("regenerate_ref_text", None)
+    merged = {**existing_meta, **user_meta}
+    # Default sane fields
+    merged.setdefault("name", dir_id.replace("_", " ").title() + (" (Fish)" if engine == "fish" else " (GSV)"))
+    merged.setdefault("gender", "unknown")
+    merged.setdefault("group", "Celebrity")
+    merged.setdefault("language", "en")
+    merged["updated_at"] = int(time.time())
+    if "ref_text" not in merged:
+        raise HTTPException(status_code=400, detail="ref_text is required (upload audio or supply metadata.ref_text)")
+    with open(meta_path, "w") as f:
+        json.dump(merged, f, indent=2)
+    _engine_invalidate(engine)
+    prefix = "fish_" if engine == "fish" else "gsv_"
+    return {"ok": True, "voice_id": prefix + dir_id, "ref_text": merged["ref_text"], "name": merged["name"]}
+
+
 @app.delete("/admin/voices/{engine}/{voice_id}")
 def delete_engine_voice(engine: str, voice_id: str, x_admin_token: Optional[str] = Header(None)):
     """Remove a non-Chatterbox/non-RVC voice by engine + dir name. Only

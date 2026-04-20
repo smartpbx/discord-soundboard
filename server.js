@@ -4350,6 +4350,45 @@ app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, a
     }
 });
 
+// Create OR replace a Fish/GSV voice. multipart/form-data:
+//   - audio (optional) — new reference clip
+//   - metadata (optional, JSON string) — { name, gender, group, ref_text }
+// At least one must be present. Server re-transcribes when audio changes
+// unless the metadata explicitly supplies ref_text.
+app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+    const engine = req.params.engine;
+    if (!['gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine' });
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    try {
+        const form = new FormData();
+        if (req.file && req.file.buffer) {
+            form.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' }), req.file.originalname || 'ref.wav');
+        }
+        if (req.body && req.body.metadata) {
+            form.append('metadata', String(req.body.metadata));
+        }
+        const url = `${TTS_API_URL}/admin/voices/${engine}/${encodeURIComponent(dirId)}`;
+        const r = await fetch(url, {
+            method: 'PUT', body: form,
+            headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+            const upstream = r.status === 401 ? 502 : r.status;
+            return res.status(upstream).json({ error: body.detail || body.error || `TTS ${r.status}` });
+        }
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: req.file ? `voice.upsert-${engine}-audio` : `voice.edit-${engine}-meta`,
+            target: dirId,
+            details: { ref_text: String(body.ref_text || '').slice(0, 80), name: body.name },
+        });
+        res.json(body);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 // Synth a short test clip and return raw WAV bytes for in-browser preview.
 // Doesn't queue to Discord — purely for auditioning a voice before using it.
 app.post('/api/tts/test-synth', requireAuth, async (req, res) => {

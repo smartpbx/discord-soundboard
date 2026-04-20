@@ -1418,7 +1418,11 @@
                 <div class="superadmin-section">
                     <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
                         <span>Voice Management</span>
-                        <button type="button" class="btn btn-primary btn-sm" onclick="openVoiceModal('create')">+ Add Chatterbox voice</button>
+                        <span style="display:flex;gap:0.4rem">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openVoiceModal('create')">+ Chatterbox</button>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openEngineVoiceModal('fish', null)">+ Fish</button>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openEngineVoiceModal('gptsovits', null)">+ GPT-SoVITS</button>
+                        </span>
                     </div>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Enable/disable voices, toggle RVC refinement, and replace reference clips. Add new Chatterbox voices from a YouTube URL or audio file.</p>
                     <div style="max-height: 400px; overflow-y: auto;">
@@ -1726,6 +1730,57 @@
                 <div class="footer-row" style="display:flex; gap:0.4rem; justify-content:flex-end; margin-top:0.75rem;">
                     <button type="button" class="btn btn-ghost" onclick="closeResumeTrainModal()">Cancel</button>
                     <button type="button" class="btn btn-primary" id="resumeTrainConfirmBtn" onclick="confirmResumeTrain()">Resume</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="engineVoiceOverlay" class="voice-modal-overlay hidden" onclick="if(event.target===this)closeEngineVoiceModal()">
+            <div class="voice-modal" style="width: 560px;">
+                <h3 id="engineVoiceTitle">Add Fish voice</h3>
+                <p id="engineVoiceSubtitle" style="font-size:0.85rem; color:var(--text-muted); margin:0 0 0.75rem;">Upload a 5–15 s clean reference clip. The text the speaker says in the clip will be auto-transcribed.</p>
+                <div class="row">
+                    <div class="field" style="flex:1; min-width:200px;">
+                        <label for="engineVoiceId">Voice id</label>
+                        <input type="text" id="engineVoiceId" placeholder="e.g. theo_von">
+                        <div class="field-help">Lowercase letters, digits, underscores.</div>
+                    </div>
+                    <div class="field" style="flex:1; min-width:200px;">
+                        <label for="engineVoiceName">Display name</label>
+                        <input type="text" id="engineVoiceName" placeholder="e.g. Theo Von">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="field" style="flex:1; min-width:140px;">
+                        <label for="engineVoiceGroup">Group</label>
+                        <select id="engineVoiceGroup">
+                            <option>Celebrity</option>
+                            <option>Cartoon</option>
+                            <option>Gaming</option>
+                            <option>Other</option>
+                        </select>
+                    </div>
+                    <div class="field" style="flex:1; min-width:140px;">
+                        <label for="engineVoiceGender">Gender</label>
+                        <select id="engineVoiceGender">
+                            <option value="male">male</option>
+                            <option value="female">female</option>
+                            <option value="unknown">unknown</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="field">
+                    <label for="engineVoiceAudio">Reference audio (wav / mp3 / m4a)</label>
+                    <input type="file" id="engineVoiceAudio" accept="audio/*">
+                    <div class="field-help" id="engineVoiceAudioHelp">Optional in Edit mode — leave blank to keep existing audio.</div>
+                </div>
+                <div class="field">
+                    <label for="engineVoiceRefText">Reference text <span style="color:var(--text-muted);font-weight:normal;font-size:0.75rem">(blank = auto-transcribe with Whisper)</span></label>
+                    <textarea id="engineVoiceRefText" rows="3" placeholder="What the speaker says in the reference clip" style="width:100%; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.85rem; resize:vertical;"></textarea>
+                </div>
+                <div class="status-line" id="engineVoiceStatus" style="font-size:0.85rem; min-height:1.2em;"></div>
+                <div class="footer-row" style="display:flex; gap:0.4rem; justify-content:flex-end; margin-top:0.5rem;">
+                    <button type="button" class="btn btn-ghost" onclick="closeEngineVoiceModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="engineVoiceSaveBtn" onclick="saveEngineVoice()">Save</button>
                 </div>
             </div>
         </div>
@@ -5995,6 +6050,7 @@
             if (!res || !res.ok) return;
             const data = await res.json();
             const voices = data.voices || [];
+            window._lastTtsVoices = voices;  // for edit-modal prefill lookups
             _ttsAdminDisabled = data.disabledVoiceIds || [];
             _ttsAdminRvcOverrides = data.rvcOverrides || {};
             const tbody = document.getElementById('ttsVoicesBody');
@@ -6016,20 +6072,19 @@
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="openVoiceModal(\'replace\', \'' + esc(v.id) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Replace reference clip">Ref</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="autoPickEmotionRefs(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Analyze this voice\'s training dataset and auto-pick reference clips for all 7 emotions (soft/neutral/excited/yell/angry/sad/happy). Requires voice to have been trained via the RVC pipeline.">⚡ Auto refs</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToGsv(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a GPT-SoVITS voice using this voice\'s reference clip (trims to 8s, auto-transcribes)">→ GSV</button>'
-                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToFish(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a Fish v2 voice (openaudio-s1-mini) using this reference clip — natively handles emotion via inline tags, often more expressive than Chatterbox">→ Fish</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="cloneVoiceToFish(\'' + esc(cbDirId) + '\', \'' + esc(v.name) + '\')" title="Create a Fish v2 voice (S2 Pro) using this reference clip — natively handles emotion via inline tags, often more expressive than Chatterbox">→ Fish</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteChatterboxVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this voice">Delete</button>';
                 } else if (isRvc) {
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditVoiceModal(\'' + esc(v.id) + '\', \'' + esc(v.engine) + '\', \'' + esc(v.name) + '\', \'' + esc(v.group || '') + '\', \'' + esc(v.gender || 'unknown') + '\')" title="Rename / change group">Edit</button>'
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteRvcVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Delete this RVC model (Chatterbox pair if any kept intact)">Delete</button>';
-                } else if (v.engine === 'gptsovits') {
-                    const dirId = v.id.replace(/^gsv_/, '');
-                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
-                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'gptsovits\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this GPT-SoVITS voice (clone again from Chatterbox if you want it back)">Delete</button>';
-                } else if (v.engine === 'fish') {
-                    const dirId = v.id.replace(/^fish_/, '');
-                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
-                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'fish\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this Fish voice">Delete</button>';
+                } else if (v.engine === 'gptsovits' || v.engine === 'fish') {
+                    const eng = v.engine;
+                    const prefix = eng === 'fish' ? 'fish_' : 'gsv_';
+                    const dirId = v.id.replace(new RegExp('^' + prefix), '');
+                    actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditEngineVoice(\'' + eng + '\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Replace reference clip / edit ref_text">Edit</button>'
+                        + ' <button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
+                        + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'' + eng + '\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this voice (re-clone or re-add to bring it back)">Delete</button>';
                 } else {
                     // Kokoro built-in voices — try them via Test only
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
@@ -6344,6 +6399,85 @@
             const summary = 'Picked ' + picked + '/7 refs from ' + (d.chunks_analyzed || '?') + ' chunks'
                 + (duplicates > 0 ? ' (' + duplicates + ' emotion' + (duplicates === 1 ? '' : 's') + ' share chunks — replace via Upload if needed)' : '');
             showToast(summary, 'success');
+            fetchTtsVoicesAdmin();
+        }
+
+        // ---- Add / Edit Fish & GSV voice modal --------------------------------
+        let _engineVoiceCtx = null; // { engine, mode: 'create'|'edit', dirId? }
+        function _engineVoiceLabel(engine) { return engine === 'fish' ? 'Fish' : 'GPT-SoVITS'; }
+        function openEngineVoiceModal(engine, dirIdOrNull) {
+            _engineVoiceCtx = { engine, mode: dirIdOrNull ? 'edit' : 'create', dirId: dirIdOrNull };
+            const isEdit = !!dirIdOrNull;
+            const label = _engineVoiceLabel(engine);
+            document.getElementById('engineVoiceTitle').textContent = isEdit ? ('Edit ' + label + ' voice: ' + dirIdOrNull) : ('Add ' + label + ' voice');
+            document.getElementById('engineVoiceSubtitle').textContent = isEdit
+                ? 'Replace the reference clip and/or edit metadata. Leaving audio empty keeps the existing clip.'
+                : 'Upload a 5–15 s clean reference clip. The text the speaker says will be auto-transcribed unless you supply it.';
+            document.getElementById('engineVoiceAudioHelp').textContent = isEdit ? 'Leave blank to keep existing audio.' : 'Required for new voices.';
+            document.getElementById('engineVoiceId').value = dirIdOrNull || '';
+            document.getElementById('engineVoiceId').disabled = isEdit;
+            document.getElementById('engineVoiceName').value = '';
+            document.getElementById('engineVoiceGroup').value = 'Celebrity';
+            document.getElementById('engineVoiceGender').value = 'male';
+            document.getElementById('engineVoiceAudio').value = '';
+            document.getElementById('engineVoiceRefText').value = '';
+            document.getElementById('engineVoiceStatus').textContent = '';
+            document.getElementById('engineVoiceSaveBtn').disabled = false;
+            // For edit mode, prefill name + ref_text from the live voice list
+            if (isEdit) {
+                const prefix = engine === 'fish' ? 'fish_' : 'gsv_';
+                const v = (window._lastTtsVoices || []).find(vv => vv.id === prefix + dirIdOrNull);
+                if (v) {
+                    document.getElementById('engineVoiceName').value = v.name || '';
+                    document.getElementById('engineVoiceGroup').value = v.group || 'Celebrity';
+                    document.getElementById('engineVoiceGender').value = v.gender || 'male';
+                    // ref_text isn't surfaced in /voices today — operator will see the
+                    // current text once they Save (server returns it in response).
+                }
+            }
+            document.getElementById('engineVoiceOverlay').classList.remove('hidden');
+            setTimeout(() => document.getElementById(isEdit ? 'engineVoiceName' : 'engineVoiceId').focus(), 50);
+        }
+        function openEditEngineVoice(engine, dirId, name) {
+            openEngineVoiceModal(engine, dirId);
+        }
+        function closeEngineVoiceModal() {
+            document.getElementById('engineVoiceOverlay').classList.add('hidden');
+            _engineVoiceCtx = null;
+        }
+        async function saveEngineVoice() {
+            if (!_engineVoiceCtx) return;
+            const ctx = _engineVoiceCtx;
+            const dirIdRaw = (document.getElementById('engineVoiceId').value || '').trim().toLowerCase();
+            const dirId = dirIdRaw.replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+            if (!dirId) { showToast('Voice id required', 'error'); return; }
+            const file = document.getElementById('engineVoiceAudio').files[0];
+            if (ctx.mode === 'create' && !file) { showToast('Reference audio required for new voices', 'error'); return; }
+            const meta = {
+                name: document.getElementById('engineVoiceName').value.trim() || (dirId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (' + _engineVoiceLabel(ctx.engine) + ')'),
+                group: document.getElementById('engineVoiceGroup').value,
+                gender: document.getElementById('engineVoiceGender').value,
+            };
+            const refText = document.getElementById('engineVoiceRefText').value.trim();
+            if (refText) meta.ref_text = refText;
+            const form = new FormData();
+            if (file) form.append('audio', file);
+            form.append('metadata', JSON.stringify(meta));
+            const btn = document.getElementById('engineVoiceSaveBtn');
+            btn.disabled = true; btn.textContent = file ? 'Uploading + transcribing…' : 'Saving…';
+            document.getElementById('engineVoiceStatus').textContent = 'Saving voice (this can take 30–60 s with audio + Whisper)…';
+            const r = await fetch('/api/superadmin/tts/voice-engine/' + ctx.engine + '/' + encodeURIComponent(dirId), {
+                method: 'PUT', body: form, credentials: 'include',
+            });
+            const d = await r.json().catch(() => ({}));
+            btn.disabled = false; btn.textContent = 'Save';
+            if (!r.ok) {
+                document.getElementById('engineVoiceStatus').textContent = d.error || ('Save failed (' + r.status + ')');
+                showToast(d.error || 'Save failed', 'error');
+                return;
+            }
+            showToast(_engineVoiceLabel(ctx.engine) + ' voice saved · ref: "' + String(d.ref_text || '').slice(0, 60) + '…"', 'success');
+            closeEngineVoiceModal();
             fetchTtsVoicesAdmin();
         }
 
