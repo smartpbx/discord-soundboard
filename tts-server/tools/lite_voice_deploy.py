@@ -155,6 +155,8 @@ def main():
     ap.add_argument("--language", default="en")
     ap.add_argument("--default-exaggeration", type=float, default=None,
                     help="Chatterbox only — initial expression slider value (0.25–2.0)")
+    ap.add_argument("--isolate-vocals", action="store_true",
+                    help="Run demucs vocal isolation on the trimmed clip before deploying. Adds ~25s CPU time; useful when source has background music/noise.")
     args = ap.parse_args()
 
     if args.end <= args.start:
@@ -176,6 +178,22 @@ def main():
 
         ref_path = engine_dir / "reference.wav"
         trim_for_engine(src, args.start, args.end, args.engine, ref_path)
+
+        if args.isolate_vocals:
+            emit("isolate_start")
+            iso_out = work_dir / "vocals.wav"
+            try:
+                import importlib.util as _iu
+                tool = Path(__file__).parent / "isolate_vocals.py"
+                spec = _iu.spec_from_file_location("isolate_vocals", tool)
+                mod = _iu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                target_sr = 32000 if args.engine == "gptsovits" else 24000
+                iso_meta = mod.isolate(str(ref_path), str(iso_out), device="cpu", target_sr=target_sr)
+                shutil.move(str(iso_out), str(ref_path))
+                emit("isolate_done", elapsed_sec=iso_meta["elapsed_sec"], peak_pre_gain=iso_meta["peak_pre_gain"])
+            except Exception as e:
+                emit("isolate_warning", message=str(e))  # non-fatal — keep raw clip
 
         ref_text = args.ref_text.strip() if args.ref_text else None
         if not ref_text:

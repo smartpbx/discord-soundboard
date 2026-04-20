@@ -1585,6 +1585,12 @@
                         <button type="button" class="btn btn-primary btn-sm" id="voiceModalGenerateBtn" onclick="generateVoicePreview()">Generate preview</button>
                     </div>
                 </div>
+                <div class="field" style="margin-top:-0.1rem;">
+                    <label style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer;">
+                        <input type="checkbox" id="voiceModalIsolate" style="accent-color:var(--accent);">
+                        <span>Isolate vocals (demucs) — strips background music/noise. Adds ~15–30 s.</span>
+                    </label>
+                </div>
                 <div class="field-help">Recommended: 6–30 seconds of one speaker, no music or background noise. Max 60s.</div>
 
                 <div class="preview-box">
@@ -1813,7 +1819,13 @@
                         <button type="button" class="btn btn-primary btn-sm" id="engineVoiceGenerateBtn" onclick="generateEngineVoicePreview()">Generate preview</button>
                     </div>
                 </div>
-                <div class="field-help" id="engineVoiceAudioHelp">Recommended: 5–15 s of one speaker, no music or background noise. Whisper auto-transcribes the picked window.</div>
+                <div class="field" style="margin-top:-0.1rem;">
+                    <label style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer;">
+                        <input type="checkbox" id="engineVoiceIsolate" style="accent-color:var(--accent);">
+                        <span>Isolate vocals (demucs) — strips background music/noise. Adds ~15–30 s.</span>
+                    </label>
+                </div>
+                <div class="field-help" id="engineVoiceAudioHelp">Recommended: 10–30 s for Fish (S2 Pro handles up to ~60 s). Single speaker, minimal background. Whisper auto-transcribes.</div>
                 <div class="preview-box">
                     <div class="status-line" id="engineVoicePreviewStatus">No preview yet.</div>
                     <audio id="engineVoicePreviewAudio" controls preload="none" style="display:none"></audio>
@@ -6378,19 +6390,21 @@
             document.getElementById('voiceModalSaveBtn').disabled = true;
             try {
                 let res, data;
+                const isolate = document.getElementById('voiceModalIsolate')?.checked || false;
+                if (isolate) setVoiceModalStatus('Fetching + isolating vocals (demucs, ~25 s)…');
                 if (_voiceModalSource === 'youtube') {
                     const url = document.getElementById('voiceModalUrl').value.trim();
                     if (!url) { setVoiceModalStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec })
+                        body: JSON.stringify({ url, startSec, endSec, isolate })
                     });
                 } else {
                     const fileInput = document.getElementById('voiceModalFile');
                     if (_voiceModalSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec })
+                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec, isolate })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { setVoiceModalStatus('Choose an audio file first.', 'error'); return; }
@@ -6398,6 +6412,7 @@
                         fd.append('audio', fileInput.files[0]);
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
+                        if (isolate) fd.append('isolate', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6420,7 +6435,8 @@
                 audio.style.display = 'block';
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
-                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + '. Listen, then save or re-cut.', 'success');
+                const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
+                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + isoNote + '. Listen, then save or re-cut.', 'success');
                 document.getElementById('voiceModalSaveBtn').disabled = false;
             } catch (e) {
                 setVoiceModalStatus('Network error: ' + e.message, 'error');
@@ -6632,7 +6648,8 @@
             document.getElementById('engineVoiceUrl').value = '';
             const fileInput = document.getElementById('engineVoiceFile'); if (fileInput) fileInput.value = '';
             document.getElementById('engineVoiceStart').value = '0';
-            document.getElementById('engineVoiceEnd').value = '10';
+            document.getElementById('engineVoiceEnd').value = '15';
+            const isoCheckbox = document.getElementById('engineVoiceIsolate'); if (isoCheckbox) isoCheckbox.checked = false;
             document.getElementById('engineVoiceRefText').value = '';
             document.getElementById('engineVoiceStatus').textContent = '';
             document.getElementById('engineVoiceSaveBtn').disabled = false;
@@ -6686,19 +6703,21 @@
             _setEngineVoicePreviewStatus('Fetching + trimming…');
             try {
                 let res;
+                const isolate = document.getElementById('engineVoiceIsolate')?.checked || false;
+                if (isolate) _setEngineVoicePreviewStatus('Fetching + isolating vocals (demucs, ~25 s)…');
                 if (_engineVoiceSource === 'youtube') {
                     const url = document.getElementById('engineVoiceUrl').value.trim();
                     if (!url) { _setEngineVoicePreviewStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec })
+                        body: JSON.stringify({ url, startSec, endSec, isolate })
                     });
                 } else {
                     const fileInput = document.getElementById('engineVoiceFile');
                     if (_engineVoiceSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec })
+                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec, isolate })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { _setEngineVoicePreviewStatus('Choose an audio file first.', 'error'); return; }
@@ -6706,6 +6725,7 @@
                         fd.append('audio', fileInput.files[0]);
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
+                        if (isolate) fd.append('isolate', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6728,7 +6748,8 @@
                 audio.style.display = 'block';
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
-                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + '. Listen, then Save (or re-cut).', 'success');
+                const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
+                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + isoNote + '. Listen, then Save (or re-cut).', 'success');
             } catch (e) {
                 _setEngineVoicePreviewStatus('Network error: ' + e.message, 'error');
             } finally {

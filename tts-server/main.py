@@ -430,6 +430,58 @@ async def upsert_engine_voice(
     return {"ok": True, "voice_id": prefix + dir_id, "ref_text": merged["ref_text"], "name": merged["name"]}
 
 
+@app.post("/admin/util/isolate-vocals")
+async def isolate_vocals_endpoint(
+    audio: UploadFile = File(...),
+    target_sr: int = Form(24000),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Run htdemucs on the uploaded clip and return vocals-only wav.
+    CPU inference (~25 s for a 60 s clip) — keeps the GPU free for TTS.
+    Invoked by the soundboard's Generate-Preview flow when operator ticks
+    'Isolate vocals' + by the trainer via lite_voice_deploy.py --isolate-vocals."""
+    _check_admin(x_admin_token)
+    audio_bytes = await audio.read()
+    if len(audio_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
+    if len(audio_bytes) > 120 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Audio too large (>120 MB) — trim before isolating")
+    tmp_dir = os.path.join("/tmp", f"iso_{int(time.time())}_{os.getpid()}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    in_path = os.path.join(tmp_dir, "input" + (os.path.splitext(audio.filename or "x.wav")[1] or ".wav"))
+    out_path = os.path.join(tmp_dir, "vocals.wav")
+    try:
+        with open(in_path, "wb") as f:
+            f.write(audio_bytes)
+        # Import lazily so tts-server boot doesn't pay the ~800 ms torch+demucs
+        # cost when no one ever calls this endpoint.
+        import importlib.util as _iu
+        tool_path = os.path.join(os.path.dirname(__file__), "tools", "isolate_vocals.py")
+        spec = _iu.spec_from_file_location("isolate_vocals", tool_path)
+        mod = _iu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        result = mod.isolate(in_path, out_path, device="cpu", target_sr=target_sr)
+        with open(out_path, "rb") as f:
+            vocals_bytes = f.read()
+        log.info("isolate-vocals: %d bytes in → %d bytes out, %.1fs", len(audio_bytes), len(vocals_bytes), result["elapsed_sec"])
+        return Response(
+            content=vocals_bytes, media_type="audio/wav",
+            headers={
+                "X-Isolate-Duration-Sec": str(round(result["duration_sec"], 2)),
+                "X-Isolate-Elapsed-Sec": str(result["elapsed_sec"]),
+                "X-Isolate-Peak-Pre-Gain": str(result["peak_pre_gain"]),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("isolate-vocals failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Isolation failed: {e}")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp_dir, ignore_errors=True)
+
+
 @app.get("/admin/voices/{engine}/{voice_id}/reference")
 def download_engine_reference(engine: str, voice_id: str, x_admin_token: Optional[str] = Header(None)):
     """Return the raw reference.wav for an engine voice so the operator can
