@@ -67,6 +67,11 @@ def _scan_voices():
             "_dir": entry,
             "_gpt_model": meta.get("gpt_model"),
             "_sovits_model": meta.get("sovits_model"),
+            "source_kind": meta.get("source_kind"),
+            "source_url": meta.get("source_url"),
+            "source_filename": meta.get("source_filename"),
+            "source_start": meta.get("source_start"),
+            "source_end": meta.get("source_end"),
         })
 
     return voices

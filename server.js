@@ -4362,8 +4362,18 @@ app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVo
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     try {
         const form = new FormData();
+        let usedToken = false;
         if (req.file && req.file.buffer) {
             form.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' }), req.file.originalname || 'ref.wav');
+        } else if (req.body && req.body.token) {
+            // Token from the YouTube/Upload preview pipeline. Resolve to staged
+            // wav and forward as the audio payload so tts-server treats it the
+            // same as a direct upload.
+            const previewPath = ttsVoiceAdmin.getPreviewPath(req.body.token);
+            if (!previewPath) return res.status(400).json({ error: 'Preview not found — re-cut the clip and try again.' });
+            const audio = fs.readFileSync(previewPath);
+            form.append('audio', new Blob([audio], { type: 'audio/wav' }), 'reference.wav');
+            usedToken = true;
         }
         if (req.body && req.body.metadata) {
             form.append('metadata', String(req.body.metadata));
@@ -4378,12 +4388,13 @@ app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVo
             const upstream = r.status === 401 ? 502 : r.status;
             return res.status(upstream).json({ error: body.detail || body.error || `TTS ${r.status}` });
         }
+        if (usedToken) ttsVoiceAdmin.deletePreview(req.body.token);
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
-            action: req.file ? `voice.upsert-${engine}-audio` : `voice.edit-${engine}-meta`,
+            action: (req.file || usedToken) ? `voice.upsert-${engine}-audio` : `voice.edit-${engine}-meta`,
             target: dirId,
-            details: { ref_text: String(body.ref_text || '').slice(0, 80), name: body.name },
+            details: { ref_text: String(body.ref_text || '').slice(0, 80), name: body.name, source: usedToken ? 'preview-token' : (req.file ? 'multipart' : 'meta-only') },
         });
         res.json(body);
     } catch (err) { ttsAdminError(res, err); }

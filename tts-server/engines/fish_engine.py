@@ -75,6 +75,11 @@ def _scan_voices():
             "_ref_path": ref_path,
             "_ref_text": meta["ref_text"],
             "_dir": entry,
+            "source_kind": meta.get("source_kind"),
+            "source_url": meta.get("source_url"),
+            "source_filename": meta.get("source_filename"),
+            "source_start": meta.get("source_start"),
+            "source_end": meta.get("source_end"),
         })
     return voices
 

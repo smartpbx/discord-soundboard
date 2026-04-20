@@ -1425,6 +1425,7 @@
                         </span>
                     </div>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Enable/disable voices, toggle RVC refinement, and replace reference clips. Add new Chatterbox voices from a YouTube URL or audio file.</p>
+                    <div id="ttsEngineHealthRow" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.6rem; font-size:0.78rem;"></div>
                     <div style="max-height: 400px; overflow-y: auto;">
                         <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
                             <thead><tr>
@@ -1768,10 +1769,39 @@
                         </select>
                     </div>
                 </div>
-                <div class="field">
-                    <label for="engineVoiceAudio">Reference audio (wav / mp3 / m4a)</label>
-                    <input type="file" id="engineVoiceAudio" accept="audio/*">
-                    <div class="field-help" id="engineVoiceAudioHelp">Optional in Edit mode — leave blank to keep existing audio.</div>
+                <div class="source-tabs" style="margin:0.4rem 0 0.5rem;">
+                    <button type="button" class="source-tab active" data-source="youtube" onclick="switchEngineVoiceSource('youtube')">YouTube URL</button>
+                    <button type="button" class="source-tab" data-source="upload" onclick="switchEngineVoiceSource('upload')">Upload file</button>
+                </div>
+                <div id="engineVoiceSourceYoutube" class="source-panel active">
+                    <div class="field">
+                        <label for="engineVoiceUrl">YouTube URL</label>
+                        <input type="url" id="engineVoiceUrl" placeholder="https://www.youtube.com/watch?v=...">
+                    </div>
+                </div>
+                <div id="engineVoiceSourceUpload" class="source-panel">
+                    <div class="field">
+                        <label for="engineVoiceFile">Audio file (mp3/wav/m4a/...)</label>
+                        <input type="file" id="engineVoiceFile" accept="audio/*">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="field">
+                        <label for="engineVoiceStart">Start (sec)</label>
+                        <input type="number" id="engineVoiceStart" min="0" step="0.1" value="0">
+                    </div>
+                    <div class="field">
+                        <label for="engineVoiceEnd">End (sec)</label>
+                        <input type="number" id="engineVoiceEnd" min="0.1" step="0.1" value="10">
+                    </div>
+                    <div class="field" style="flex:1; min-width: 140px;">
+                        <button type="button" class="btn btn-primary btn-sm" id="engineVoiceGenerateBtn" onclick="generateEngineVoicePreview()">Generate preview</button>
+                    </div>
+                </div>
+                <div class="field-help" id="engineVoiceAudioHelp">Recommended: 5–15 s of one speaker, no music or background noise. Whisper auto-transcribes the picked window.</div>
+                <div class="preview-box">
+                    <div class="status-line" id="engineVoicePreviewStatus">No preview yet.</div>
+                    <audio id="engineVoicePreviewAudio" controls preload="none" style="display:none"></audio>
                 </div>
                 <div class="field">
                     <label for="engineVoiceRefText">Reference text <span style="color:var(--text-muted);font-weight:normal;font-size:0.75rem">(blank = auto-transcribe with Whisper)</span></label>
@@ -6045,7 +6075,45 @@
             }
         }
 
+        // Engine status pills (cold/ready/loading/stopped/down). Polled once
+        // per panel-open + on every voice-admin refresh; the operator clicks
+        // a pill to toggle Fish on/off manually if they want to pre-warm it.
+        async function fetchTtsEngineHealth() {
+            const row = document.getElementById('ttsEngineHealthRow');
+            if (!row) return;
+            const res = await api('/api/superadmin/tts/engines/health');
+            if (!res || !res.ok) {
+                row.innerHTML = '<span style="color:var(--text-muted)">Engine health unavailable.</span>';
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            const eng = (data && data.engines) || {};
+            // Map status → color. "ready"=green, "cold"/"lazy"/"stopped"=muted, "loading"=amber, "down"=red.
+            const COLORS = {
+                ready:   { bg: 'rgba(40,160,80,0.18)',  fg: '#7ce0a4', dot: '#3fcf73' },
+                cold:    { bg: 'rgba(160,160,160,0.18)',fg: '#bbb',   dot: '#888'    },
+                lazy:    { bg: 'rgba(160,160,160,0.18)',fg: '#bbb',   dot: '#888'    },
+                stopped: { bg: 'rgba(160,160,160,0.18)',fg: '#bbb',   dot: '#888'    },
+                loading: { bg: 'rgba(220,160,40,0.18)', fg: '#f3c674',dot: '#e9a833' },
+                down:    { bg: 'rgba(200,60,60,0.18)',  fg: '#f08c8c',dot: '#d04545' },
+            };
+            const order = ['chatterbox', 'fish', 'gptsovits', 'rvc', 'kokoro'];
+            const cells = order.filter(k => eng[k]).map(k => {
+                const e = eng[k];
+                const c = COLORS[e.status] || COLORS.cold;
+                return '<span title="' + esc(e.note || '') + '" style="display:inline-flex; align-items:center; gap:0.35rem; padding:0.2rem 0.55rem; border-radius:999px; background:' + c.bg + '; color:' + c.fg + ';">'
+                    + '<span style="width:6px; height:6px; border-radius:50%; background:' + c.dot + ';"></span>'
+                    + esc(k) + ' · ' + esc(e.status)
+                    + '</span>';
+            });
+            const tmode = data.training_mode ? '<span style="color:#e9a833; padding:0.2rem 0.55rem;">⚙️ training mode</span>' : '';
+            row.innerHTML = cells.join('') + tmode;
+        }
+
         async function fetchTtsVoicesAdmin() {
+            // Engine status pills are independent of voice list — fire in parallel
+            // so a slow tts-server doesn't gate the rest of the panel.
+            fetchTtsEngineHealth();
             const res = await api('/api/tts/status');
             if (!res || !res.ok) return;
             const data = await res.json();
@@ -6091,7 +6159,7 @@
                         + ' <span style="color:var(--text-muted);font-size:0.75rem;margin-left:0.5rem">built-in</span>';
                 }
                 let sourceLine = '';
-                if (isCb && v.source_kind) {
+                if (v.source_kind) {
                     const range = (v.source_start != null && v.source_end != null) ? (' ' + v.source_start.toFixed(1) + 's–' + v.source_end.toFixed(1) + 's') : '';
                     if (v.source_kind === 'youtube' && v.source_url) {
                         sourceLine = '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px"><a href="' + esc(v.source_url) + '" target="_blank" rel="noopener" style="color:var(--text-muted)">YouTube' + esc(range) + '</a></div>';
@@ -6405,25 +6473,61 @@
         // ---- Add / Edit Fish & GSV voice modal --------------------------------
         let _engineVoiceCtx = null; // { engine, mode: 'create'|'edit', dirId? }
         function _engineVoiceLabel(engine) { return engine === 'fish' ? 'Fish' : 'GPT-SoVITS'; }
+        let _engineVoiceSource = 'youtube';
+        let _engineVoiceToken = null;
+        let _engineVoiceSourceRef = null;  // for re-trim of the same upload without re-uploading
+        let _engineVoiceLastUrl = '';
+        let _engineVoiceLastFilename = '';
+        let _engineVoiceLastStart = 0;
+        let _engineVoiceLastEnd = 0;
+
+        function switchEngineVoiceSource(kind) {
+            _engineVoiceSource = kind;
+            document.querySelectorAll('#engineVoiceOverlay .source-tab').forEach(b => b.classList.toggle('active', b.dataset.source === kind));
+            document.getElementById('engineVoiceSourceYoutube').classList.toggle('active', kind === 'youtube');
+            document.getElementById('engineVoiceSourceUpload').classList.toggle('active', kind === 'upload');
+        }
+
+        function _setEngineVoicePreviewStatus(msg, kind) {
+            const el = document.getElementById('engineVoicePreviewStatus');
+            el.textContent = msg;
+            el.style.color = kind === 'error' ? '#f08c8c' : (kind === 'success' ? '#7ce0a4' : 'var(--text-muted)');
+        }
+
         function openEngineVoiceModal(engine, dirIdOrNull) {
             _engineVoiceCtx = { engine, mode: dirIdOrNull ? 'edit' : 'create', dirId: dirIdOrNull };
+            _engineVoiceToken = null;
+            _engineVoiceSourceRef = null;
+            _engineVoiceLastUrl = '';
+            _engineVoiceLastFilename = '';
+            _engineVoiceLastStart = 0;
+            _engineVoiceLastEnd = 0;
             const isEdit = !!dirIdOrNull;
             const label = _engineVoiceLabel(engine);
             document.getElementById('engineVoiceTitle').textContent = isEdit ? ('Edit ' + label + ' voice: ' + dirIdOrNull) : ('Add ' + label + ' voice');
             document.getElementById('engineVoiceSubtitle').textContent = isEdit
-                ? 'Replace the reference clip and/or edit metadata. Leaving audio empty keeps the existing clip.'
-                : 'Upload a 5–15 s clean reference clip. The text the speaker says will be auto-transcribed unless you supply it.';
-            document.getElementById('engineVoiceAudioHelp').textContent = isEdit ? 'Leave blank to keep existing audio.' : 'Required for new voices.';
+                ? 'Pull a fresh clip from YouTube/upload (or skip the source step to only edit metadata). Whisper auto-transcribes new clips.'
+                : 'Pull a 5–15 s clean reference clip from YouTube or upload a file, scrub start/end, then Save. Whisper auto-transcribes.';
+            document.getElementById('engineVoiceAudioHelp').textContent = isEdit
+                ? 'Optional in Edit mode — skip preview to keep existing clip. Generate preview to replace it.'
+                : 'Recommended: 5–15 s of one speaker, no music or background noise. Max 60s.';
             document.getElementById('engineVoiceId').value = dirIdOrNull || '';
             document.getElementById('engineVoiceId').disabled = isEdit;
             document.getElementById('engineVoiceName').value = '';
             document.getElementById('engineVoiceGroup').value = 'Celebrity';
             document.getElementById('engineVoiceGender').value = 'male';
-            document.getElementById('engineVoiceAudio').value = '';
+            document.getElementById('engineVoiceUrl').value = '';
+            const fileInput = document.getElementById('engineVoiceFile'); if (fileInput) fileInput.value = '';
+            document.getElementById('engineVoiceStart').value = '0';
+            document.getElementById('engineVoiceEnd').value = '10';
             document.getElementById('engineVoiceRefText').value = '';
             document.getElementById('engineVoiceStatus').textContent = '';
             document.getElementById('engineVoiceSaveBtn').disabled = false;
-            // For edit mode, prefill name + ref_text from the live voice list
+            const audio = document.getElementById('engineVoicePreviewAudio');
+            audio.style.display = 'none'; audio.removeAttribute('src');
+            switchEngineVoiceSource('youtube');
+            _setEngineVoicePreviewStatus(isEdit ? 'No new clip queued — Save will keep current audio.' : 'No preview yet.');
+            // For edit mode, prefill name/group/gender from the live voice list
             if (isEdit) {
                 const prefix = engine === 'fish' ? 'fish_' : 'gsv_';
                 const v = (window._lastTtsVoices || []).find(vv => vv.id === prefix + dirIdOrNull);
@@ -6431,8 +6535,15 @@
                     document.getElementById('engineVoiceName').value = v.name || '';
                     document.getElementById('engineVoiceGroup').value = v.group || 'Celebrity';
                     document.getElementById('engineVoiceGender').value = v.gender || 'male';
-                    // ref_text isn't surfaced in /voices today — operator will see the
-                    // current text once they Save (server returns it in response).
+                    // Pre-populate source tab + URL/range so operator can re-trim
+                    if (v.source_kind === 'youtube' && v.source_url) {
+                        switchEngineVoiceSource('youtube');
+                        document.getElementById('engineVoiceUrl').value = v.source_url;
+                    } else if (v.source_kind === 'upload') {
+                        switchEngineVoiceSource('upload');
+                    }
+                    if (Number.isFinite(v.source_start)) document.getElementById('engineVoiceStart').value = v.source_start;
+                    if (Number.isFinite(v.source_end))   document.getElementById('engineVoiceEnd').value   = v.source_end;
                 }
             }
             document.getElementById('engineVoiceOverlay').classList.remove('hidden');
@@ -6443,16 +6554,82 @@
         }
         function closeEngineVoiceModal() {
             document.getElementById('engineVoiceOverlay').classList.add('hidden');
+            const audio = document.getElementById('engineVoicePreviewAudio');
+            try { audio.pause(); } catch {}
+            audio.removeAttribute('src');
             _engineVoiceCtx = null;
+            _engineVoiceToken = null;
+            _engineVoiceSourceRef = null;
         }
+
+        async function generateEngineVoicePreview() {
+            const startSec = parseFloat(document.getElementById('engineVoiceStart').value);
+            const endSec = parseFloat(document.getElementById('engineVoiceEnd').value);
+            if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
+                _setEngineVoicePreviewStatus('Start/end seconds invalid.', 'error'); return;
+            }
+            const btn = document.getElementById('engineVoiceGenerateBtn');
+            btn.disabled = true;
+            _setEngineVoicePreviewStatus('Fetching + trimming…');
+            try {
+                let res;
+                if (_engineVoiceSource === 'youtube') {
+                    const url = document.getElementById('engineVoiceUrl').value.trim();
+                    if (!url) { _setEngineVoicePreviewStatus('Paste a YouTube URL first.', 'error'); return; }
+                    res = await api('/api/superadmin/tts/source/youtube', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, startSec, endSec })
+                    });
+                } else {
+                    const fileInput = document.getElementById('engineVoiceFile');
+                    if (_engineVoiceSourceRef) {
+                        res = await api('/api/superadmin/tts/source/retrim', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec })
+                        });
+                    } else {
+                        if (!fileInput.files || !fileInput.files[0]) { _setEngineVoicePreviewStatus('Choose an audio file first.', 'error'); return; }
+                        const fd = new FormData();
+                        fd.append('audio', fileInput.files[0]);
+                        fd.append('startSec', String(startSec));
+                        fd.append('endSec', String(endSec));
+                        res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
+                    }
+                }
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) { _setEngineVoicePreviewStatus(data.error || ('Error: ' + res.status), 'error'); return; }
+                _engineVoiceToken = data.token;
+                if (data.sourceRef) _engineVoiceSourceRef = data.sourceRef;
+                _engineVoiceLastStart = startSec;
+                _engineVoiceLastEnd = endSec;
+                if (_engineVoiceSource === 'youtube') {
+                    _engineVoiceLastUrl = document.getElementById('engineVoiceUrl').value.trim();
+                    _engineVoiceLastFilename = '';
+                } else {
+                    _engineVoiceLastUrl = '';
+                    const f = document.getElementById('engineVoiceFile').files[0];
+                    if (f && !_engineVoiceLastFilename) _engineVoiceLastFilename = f.name;
+                }
+                const audio = document.getElementById('engineVoicePreviewAudio');
+                audio.src = data.previewUrl + '?t=' + Date.now();
+                audio.style.display = 'block';
+                const dur = (data.duration || 0).toFixed(1);
+                const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
+                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + '. Listen, then Save (or re-cut).', 'success');
+            } catch (e) {
+                _setEngineVoicePreviewStatus('Network error: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         async function saveEngineVoice() {
             if (!_engineVoiceCtx) return;
             const ctx = _engineVoiceCtx;
             const dirIdRaw = (document.getElementById('engineVoiceId').value || '').trim().toLowerCase();
             const dirId = dirIdRaw.replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
             if (!dirId) { showToast('Voice id required', 'error'); return; }
-            const file = document.getElementById('engineVoiceAudio').files[0];
-            if (ctx.mode === 'create' && !file) { showToast('Reference audio required for new voices', 'error'); return; }
+            if (ctx.mode === 'create' && !_engineVoiceToken) { showToast('Generate a preview first.', 'error'); return; }
             const meta = {
                 name: document.getElementById('engineVoiceName').value.trim() || (dirId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ' (' + _engineVoiceLabel(ctx.engine) + ')'),
                 group: document.getElementById('engineVoiceGroup').value,
@@ -6460,11 +6637,19 @@
             };
             const refText = document.getElementById('engineVoiceRefText').value.trim();
             if (refText) meta.ref_text = refText;
+            // Persist source attribution so the row badge can render it later
+            if (_engineVoiceToken) {
+                meta.source_kind = _engineVoiceSource;
+                if (_engineVoiceSource === 'youtube' && _engineVoiceLastUrl) meta.source_url = _engineVoiceLastUrl;
+                if (_engineVoiceSource === 'upload' && _engineVoiceLastFilename) meta.source_filename = _engineVoiceLastFilename;
+                if (Number.isFinite(_engineVoiceLastStart)) meta.source_start = _engineVoiceLastStart;
+                if (Number.isFinite(_engineVoiceLastEnd))   meta.source_end   = _engineVoiceLastEnd;
+            }
             const form = new FormData();
-            if (file) form.append('audio', file);
+            if (_engineVoiceToken) form.append('token', _engineVoiceToken);
             form.append('metadata', JSON.stringify(meta));
             const btn = document.getElementById('engineVoiceSaveBtn');
-            btn.disabled = true; btn.textContent = file ? 'Uploading + transcribing…' : 'Saving…';
+            btn.disabled = true; btn.textContent = _engineVoiceToken ? 'Uploading + transcribing…' : 'Saving…';
             document.getElementById('engineVoiceStatus').textContent = 'Saving voice (this can take 30–60 s with audio + Whisper)…';
             const r = await fetch('/api/superadmin/tts/voice-engine/' + ctx.engine + '/' + encodeURIComponent(dirId), {
                 method: 'PUT', body: form, credentials: 'include',
