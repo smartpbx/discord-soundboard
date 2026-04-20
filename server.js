@@ -4558,6 +4558,17 @@ app.get('/api/superadmin/tts/voice-engine/:engine/:id/reference', requireSuperad
     } catch (err) { ttsAdminError(res, err); }
 });
 
+// Full list of every rvc_<id> on disk — /voices hides RVC models that
+// have a Chatterbox pair, but the UI still needs the unfiltered list to
+// offer them as Fish refinement targets.
+app.get('/api/superadmin/tts/rvc-models', requireSuperadmin, async (req, res) => {
+    try {
+        const r = await ttsFetch('/admin/rvc-models', { timeout: 5000 });
+        const body = await r.json().catch(() => ({}));
+        res.status(r.status).json(body);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 app.get('/api/superadmin/tts/engines/health', requireSuperadmin, async (req, res) => {
     try {
         const r = await ttsFetch('/health/engines', { timeout: 5000 });

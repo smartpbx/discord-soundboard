@@ -118,6 +118,9 @@ class VoiceInfo(BaseModel):
     # excited, yell, angry, sad, happy). Missing emotions fall back to neutral
     # then to the legacy reference.wav at synth time.
     emotion_refs: Optional[list[str]] = None
+    # Explicit RVC model to pipe Fish output through when the stem-match
+    # convention (fish_X → rvc_X) doesn't apply. Only meaningful for Fish voices.
+    rvc_model_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +573,16 @@ def download_engine_reference(engine: str, voice_id: str, x_admin_token: Optiona
     )
 
 
+@app.get("/admin/rvc-models")
+def list_rvc_models(x_admin_token: Optional[str] = Header(None)):
+    """Return every RVC model on disk, even when one is hidden from /voices
+    because it has a Chatterbox pair. The UI uses this to let operators
+    pick which RVC model to apply to Fish voices whose stem doesn't match
+    exactly (e.g. fish_arnold_schwarenegger → rvc_arnold)."""
+    _check_admin(x_admin_token)
+    return {"models": [v["id"] for v in rvc_engine.get_voices()]}
+
+
 @app.post("/admin/voices/{engine}/_cache-bust")
 def cache_bust_engine(engine: str, x_admin_token: Optional[str] = Header(None)):
     """Force-rescan an engine's voice directory. Used by the lite voice
@@ -1013,7 +1026,11 @@ def _do_synthesize(req: SynthesizeRequest):
         # Fish supplies prosody + [tag] expressivity; RVC pins the timbre
         # to the trained target voice. Skip when voice metadata has
         # skip_rvc=true or the operator toggled RVC off for this voice.
-        rvc_model_id = voice_id.replace("fish_", "rvc_", 1)
+        # metadata.rvc_model_id wins if set (covers the case where fish
+        # stem and rvc stem don't match, e.g. fish_arnold_schwarenegger +
+        # rvc_arnold); otherwise fall back to the stem convention.
+        explicit_rvc = fish_engine.get_rvc_model_id(voice_id)
+        rvc_model_id = explicit_rvc or voice_id.replace("fish_", "rvc_", 1)
         skip_rvc = fish_engine.should_skip_rvc(voice_id)
         if req.use_rvc and not skip_rvc and rvc_model_id in rvc_ids:
             t1 = time.time()

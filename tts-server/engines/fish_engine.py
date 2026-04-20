@@ -17,6 +17,7 @@ import io
 import os
 import json
 import logging
+from typing import Optional
 
 import requests
 
@@ -80,6 +81,8 @@ def _scan_voices():
             "_ref_text": meta["ref_text"],
             "_dir": entry,
             "_skip_rvc": meta.get("skip_rvc", False),
+            "_rvc_model_id": meta.get("rvc_model_id"),
+            "rvc_model_id": meta.get("rvc_model_id"),
             "source_kind": meta.get("source_kind"),
             "source_url": meta.get("source_url"),
             "source_filename": meta.get("source_filename"),
@@ -122,6 +125,15 @@ def should_skip_rvc(voice_id: str) -> bool:
         if v["id"] == voice_id:
             return v.get("_skip_rvc", False)
     return False
+
+
+def get_rvc_model_id(voice_id: str) -> Optional[str]:
+    """Return the explicit rvc_model_id set in a Fish voice's metadata, or
+    None to fall back to the stem-match convention (fish_x → rvc_x)."""
+    for v in get_voices():
+        if v["id"] == voice_id:
+            return v.get("_rvc_model_id")
+    return None
 
 
 def _find_voice(voice_id: str) -> dict:

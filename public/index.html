@@ -6181,10 +6181,20 @@
             row.innerHTML = cells.join('') + tmode;
         }
 
+        let _allRvcModels = []; // full list (incl. models hidden by /voices filter)
+        async function fetchAllRvcModels() {
+            const r = await api('/api/superadmin/tts/rvc-models');
+            if (r && r.ok) {
+                const d = await r.json().catch(() => ({}));
+                _allRvcModels = Array.isArray(d.models) ? d.models : [];
+            }
+        }
+
         async function fetchTtsVoicesAdmin() {
             // Engine status pills are independent of voice list — fire in parallel
             // so a slow tts-server doesn't gate the rest of the panel.
             fetchTtsEngineHealth();
+            fetchAllRvcModels();
             const res = await api('/api/tts/status');
             if (!res || !res.ok) return;
             const data = await res.json();
@@ -6198,26 +6208,22 @@
             if (voices.length === 0) { tbody.innerHTML = ''; if (empty) empty.classList.remove('hidden'); return; }
             if (empty) empty.classList.add('hidden');
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            // Build the set of available RVC model ids (without prefix) so we
-            // can decide which Fish rows should show the refinement checkbox.
-            const _rvcModelStems = new Set(voices
-                .filter(vv => vv.engine === 'rvc')
-                .map(vv => vv.id.replace(/^rvc_/, '')));
-            // Also include RVC models that were hidden by the /voices filter
-            // (RVC voices that have a Chatterbox pair aren't surfaced — but
-            // they DO exist on disk and work for Fish refinement).
-            voices.forEach(vv => {
-                if (vv.engine === 'chatterbox') _rvcModelStems.add(vv.id.replace(/^cb_/, ''));
-            });
+            // The full RVC model list comes from /admin/rvc-models (fetched in
+            // parallel above) because /voices hides rvc_X when cb_X exists.
+            // Stems = ids without the rvc_ prefix.
+            const _rvcModelStems = new Set((_allRvcModels || []).map(id => id.replace(/^rvc_/, '')));
             tbody.innerHTML = voices.map(v => {
                 const disabled = _ttsAdminDisabled.includes(v.id);
                 const isCb = v.engine === 'chatterbox';
                 const isFish = v.engine === 'fish';
                 const fishStem = isFish ? v.id.replace(/^fish_/, '') : null;
-                const fishHasRvc = isFish && _rvcModelStems.has(fishStem);
+                const fishAutoMatch = isFish && _rvcModelStems.has(fishStem);
+                const fishExplicitRvc = isFish && v.rvc_model_id ? v.rvc_model_id : null;
+                const fishEffectiveRvc = fishExplicitRvc || (fishAutoMatch ? 'rvc_' + fishStem : null);
+                const fishCanRefine = isFish && _rvcModelStems.size > 0;
                 const rvcOn = isCb
                     ? (_ttsAdminRvcOverrides[v.id] ?? true)
-                    : (fishHasRvc ? (_ttsAdminRvcOverrides[v.id] ?? true) : false);
+                    : (fishEffectiveRvc ? (_ttsAdminRvcOverrides[v.id] ?? true) : false);
                 const isKokoro = v.engine === 'kokoro';
                 const isRvc = v.engine === 'rvc';
                 let actions = '';
@@ -6286,7 +6292,7 @@
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.engine) + '</td>'
                     + '<td style="padding:0.35rem 0.5rem">' + esc(v.group || '') + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem"><input type="checkbox" ' + (disabled ? '' : 'checked') + ' onchange="toggleTtsVoiceEnabled(\'' + esc(v.id) + '\', this.checked)" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer"></td>'
-                    + '<td style="text-align:center;padding:0.35rem 0.5rem">' + ((isCb || fishHasRvc) ? '<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" title="' + (isFish ? 'Pipe Fish output through rvc_' + esc(fishStem) + ' for target-timbre refinement' : 'Enable RVC refinement') + '" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">' : '<span style="color:var(--text-muted)" title="' + (isFish ? 'No matching rvc_' + esc(fishStem || '?') + ' model trained — train one via Voice Management → Target engine: RVC' : '') + '">--</span>') + '</td>'
+                    + '<td style="text-align:center;padding:0.35rem 0.5rem;white-space:nowrap">' + (isCb ? ('<input type="checkbox" ' + (rvcOn ? 'checked' : '') + ' onchange="toggleTtsVoiceRvc(\'' + esc(v.id) + '\', this.checked)" title="Enable RVC refinement" style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer">') : (isFish && fishCanRefine ? _renderFishRvcCell(v, fishStem, fishExplicitRvc, fishEffectiveRvc, rvcOn) : '<span style="color:var(--text-muted)">--</span>')) + '</td>'
                     + '<td style="text-align:center;padding:0.35rem 0.5rem">' + expCell + '</td>'
                     + '<td style="text-align:right;padding:0.35rem 0.5rem;white-space:nowrap">' + actions + '</td>'
                     + '</tr>' + refsRow;
@@ -6304,6 +6310,50 @@
         async function toggleTtsVoiceRvc(voiceId, rvcOn) {
             _ttsAdminRvcOverrides[voiceId] = rvcOn;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsVoiceRvcOverrides: _ttsAdminRvcOverrides }) });
+        }
+
+        // Fish rows show a checkbox + dropdown: pick which rvc_<id> model to
+        // pipe through. Default is stem-match (fish_X → rvc_X); fallback is
+        // "(none)". If the operator renames the voice (fish_arnold_schwarenegger
+        // won't match rvc_arnold automatically) they can manually map here.
+        function _renderFishRvcCell(v, fishStem, explicitRvc, effectiveRvc, rvcOn) {
+            const _esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            const dropdownOpts = ['<option value="">(none — skip RVC)</option>']
+                .concat((_allRvcModels || []).map(id => {
+                    const chosen = effectiveRvc === id ? ' selected' : '';
+                    const tag = id === 'rvc_' + fishStem ? ' (auto-match)' : '';
+                    return '<option value="' + _esc(id) + '"' + chosen + '>' + _esc(id) + tag + '</option>';
+                }));
+            const cbDisabled = effectiveRvc ? '' : 'disabled';
+            const cb = '<input type="checkbox" ' + (rvcOn && effectiveRvc ? 'checked' : '') + ' ' + cbDisabled
+                + ' onchange="toggleTtsVoiceRvc(\'' + _esc(v.id) + '\', this.checked)"'
+                + ' title="Pipe Fish output through the selected RVC model for timbre refinement"'
+                + ' style="accent-color:var(--accent);width:1.1rem;height:1.1rem;cursor:pointer;vertical-align:middle">';
+            const sel = '<select onchange="setFishRvcModel(\'' + _esc(v.id) + '\', this.value)"'
+                + ' title="Which RVC model to apply. Auto-match picks rvc_' + _esc(fishStem || '') + '."'
+                + ' style="margin-left:0.35rem;padding:1px 3px;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.7rem;max-width:110px">'
+                + dropdownOpts.join('') + '</select>';
+            return cb + sel;
+        }
+
+        async function setFishRvcModel(voiceId, rvcModelId) {
+            const dirId = voiceId.replace(/^fish_/, '');
+            const existing = (window._lastTtsVoices || []).find(vv => vv.id === voiceId) || {};
+            const meta = {
+                name: existing.name || dirId,
+                group: existing.group || 'Celebrity',
+                gender: existing.gender || 'unknown',
+                rvc_model_id: rvcModelId || null,
+            };
+            const form = new FormData();
+            form.append('metadata', JSON.stringify(meta));
+            const r = await fetch('/api/superadmin/tts/voice-engine/fish/' + encodeURIComponent(dirId), {
+                method: 'PUT', body: form, credentials: 'include',
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { showToast(d.error || 'Failed to set RVC model', 'error'); return; }
+            showToast(rvcModelId ? 'Fish ' + voiceId + ' will use ' + rvcModelId : 'RVC cleared for ' + voiceId, 'success');
+            fetchTtsVoicesAdmin();
         }
 
         async function setTtsVoiceDefaultExpression(voiceId, value) {
