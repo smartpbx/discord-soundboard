@@ -78,14 +78,16 @@ If the user supplied URLs, skip to step 3. Otherwise:
 
 ### 2. Find good source URLs (only if not supplied)
 
-Search YouTube for the target voice using `WebSearch` or `Bash(yt-dlp ...)`. Aim for **5–10 clips totaling ~20–30 min** of source audio. Look for:
+Search YouTube for the target voice using `WebSearch` or `Bash(yt-dlp ...)`. Aim for **5–10 clips totaling ~20–40 min** of source audio. Look for:
 
 - **Solo monologues** — promos, talking-head interviews, podcast guest segments. Avoid clips dominated by interviewer questions.
 - **Studio-quality audio** — podcast episodes, late-night TV appearances, dedicated voice recordings. Avoid live concerts, crowded venues, anything with persistent music underlay.
 - **No laugh tracks, no background music** — sitcom clips and music-video clips will pollute training. Cartoon character clips often have these; check.
-- **Length 1–15 minutes per clip** — too-short clips don't give the diarization step enough to cluster on; too-long ones may have many topic shifts.
+- **Length 3–10 minutes per clip is ideal** — too-short clips don't give the diarization step enough to cluster on.
 
-Quick validation: run `yt-dlp --print "%(duration)s %(title)s" "<url>"` to confirm reasonable length. Optionally download a sample to `/tmp/voice-train/preview/` and check with `ffprobe -af volumedetect -f null - 2>&1 | grep mean_volume` — clips with constant high-volume backing track usually show mean > -15 dB.
+**IMPORTANT: Phase 1 hard-caps each clip at 10 min** (via `yt-dlp --download-sections *0-600`) and the **total at 60 min** across all clips. If you pick a 2-hour Theo Von podcast, only the first 10 min gets downloaded — plan your URL mix accordingly. You can override with `--per-clip-cap-sec` / `--total-cap-sec` when calling `01_download.py` but default cases should accept the cap.
+
+Quick validation: run `yt-dlp --print "%(duration)s %(title)s" "<url>"` to confirm reasonable length and that the clip is relevant. Optionally download a sample to `/tmp/voice-train/preview/` and check with `ffprobe -af volumedetect -f null - 2>&1 | grep mean_volume` — clips with constant high-volume backing track usually show mean > -15 dB.
 
 ### 3. Run init_job.py
 
