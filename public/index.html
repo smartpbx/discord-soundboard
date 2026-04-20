@@ -7301,6 +7301,16 @@
             if (meta.status !== 'running') {
                 stopTrainPoll();
                 fetchTrainJobs();
+                // Lite-trainer jobs deploy straight to the engine dir and
+                // cache-bust tts-server's voice list, but the user's TTS
+                // dropdown on the main card won't re-fetch unless something
+                // triggers it. Kick a refresh so the new voice shows up
+                // without needing a page reload.
+                if (meta.status === 'completed') {
+                    if (typeof fetchTtsVoicesAdmin === 'function') fetchTtsVoicesAdmin();
+                    else if (typeof fetchTtsStatus === 'function') fetchTtsStatus();
+                    showToast('Training complete — voice list refreshed', 'success');
+                }
             }
         }
 
