@@ -4645,6 +4645,30 @@ app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVo
 
 // Synth a short test clip and return raw WAV bytes for in-browser preview.
 // Doesn't queue to Discord — purely for auditioning a voice before using it.
+// Humanize the TTS message via the Ollama LLM — adds uhhs / commas / pauses
+// so the synth sounds less robotic. Client calls this first when the user
+// ticks "humanize" on the TTS card, then sends the returned text to /speak.
+// Safe to call even if the LLM is unavailable: returns the original on any
+// failure, with `changed: false` so the client can decide whether to show a
+// "couldn't humanize" hint.
+app.post('/api/tts/humanize', requireAuth, async (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests cannot humanize.' });
+    const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
+    if (!text.trim()) return res.status(400).json({ error: 'Text required' });
+    if (text.length > 2000) return res.status(400).json({ error: 'Text too long for humanize (>2000 chars)' });
+    try {
+        const humanize = require('./lib/tts-humanize-llm');
+        if (!humanize.isAvailable()) {
+            return res.json({ available: false, text, humanized: text, changed: false });
+        }
+        const out = await humanize.humanize(text);
+        res.json({ available: true, text, humanized: out, changed: out !== text });
+    } catch (e) {
+        console.warn('[tts-humanize] error:', e && e.message);
+        res.json({ available: true, text, humanized: text, changed: false, error: (e && e.message) || 'unknown' });
+    }
+});
+
 app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot synthesize tests.' });

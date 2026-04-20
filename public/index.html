@@ -822,6 +822,10 @@
                     <option value="sad">Sad</option>
                     <option value="happy">Happy</option>
                 </select>
+                <label title="Run the text through an LLM first to add natural pauses (uhhs, commas, ellipses) and tighten punctuation. Makes the synth sound more human." style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer; user-select:none; white-space:nowrap;">
+                    <input type="checkbox" id="ttsHumanize" style="accent-color:var(--accent); margin:0;">
+                    <span>🧠 Humanize</span>
+                </label>
                 <div class="tts-action-group">
                     <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
                     <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different. Click until you like one.">🔄 Again</button>
@@ -5855,6 +5859,10 @@
         if (ttsTextEl) {
             ttsTextEl.addEventListener('input', updateTtsCharCount);
         }
+        // Restore Humanize checkbox state from prefs
+        const ttsHumanizeEl = document.getElementById('ttsHumanize');
+        if (ttsHumanizeEl) ttsHumanizeEl.checked = !!loadPrefs().ttsHumanize;
+
         const ttsVolSlider = document.getElementById('ttsVolumeSlider');
         if (ttsVolSlider) {
             const prefs = loadPrefs();
@@ -5894,7 +5902,7 @@
             const ta = document.getElementById('ttsTextInput');
             const sel = document.getElementById('ttsVoiceSelect');
             if (!ta || !sel) return;
-            const text = (ta.value || '').trim();
+            let text = (ta.value || '').trim();
             if (!text) { setTtsStatus('Type something first.', true); return; }
             if (text.length > ttsMaxLen) { setTtsStatus(`Text too long (${text.length}/${ttsMaxLen}).`, true); return; }
             const voiceId = sel.value;
@@ -5908,6 +5916,30 @@
             setTtsStatus('<span class="tts-spinner"></span> Generating speech...');
 
             try {
+                // Optional humanize pass: run the text through the LLM to add
+                // natural pauses / disfluencies / punctuation before synth.
+                // Non-fatal — if the LLM is unavailable or refuses, we fall
+                // back to the raw text.
+                const humanize = document.getElementById('ttsHumanize')?.checked;
+                savePrefs({ ttsHumanize: !!humanize });
+                if (humanize) {
+                    setTtsStatus('<span class="tts-spinner"></span> Humanizing text…');
+                    try {
+                        const hr = await api('/api/tts/humanize', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text }),
+                        });
+                        if (hr && hr.ok) {
+                            const hd = await hr.json().catch(() => ({}));
+                            if (hd && typeof hd.humanized === 'string' && hd.changed) {
+                                text = hd.humanized;
+                                // Show the rewrite so the user can see what got sent
+                                setTtsStatus('<span class="tts-spinner"></span> Generating: <em style="color:var(--text-muted)">' + (text.length > 90 ? text.slice(0, 90) + '…' : text).replace(/</g,'&lt;') + '</em>');
+                            }
+                        }
+                    } catch {}
+                }
+
                 const v = ttsVoices.find(x => x.id === voiceId);
                 const isCb = v && v.engine === 'chatterbox';
                 const r = await api('/api/tts/speak', {
