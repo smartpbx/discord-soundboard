@@ -406,6 +406,33 @@ async def upsert_engine_voice(
                 os.replace(tmp, ref_path)
             except subprocess.CalledProcessError as e:
                 raise HTTPException(status_code=500, detail=f"ffmpeg trim failed for GSV: {e}")
+        elif engine == "fish":
+            # Fish S2 Pro crashes on overlong references (we've seen ~150 s
+            # produce "Failed to generate speech" 500s). Cap at 45 s — if the
+            # upload is longer we trim to the first 45 s. Keep raw upload as
+            # .bak so operator can recover manually if they need more.
+            FISH_MAX_REF_SEC = 45
+            try:
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=nw=1:nk=1", ref_path],
+                    capture_output=True, text=True, check=True, timeout=15,
+                )
+                dur = float((probe.stdout or "0").strip() or 0)
+            except Exception:
+                dur = 0
+            if dur > FISH_MAX_REF_SEC:
+                tmp = ref_path + ".tmp.wav"
+                try:
+                    subprocess.run([
+                        "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+                        "-i", ref_path, "-t", str(FISH_MAX_REF_SEC),
+                        "-ar", "24000", "-ac", "1", tmp,
+                    ], check=True, timeout=60)
+                    os.replace(tmp, ref_path)
+                    log.info("fish: trimmed %s reference from %.1fs → %ds", dir_id, dur, FISH_MAX_REF_SEC)
+                except subprocess.CalledProcessError as e:
+                    raise HTTPException(status_code=500, detail=f"ffmpeg trim for Fish ref cap failed: {e}")
         new_audio_written = True
     # Re-transcribe if (a) audio was changed AND ref_text not provided, or
     # (b) explicit user_meta.regenerate_ref_text=true
