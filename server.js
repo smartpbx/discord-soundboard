@@ -4463,6 +4463,29 @@ app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, as
 // One-click: create a Fish v2 voice by cloning an existing Chatterbox
 // reference. Whisper-transcribes for ref_text. Fish accepts the full
 // 5-30s clip as-is so no trim needed.
+// Stream the current reference.wav for an engine voice. Admin-only.
+// Older voices have no source_* metadata — this is the escape hatch that lets
+// the operator hear what's deployed and optionally re-upload via the UI.
+app.get('/api/superadmin/tts/voice-engine/:engine/:id/reference', requireSuperadmin, async (req, res) => {
+    const engine = req.params.engine;
+    if (!['chatterbox', 'gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine' });
+    const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
+    if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
+    try {
+        const url = `${TTS_API_URL}/admin/voices/${engine}/${encodeURIComponent(dirId)}/reference`;
+        const r = await fetch(url, { headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' } });
+        if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            return res.status(r.status === 401 ? 502 : r.status).json({ error: body.detail || body.error || `TTS ${r.status}` });
+        }
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Disposition', `attachment; filename="${engine}_${dirId}_reference.wav"`);
+        res.setHeader('Cache-Control', 'no-store');
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.send(buf);
+    } catch (err) { ttsAdminError(res, err); }
+});
+
 app.get('/api/superadmin/tts/engines/health', requireSuperadmin, async (req, res) => {
     try {
         const r = await ttsFetch('/health/engines', { timeout: 5000 });

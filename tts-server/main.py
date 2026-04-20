@@ -430,6 +430,27 @@ async def upsert_engine_voice(
     return {"ok": True, "voice_id": prefix + dir_id, "ref_text": merged["ref_text"], "name": merged["name"]}
 
 
+@app.get("/admin/voices/{engine}/{voice_id}/reference")
+def download_engine_reference(engine: str, voice_id: str, x_admin_token: Optional[str] = Header(None)):
+    """Return the raw reference.wav for an engine voice so the operator can
+    download + inspect it. Older Chatterbox voices have no source_* metadata
+    so this is the only way to know what the clone is actually listening to."""
+    _check_admin(x_admin_token)
+    if engine not in ("chatterbox", "gptsovits", "fish"):
+        raise HTTPException(status_code=400, detail=f"Unsupported engine: {engine}")
+    dir_id = _normalize_voice_dir_id(voice_id)
+    base = os.path.join(os.path.dirname(__file__), "models", engine, dir_id)
+    ref = os.path.join(base, "reference.wav")
+    if not os.path.exists(ref):
+        raise HTTPException(status_code=404, detail=f"No reference.wav at {ref}")
+    with open(ref, "rb") as f:
+        data = f.read()
+    return Response(
+        content=data, media_type="audio/wav",
+        headers={"Content-Disposition": f'attachment; filename="{engine}_{dir_id}_reference.wav"'},
+    )
+
+
 @app.post("/admin/voices/{engine}/_cache-bust")
 def cache_bust_engine(engine: str, x_admin_token: Optional[str] = Header(None)):
     """Force-rescan an engine's voice directory. Used by the lite voice
