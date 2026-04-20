@@ -6300,6 +6300,7 @@
                     const engDownload = '/api/superadmin/tts/voice-engine/' + eng + '/' + encodeURIComponent(dirId) + '/reference';
                     actions = '<button type="button" class="btn btn-ghost btn-sm" onclick="openEditEngineVoice(\'' + eng + '\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Replace reference clip / edit ref_text">Edit</button>'
                         + ' <a class="btn btn-ghost btn-sm" href="' + engDownload + '" download title="Download the current reference.wav">📥</a>'
+                        + (eng === 'fish' ? (' <button type="button" class="btn btn-ghost btn-sm" onclick="autoPickEmotionRefs(\'' + esc(dirId) + '\', \'' + esc(v.name) + '\', \'fish\')" title="Auto-pick + Whisper-transcribe per-emotion reference clips from this voice\'s dataset (or fall back to splitting the main reference). Takes ~1-2 min.">⚡ Auto refs</button>') : '')
                         + ' <button type="button" class="btn btn-ghost btn-sm" onclick="testTtsVoice(\'' + esc(v.id) + '\', \'' + esc(v.name) + '\')" title="Synth a 1-line preview clip">▶ Test</button>'
                         + ' <button type="button" class="btn btn-danger btn-sm" onclick="deleteEngineVoice(\'' + eng + '\',\'' + esc(dirId) + '\', \'' + esc(v.name) + '\')" title="Delete this voice (re-clone or re-add to bring it back)">Delete</button>';
                 } else {
@@ -6320,21 +6321,23 @@
                 const expCell = isCb
                     ? '<input type="number" min="0.25" max="2.0" step="0.05" value="' + defaultExp.toFixed(2) + '" onchange="setTtsVoiceDefaultExpression(\'' + esc(v.id) + '\', this.value)" style="width:4.5rem;padding:0.2rem 0.3rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:0.85rem;text-align:center;">'
                     : '<span style="color:var(--text-muted)">--</span>';
-                // Emotion refs badge: show which per-emotion clips are present.
-                // Clicking the voice name expands to an inline editor with upload slots.
+                // Emotion refs: Chatterbox and Fish both support refs/<emotion>.wav.
+                // Fish needs a paired .txt transcript too (handled server-side).
                 const EMOS = ['soft','neutral','excited','yell','angry','sad','happy'];
                 const presentRefs = Array.isArray(v.emotion_refs) ? v.emotion_refs : [];
-                const refsBadge = isCb
+                const emoRefsEngine = isCb ? 'chatterbox' : (isFish ? 'fish' : null);
+                const refsBadge = emoRefsEngine
                     ? '<span class="emo-refs-badge" onclick="toggleEmoRefs(\'' + esc(v.id) + '\')" style="cursor:pointer;color:' + (presentRefs.length ? 'var(--accent)' : 'var(--text-muted)') + ';font-size:0.72rem;margin-left:0.4rem" title="Per-emotion reference clips (click to edit). ' + (presentRefs.length ? presentRefs.join(', ') : 'none uploaded yet') + '">🎭 ' + (presentRefs.length ? (presentRefs.length + '/7') : 'none') + '</span>'
                     : '';
-                const dirIdForRefs = v.id.replace(/^cb_/, '');
-                const refsRow = isCb
-                    ? '<tr class="emo-refs-row hidden" id="emo-refs-' + esc(v.id) + '"><td colspan="7" style="padding:0.5rem 1rem;background:var(--surface-hover);border-top:1px dashed var(--border)"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.4rem">Per-emotion reference clips (≥1 KB wav/mp3, 6–12s ideal). Missing emotions fall back to the main reference.</div><div style="display:flex;flex-wrap:wrap;gap:0.5rem">'
+                const prefixForRefs = isCb ? 'cb_' : (isFish ? 'fish_' : '');
+                const dirIdForRefs = v.id.replace(new RegExp('^' + prefixForRefs), '');
+                const refsRow = emoRefsEngine
+                    ? '<tr class="emo-refs-row hidden" id="emo-refs-' + esc(v.id) + '"><td colspan="7" style="padding:0.5rem 1rem;background:var(--surface-hover);border-top:1px dashed var(--border)"><div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:0.4rem">Per-emotion reference clips (≥1 KB wav/mp3, 6–12s ideal). Missing emotions fall back to the main reference.' + (isFish ? ' Fish auto-transcribes each clip via Whisper on save.' : '') + '</div><div style="display:flex;flex-wrap:wrap;gap:0.5rem">'
                         + EMOS.map(e => {
                             const has = presentRefs.includes(e);
                             return '<div style="display:flex;flex-direction:column;gap:0.2rem;padding:0.3rem 0.5rem;background:var(--surface);border:1px solid ' + (has ? 'var(--accent)' : 'var(--border)') + ';border-radius:var(--radius-sm);min-width:8rem">'
-                                + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.72rem"><span style="font-weight:500;color:' + (has ? 'var(--accent)' : 'var(--text-muted)') + '">' + e + (has ? ' ✓' : '') + '</span>' + (has ? '<button type="button" class="btn btn-ghost btn-sm" onclick="deleteEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\')" style="padding:0.05rem 0.35rem;font-size:0.68rem">✕</button>' : '') + '</div>'
-                                + '<label style="font-size:0.68rem;cursor:pointer;color:var(--text-muted)">Upload<input type="file" accept="audio/*" style="display:none" onchange="uploadEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\',this)"></label>'
+                                + '<div style="display:flex;justify-content:space-between;align-items:center;font-size:0.72rem"><span style="font-weight:500;color:' + (has ? 'var(--accent)' : 'var(--text-muted)') + '">' + e + (has ? ' ✓' : '') + '</span>' + (has ? '<button type="button" class="btn btn-ghost btn-sm" onclick="deleteEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\',\'' + emoRefsEngine + '\')" style="padding:0.05rem 0.35rem;font-size:0.68rem">✕</button>' : '') + '</div>'
+                                + '<label style="font-size:0.68rem;cursor:pointer;color:var(--text-muted)">Upload<input type="file" accept="audio/*" style="display:none" onchange="uploadEmotionRef(\'' + esc(dirIdForRefs) + '\',\'' + e + '\',this,\'' + emoRefsEngine + '\')"></label>'
                                 + '</div>';
                         }).join('')
                         + '</div></td></tr>'
@@ -6667,31 +6670,35 @@
             const row = document.getElementById('emo-refs-' + voiceId);
             if (row) row.classList.toggle('hidden');
         }
-        async function uploadEmotionRef(dirId, emotion, inputEl) {
+        async function uploadEmotionRef(dirId, emotion, inputEl, engine) {
+            const eng = engine || 'chatterbox';
             const file = inputEl.files && inputEl.files[0];
             if (!file) return;
             const form = new FormData();
             form.append('audio', file);
-            showToast('Uploading ' + emotion + ' ref for ' + dirId + '…', 'info');
-            const r = await fetch('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion), {
+            showToast('Uploading ' + emotion + ' ref for ' + eng + '/' + dirId + '…', 'info');
+            const r = await fetch('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion) + '?engine=' + eng, {
                 method: 'PUT', body: form, credentials: 'include',
             });
             inputEl.value = '';
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { showToast(d.error || d.detail || 'Upload failed', 'error'); return; }
-            showToast('Uploaded ' + emotion + ' ref (' + Math.round((d.bytes || 0) / 1024) + ' KB)', 'success');
+            const note = d.ref_text ? (' · "' + d.ref_text.slice(0, 40) + '…"') : '';
+            showToast('Uploaded ' + emotion + ' ref (' + Math.round((d.bytes || 0) / 1024) + ' KB)' + note, 'success');
             fetchTtsVoicesAdmin();
         }
-        async function deleteEmotionRef(dirId, emotion) {
-            if (!confirm('Remove the ' + emotion + ' reference clip for ' + dirId + '? Synth for that emotion will fall back to neutral.')) return;
-            const r = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion), { method: 'DELETE' });
+        async function deleteEmotionRef(dirId, emotion, engine) {
+            const eng = engine || 'chatterbox';
+            if (!confirm('Remove the ' + emotion + ' reference clip for ' + eng + '/' + dirId + '? Synth for that emotion will fall back to neutral.')) return;
+            const r = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion) + '?engine=' + eng, { method: 'DELETE' });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
             showToast(d.deleted ? 'Removed ' + emotion + ' ref' : 'No ' + emotion + ' ref was present', 'info');
             fetchTtsVoicesAdmin();
         }
 
-        async function autoPickEmotionRefs(dirId, name) {
+        async function autoPickEmotionRefs(dirId, name, engine) {
+            const eng = engine || 'chatterbox';
             if (!confirm('Auto-pick reference clips for "' + name + '"?\n\nScans this voice\'s dataset archive (models/datasets/' + dirId + '/chunks/) and picks the best chunk per emotion using audio features (RMS, pitch, spectral centroid). Takes ~30-60 seconds. Existing refs will be overwritten.')) return;
             // Lock the button + all others on the same row so the operator can see
             // work is happening. Auto-refs can take 30–60s depending on chunk
@@ -6706,7 +6713,7 @@
             showToast('Analyzing "' + name + '" chunks (librosa RMS + pitch + SC features, ~30–60 s)…', 'info');
             let res, d = {};
             try {
-                res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/auto-emotion-refs', {
+                res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/auto-emotion-refs?engine=' + eng, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ overwrite: true }),

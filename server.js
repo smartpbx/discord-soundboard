@@ -4520,11 +4520,12 @@ app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoi
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const emotion = String(req.params.emotion || '').toLowerCase();
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Audio file required (multipart field "audio")' });
+    const engine = (req.query.engine === 'fish') ? 'fish' : 'chatterbox';
     try {
         // Use Node 18+'s native FormData / Blob via undici — no extra npm dep.
         const form = new FormData();
         form.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' }), 'ref.wav');
-        const url = `${TTS_API_URL}/voices/chatterbox/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
+        const url = `${TTS_API_URL}/voices/${engine}/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
         const fetchRes = await fetch(url, {
             method: 'PUT', body: form,
             headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
@@ -4534,9 +4535,9 @@ app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoi
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
-            action: 'voice.upload-emotion-ref',
+            action: `voice.upload-emotion-ref-${engine}`,
             target: dirId,
-            details: { emotion, bytes: req.file.size },
+            details: { emotion, bytes: req.file.size, engine },
         });
         res.json(body);
     } catch (err) {
@@ -4548,8 +4549,9 @@ app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, asy
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const emotion = String(req.params.emotion || '').toLowerCase();
+    const engine = (req.query.engine === 'fish') ? 'fish' : 'chatterbox';
     try {
-        const url = `${TTS_API_URL}/voices/chatterbox/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
+        const url = `${TTS_API_URL}/voices/${engine}/${encodeURIComponent(dirId)}/refs/${encodeURIComponent(emotion)}`;
         const fetchRes = await fetch(url, {
             method: 'DELETE',
             headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
@@ -4570,8 +4572,9 @@ app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, a
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const overwrite = req.body?.overwrite !== false;
+    const engine = (req.query.engine === 'fish') ? 'fish' : 'chatterbox';
     try {
-        const url = `${TTS_API_URL}/admin/voices/chatterbox/${encodeURIComponent(dirId)}/auto-emotion-refs?overwrite=${overwrite}`;
+        const url = `${TTS_API_URL}/admin/voices/${engine}/${encodeURIComponent(dirId)}/auto-emotion-refs?overwrite=${overwrite}`;
         const r = await fetch(url, {
             method: 'POST',
             headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },

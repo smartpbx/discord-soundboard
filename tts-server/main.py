@@ -1354,6 +1354,141 @@ def delete_chatterbox_emotion_ref(
     return {"ok": True, "deleted": False}
 
 
+# ---------------------------------------------------------------------------
+# Fish per-emotion refs — mirrors the Chatterbox ones above, but also writes
+# a sibling refs/<emotion>.txt via Whisper so Fish gets the right transcript
+# with each specific emotion clip (its API needs both audio + text).
+# ---------------------------------------------------------------------------
+
+@app.put("/voices/fish/{voice_id}/refs/{emotion}")
+async def upload_fish_emotion_ref(
+    voice_id: str,
+    emotion: str,
+    audio: UploadFile = File(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    _check_admin(x_admin_token)
+    emo = emotion.lower().strip()
+    if emo not in fish_engine.EMOTION_REFS:
+        raise HTTPException(status_code=400, detail=f"Unknown emotion '{emo}'. Valid: {', '.join(fish_engine.EMOTION_REFS)}")
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(fish_engine.get_models_dir(), dir_id)
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
+    refs_dir = os.path.join(voice_dir, "refs")
+    os.makedirs(refs_dir, exist_ok=True)
+    audio_bytes = await audio.read()
+    if len(audio_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
+    final_path = os.path.join(refs_dir, f"{emo}.wav")
+    # Write raw bytes, then normalize: Fish wants 24 kHz mono + cap at ~30 s.
+    tmp_raw = final_path + ".raw.tmp"
+    with open(tmp_raw, "wb") as f: f.write(audio_bytes)
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+            "-i", tmp_raw, "-t", "30", "-ar", "24000", "-ac", "1", final_path,
+        ], check=True, timeout=60)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"ffmpeg normalize for Fish ref failed: {e}")
+    finally:
+        try: os.remove(tmp_raw)
+        except OSError: pass
+    # Whisper-transcribe so Fish gets the ref_text paired with this clip.
+    try:
+        ref_text = _whisper_transcribe(final_path)
+        with open(os.path.join(refs_dir, f"{emo}.txt"), "w") as f: f.write(ref_text)
+    except Exception as e:
+        ref_text = ""
+        log.warning("fish ref upload: Whisper failed for %s [%s]: %s", dir_id, emo, e)
+    fish_engine.invalidate_cache()
+    log.info("Fish emotion-ref uploaded: %s [%s] (%d bytes, text='%s...')",
+             dir_id, emo, len(audio_bytes), (ref_text or '')[:40])
+    return {"ok": True, "voice_id": f"fish_{dir_id}", "emotion": emo, "bytes": len(audio_bytes), "ref_text": ref_text}
+
+
+@app.delete("/voices/fish/{voice_id}/refs/{emotion}")
+def delete_fish_emotion_ref(voice_id: str, emotion: str, x_admin_token: Optional[str] = Header(None)):
+    _check_admin(x_admin_token)
+    emo = emotion.lower().strip()
+    dir_id = _normalize_voice_dir_id(voice_id)
+    refs_dir = os.path.join(fish_engine.get_models_dir(), dir_id, "refs")
+    wav = os.path.join(refs_dir, f"{emo}.wav")
+    txt = os.path.join(refs_dir, f"{emo}.txt")
+    removed = False
+    for p in (wav, txt):
+        if os.path.exists(p):
+            os.remove(p); removed = True
+    if removed:
+        fish_engine.invalidate_cache()
+    return {"ok": True, "deleted": removed}
+
+
+@app.post("/admin/voices/fish/{voice_id}/auto-emotion-refs")
+def auto_select_fish_emotion_refs(voice_id: str, x_admin_token: Optional[str] = Header(None), overwrite: bool = True, chunks_dir: Optional[str] = None):
+    """Same librosa-scored auto-pick as Chatterbox, but writes into the Fish
+    voice's refs/ dir AND runs Whisper on each picked clip so Fish gets the
+    transcript paired with each emotion-specific wav.
+    """
+    _check_admin(x_admin_token)
+    dir_id = _normalize_voice_dir_id(voice_id)
+    voice_dir = os.path.join(fish_engine.get_models_dir(), dir_id)
+    if not os.path.isdir(voice_dir):
+        raise HTTPException(status_code=404, detail=f"Fish voice not found: {voice_id}")
+    # Share the chunks-dir logic with Chatterbox: datasets/<dir_id>/chunks/
+    # when it exists, otherwise ffmpeg-split reference.wav.
+    if chunks_dir is None:
+        default_chunks = os.path.join(os.path.dirname(__file__), "models", "datasets", dir_id, "chunks")
+        if os.path.isdir(default_chunks) and any(p.endswith(".wav") for p in os.listdir(default_chunks)):
+            chunks_dir = default_chunks
+        else:
+            ref = os.path.join(voice_dir, "reference.wav")
+            if not os.path.exists(ref):
+                raise HTTPException(status_code=404, detail="No dataset archive AND no reference.wav — upload emotion clips manually.")
+            tmp_dir = os.path.join("/tmp", f"fish_emo_fallback_{dir_id}_{int(time.time())}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", ref,
+                    "-f", "segment", "-segment_time", "3", "-ar", "24000", "-ac", "1",
+                    os.path.join(tmp_dir, "win_%03d.wav"),
+                ], check=True, timeout=60)
+            except subprocess.CalledProcessError as e:
+                raise HTTPException(status_code=500, detail=f"ffmpeg fallback split failed: {e}")
+            chunks_dir = tmp_dir
+    tool = os.path.join(os.path.dirname(__file__), "tools", "select_emotion_refs.py")
+    py = "/opt/GPT-SoVITS/.venv/bin/python"
+    try:
+        args = [py, tool, "--voice-id", dir_id, "--chunks-dir", chunks_dir, "--out-dir", fish_engine.get_models_dir()]
+        if overwrite: args.append("--overwrite")
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"emotion-ref selection failed: {(e.stderr or e.stdout or '')[-1500:]}")
+    try:
+        report = json.loads(proc.stdout.strip().split("\n")[-1]) if "{" in proc.stdout else {}
+    except Exception:
+        import re as _re
+        m = _re.search(r"\{[\s\S]*\}\s*$", proc.stdout)
+        report = json.loads(m.group(0)) if m else {"raw": proc.stdout[-500:]}
+    # Whisper-transcribe each newly-written ref so Fish has the paired text.
+    refs_dir = os.path.join(voice_dir, "refs")
+    transcripts = {}
+    if os.path.isdir(refs_dir):
+        for emo in fish_engine.EMOTION_REFS:
+            wav = os.path.join(refs_dir, f"{emo}.wav")
+            txt = os.path.join(refs_dir, f"{emo}.txt")
+            if os.path.exists(wav) and (not os.path.exists(txt) or overwrite):
+                try:
+                    text = _whisper_transcribe(wav)
+                    with open(txt, "w") as f: f.write(text)
+                    transcripts[emo] = text[:80]
+                except Exception as e:
+                    log.warning("fish auto-refs: Whisper failed for %s [%s]: %s", dir_id, emo, e)
+    fish_engine.invalidate_cache()
+    if isinstance(report, dict): report["transcripts"] = transcripts
+    return report
+
+
 class ChatterboxMetadataPatch(BaseModel):
     name: Optional[str] = None
     gender: Optional[str] = None

@@ -32,6 +32,11 @@ MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", 
 API_URL = os.environ.get("FISH_API_URL", "http://localhost:8881").rstrip("/")
 _SYNTH_TIMEOUT = 120
 
+# Emotions we look for in a voice's refs/ subdirectory. Missing ones fall
+# back to "neutral" (the legacy reference.wav). Same set as Chatterbox so
+# the auto-pick librosa scorer can target both engines with one pass.
+EMOTION_REFS = ("soft", "neutral", "excited", "yell", "angry", "sad", "happy")
+
 # Map our preset emotions to Fish's native inline markers. S2 Pro uses
 # [tag] syntax (square brackets — see its README) and supports 15,000+
 # free-form descriptors; these are just the canonical short forms we
@@ -70,6 +75,14 @@ def _scan_voices():
         if "ref_text" not in meta:
             log.warning("fish: skipping %s — metadata.json missing ref_text", entry)
             continue
+        # Emotion-tagged reference clips at refs/<emotion>.wav — optional, fall
+        # back to the legacy reference.wav when a specific emotion isn't present.
+        refs_dir = os.path.join(voice_dir, "refs")
+        emo_refs = []
+        if os.path.isdir(refs_dir):
+            for emo in EMOTION_REFS:
+                if os.path.exists(os.path.join(refs_dir, f"{emo}.wav")):
+                    emo_refs.append(emo)
         voices.append({
             "id": f"fish_{entry}",
             "name": meta.get("name", entry),
@@ -84,6 +97,7 @@ def _scan_voices():
             "_rvc_model_id": meta.get("rvc_model_id"),
             "rvc_model_id": meta.get("rvc_model_id"),
             "skip_rvc": meta.get("skip_rvc", False),
+            "emotion_refs": emo_refs,
             "source_kind": meta.get("source_kind"),
             "source_url": meta.get("source_url"),
             "source_filename": meta.get("source_filename"),
@@ -144,6 +158,62 @@ def _find_voice(voice_id: str) -> dict:
     raise ValueError(f"Unknown Fish voice: {voice_id}")
 
 
+def get_ref_for_emotion(voice_id: str, emotion: str = "neutral"):
+    """Pick the best reference (wav_path, ref_text) for this voice+emotion.
+
+    Fish's API needs BOTH the reference audio and its transcript, so this
+    returns the pair. Per-emotion clips live at refs/<emotion>.wav with an
+    adjacent refs/<emotion>.txt (Whisper-generated on upload). Falls back
+    through: specific emotion → neutral → legacy reference.wav + metadata
+    ref_text. Guarantees something usable for every known voice.
+    """
+    voice = _find_voice(voice_id)
+    vid = voice["_dir"]
+    voice_dir = os.path.join(MODELS_DIR, vid)
+
+    def _pick(name):
+        wav = os.path.join(voice_dir, "refs", f"{name}.wav")
+        if not os.path.exists(wav): return None
+        txt = os.path.join(voice_dir, "refs", f"{name}.txt")
+        text = ""
+        if os.path.exists(txt):
+            try: text = open(txt).read().strip()
+            except Exception: pass
+        return (wav, text or voice["_ref_text"])
+
+    if emotion and emotion != "neutral":
+        hit = _pick(emotion)
+        if hit: return hit
+    hit = _pick("neutral")
+    if hit: return hit
+    # Legacy reference.wav + metadata.ref_text
+    return (voice["_ref_path"], voice["_ref_text"])
+
+
+def list_refs(voice_id: str) -> dict:
+    """Return {emotion: {path, text}} for every emotion-specific ref on disk.
+    Used by the /admin/voices/fish/<id>/refs endpoint for UI + auto-pick."""
+    voice = _find_voice(voice_id)
+    voice_dir = os.path.join(MODELS_DIR, voice["_dir"])
+    refs_dir = os.path.join(voice_dir, "refs")
+    out = {}
+    if os.path.isdir(refs_dir):
+        for emo in EMOTION_REFS:
+            wav = os.path.join(refs_dir, f"{emo}.wav")
+            if not os.path.exists(wav): continue
+            txt = os.path.join(refs_dir, f"{emo}.txt")
+            text = ""
+            if os.path.exists(txt):
+                try: text = open(txt).read().strip()
+                except Exception: pass
+            out[emo] = {"path": wav, "text": text}
+    return out
+
+
+def get_models_dir() -> str:
+    return MODELS_DIR
+
+
 def _decorate_with_emotion(text: str, emotion: str) -> str:
     tag = EMOTION_TAGS.get(emotion or "neutral", "")
     if not tag: return text
@@ -159,16 +229,18 @@ def synthesize(text: str, voice_id: str, emotion: str = "neutral", seed: int = N
         raise RuntimeError("ormsgpack not installed in tts-server venv; pip install ormsgpack")
     voice = _find_voice(voice_id)
     decorated = _decorate_with_emotion(text, emotion)
-    log.info("Fish synthesize: voice=%s emotion=%s text_len=%d preview=%.60s",
-             voice_id, emotion, len(decorated), decorated)
-    with open(voice["_ref_path"], "rb") as f:
+    ref_wav, ref_text = get_ref_for_emotion(voice_id, emotion)
+    ref_note = "refs/" + emotion if ref_wav != voice["_ref_path"] and emotion != "neutral" else "legacy"
+    log.info("Fish synthesize: voice=%s emotion=%s ref=%s text_len=%d preview=%.60s",
+             voice_id, emotion, ref_note, len(decorated), decorated)
+    with open(ref_wav, "rb") as f:
         audio_bytes = f.read()
     payload = {
         "text": decorated,
         "format": "wav",
         "references": [{
             "audio": audio_bytes,
-            "text": voice["_ref_text"],
+            "text": ref_text,
         }],
         "temperature": float(max(0.1, min(1.0, temperature))),
         "top_p": float(max(0.1, min(1.0, top_p))),

@@ -155,11 +155,17 @@ def trim_to_loudest_window(wav_path: Path, out_path: Path, target_sec: float = T
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--voice-id", required=True, help="Chatterbox dir name (without cb_ prefix)")
+    ap.add_argument("--voice-id", required=True, help="Voice dir name (without cb_/fish_ prefix)")
     ap.add_argument("--chunks-dir", required=True, type=Path, help="Directory of speaker-clustered wav chunks")
-    ap.add_argument("--cb-dir", required=True, type=Path, help="Chatterbox models dir (where <voice>/ lives)")
+    ap.add_argument("--cb-dir", type=Path, help="[legacy alias for --out-dir pointing at chatterbox models dir]")
+    ap.add_argument("--out-dir", type=Path, help="Engine models dir (chatterbox or fish) — <voice>/refs/ is written under here")
     ap.add_argument("--overwrite", action="store_true", help="Overwrite existing refs")
     args = ap.parse_args()
+    # Back-compat: old callers pass --cb-dir; new callers pass --out-dir.
+    out_base = args.out_dir or args.cb_dir
+    if not out_base:
+        print(json.dumps({"error": "provide --out-dir (preferred) or --cb-dir"}))
+        sys.exit(1)
 
     if not args.chunks_dir.is_dir():
         print(json.dumps({"error": f"chunks dir not found: {args.chunks_dir}"}))
@@ -184,7 +190,7 @@ def main():
         sys.exit(1)
 
     chosen = pick_refs(features)
-    voice_dir = args.cb_dir / args.voice_id
+    voice_dir = out_base / args.voice_id
     refs_dir = voice_dir / "refs"
     refs_dir.mkdir(parents=True, exist_ok=True)
 
