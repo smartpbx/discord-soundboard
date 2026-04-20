@@ -430,6 +430,73 @@ async def upsert_engine_voice(
     return {"ok": True, "voice_id": prefix + dir_id, "ref_text": merged["ref_text"], "name": merged["name"]}
 
 
+@app.post("/admin/util/extract-speaker")
+async def extract_speaker_endpoint(
+    audio: UploadFile = File(...),
+    target_sr: int = Form(24000),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Diarize the uploaded clip, extract only the dominant speaker's
+    segments, concatenate with crossfades, return as a vocals-only wav.
+
+    Used when the source is a conversation/interview/debate — pulls just
+    the target speaker out. Backed by resemblyzer (d-vectors) + KMeans n=2,
+    running in the GPT-SoVITS venv (where resemblyzer is installed).
+    """
+    _check_admin(x_admin_token)
+    audio_bytes = await audio.read()
+    if len(audio_bytes) < 1024:
+        raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
+    if len(audio_bytes) > 120 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Audio too large (>120 MB)")
+    tmp_dir = os.path.join("/tmp", f"diar_{int(time.time())}_{os.getpid()}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    in_path = os.path.join(tmp_dir, "input" + (os.path.splitext(audio.filename or "x.wav")[1] or ".wav"))
+    out_path = os.path.join(tmp_dir, "target.wav")
+    try:
+        with open(in_path, "wb") as f:
+            f.write(audio_bytes)
+        py = "/opt/GPT-SoVITS/.venv/bin/python"
+        if not os.path.exists(py):
+            raise HTTPException(status_code=500, detail="GPT-SoVITS venv missing — can't run diarization")
+        tool = os.path.join(os.path.dirname(__file__), "tools", "diarize_extract.py")
+        proc = subprocess.run(
+            [py, tool, "--input", in_path, "--output", out_path, "--target-sr", str(target_sr)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "")[-400:]
+            raise HTTPException(status_code=500, detail=f"Diarize failed: {tail}")
+        done_line = None
+        for line in proc.stdout.strip().splitlines():
+            try:
+                evt = json.loads(line)
+                if evt.get("event") == "done":
+                    done_line = evt
+            except Exception:
+                pass
+        if not os.path.exists(out_path):
+            raise HTTPException(status_code=500, detail="Diarize produced no output wav")
+        with open(out_path, "rb") as f:
+            out_bytes = f.read()
+        headers = {}
+        if done_line:
+            headers["X-Extract-Duration-Sec"] = str(done_line.get("duration_sec", ""))
+            headers["X-Extract-Elapsed-Sec"] = str(done_line.get("elapsed_sec", ""))
+            headers["X-Extract-Cluster-Sizes"] = json.dumps(done_line.get("cluster_sizes", {}))
+            headers["X-Extract-Dominant-Cluster"] = str(done_line.get("dominant_cluster", ""))
+        log.info("extract-speaker: %d bytes in → %d bytes out, done=%s", len(audio_bytes), len(out_bytes), done_line)
+        return Response(content=out_bytes, media_type="audio/wav", headers=headers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("extract-speaker failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp_dir, ignore_errors=True)
+
+
 @app.post("/admin/util/isolate-vocals")
 async def isolate_vocals_endpoint(
     audio: UploadFile = File(...),

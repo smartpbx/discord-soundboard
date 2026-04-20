@@ -4183,6 +4183,37 @@ function ttsAdminError(res, err) {
     return res.status(status).json({ error: msg });
 }
 
+// When the operator checks "Extract dominant speaker", POST the preview to
+// tts-server's /admin/util/extract-speaker (resemblyzer + KMeans n=2 in the
+// GPT-SoVITS venv) and overwrite the staged preview with the dominant-
+// speaker-only cut. Useful when the source window is a conversation.
+async function maybeExtractSpeakerPreview(token) {
+    const previewPath = ttsVoiceAdmin.getPreviewPath(token);
+    if (!previewPath) throw Object.assign(new Error('Preview vanished before speaker extraction'), { status: 500 });
+    const audio = fs.readFileSync(previewPath);
+    const form = new FormData();
+    form.append('audio', new Blob([audio], { type: 'audio/wav' }), 'preview.wav');
+    const r = await fetch(`${TTS_API_URL}/admin/util/extract-speaker`, {
+        method: 'POST', body: form,
+        headers: { 'X-Admin-Token': TTS_ADMIN_TOKEN || '' },
+        signal: AbortSignal.timeout(180_000),
+    });
+    if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw Object.assign(new Error(body.detail || body.error || `extract-speaker ${r.status}`), { status: r.status === 401 ? 502 : r.status });
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    fs.writeFileSync(previewPath, buf);
+    let clusters = null;
+    try { clusters = JSON.parse(r.headers.get('x-extract-cluster-sizes') || '{}'); } catch {}
+    return {
+        elapsed: Number(r.headers.get('x-extract-elapsed-sec')) || null,
+        durationSec: Number(r.headers.get('x-extract-duration-sec')) || null,
+        dominantCluster: r.headers.get('x-extract-dominant-cluster') || null,
+        clusters,
+    };
+}
+
 // When the operator checks "Isolate vocals", POST the just-trimmed preview
 // to tts-server's /admin/util/isolate-vocals (htdemucs on CPU, ~25 s for
 // 60 s of audio) and overwrite the staged preview file with the vocals-only
@@ -4212,15 +4243,18 @@ async function maybeIsolatePreview(token) {
 }
 
 app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, res) => {
-    const { url, startSec, endSec, isolate } = req.body || {};
+    const { url, startSec, endSec, isolate, extractSpeaker } = req.body || {};
     if (!ttsVoiceAdmin.validateYouTubeUrl(url)) return res.status(400).json({ error: 'Provide a youtube.com or youtu.be URL.' });
     try {
         const { sourcePath, cached } = await ttsVoiceAdmin.fetchYouTubeSource(url);
         const sourceDuration = await ttsVoiceAdmin.probeDuration(sourcePath);
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null;
+        let isolateInfo = null, extractInfo = null;
+        // Isolate first (music/noise off) then diarize — diarization is way
+        // more reliable on clean vocals.
         if (isolate) isolateInfo = await maybeIsolatePreview(token);
-        res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo });
+        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
+        res.json({ token, duration, sourceDuration, sourceCached: cached, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo, extractedSpeaker: !!extractSpeaker, extractInfo });
     } catch (err) {
         ttsAdminError(res, err);
     }
@@ -4230,6 +4264,7 @@ app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No audio file uploaded' });
     const { startSec, endSec } = req.body || {};
     const isolate = String(req.body && req.body.isolate) === 'true';
+    const extractSpeaker = String(req.body && req.body.extractSpeaker) === 'true';
     ttsVoiceAdmin.ensureStaging();
     const sourceId = require('crypto').randomBytes(8).toString('hex');
     const sourcePath = require('path').join(ttsVoiceAdmin.STAGING_DIR, `source-upload-${sourceId}.bin`);
@@ -4241,17 +4276,18 @@ app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.
             return res.status(400).json({ error: 'Could not read audio file (unsupported format?)' });
         }
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null;
+        let isolateInfo = null, extractInfo = null;
         if (isolate) isolateInfo = await maybeIsolatePreview(token);
+        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
         // Keep the uploaded source around so retrim works without re-uploading.
-        res.json({ token, duration, sourceDuration, sourceRef: sourceId, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: isolate, isolateInfo });
+        res.json({ token, duration, sourceDuration, sourceRef: sourceId, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: isolate, isolateInfo, extractedSpeaker: extractSpeaker, extractInfo });
     } catch (err) {
         ttsAdminError(res, err);
     }
 });
 
 app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res) => {
-    const { url, sourceRef, startSec, endSec, isolate } = req.body || {};
+    const { url, sourceRef, startSec, endSec, isolate, extractSpeaker } = req.body || {};
     try {
         let sourcePath;
         if (sourceRef) {
@@ -4265,9 +4301,10 @@ app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res
             return res.status(400).json({ error: 'Need url or sourceRef' });
         }
         const { token, duration } = await ttsVoiceAdmin.extractClip(sourcePath, startSec, endSec);
-        let isolateInfo = null;
+        let isolateInfo = null, extractInfo = null;
         if (isolate) isolateInfo = await maybeIsolatePreview(token);
-        res.json({ token, duration, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo });
+        if (extractSpeaker) extractInfo = await maybeExtractSpeakerPreview(token);
+        res.json({ token, duration, previewUrl: `/api/superadmin/tts/preview/${token}`, isolated: !!isolate, isolateInfo, extractedSpeaker: !!extractSpeaker, extractInfo });
     } catch (err) {
         ttsAdminError(res, err);
     }

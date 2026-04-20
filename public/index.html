@@ -1590,6 +1590,10 @@
                         <input type="checkbox" id="voiceModalIsolate" style="accent-color:var(--accent);">
                         <span>Isolate vocals (demucs) — strips background music/noise. Adds ~15–30 s.</span>
                     </label>
+                    <label style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer; margin-top:0.25rem;">
+                        <input type="checkbox" id="voiceModalExtractSpeaker" style="accent-color:var(--accent);">
+                        <span>Extract dominant speaker (diarize) — keeps only the longest-speaking voice. Useful for conversations. Adds ~10 s.</span>
+                    </label>
                 </div>
                 <div class="field-help">Recommended: 6–30 seconds of one speaker, no music or background noise. Max 60s.</div>
 
@@ -1823,6 +1827,10 @@
                     <label style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer;">
                         <input type="checkbox" id="engineVoiceIsolate" style="accent-color:var(--accent);">
                         <span>Isolate vocals (demucs) — strips background music/noise. Adds ~15–30 s.</span>
+                    </label>
+                    <label style="display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer; margin-top:0.25rem;">
+                        <input type="checkbox" id="engineVoiceExtractSpeaker" style="accent-color:var(--accent);">
+                        <span>Extract dominant speaker (diarize) — keeps only the longest-speaking voice. Useful for conversations. Adds ~10 s.</span>
                     </label>
                 </div>
                 <div class="field-help" id="engineVoiceAudioHelp">Recommended: 10–30 s for Fish (S2 Pro handles up to ~60 s). Single speaker, minimal background. Whisper auto-transcribes.</div>
@@ -6391,20 +6399,24 @@
             try {
                 let res, data;
                 const isolate = document.getElementById('voiceModalIsolate')?.checked || false;
-                if (isolate) setVoiceModalStatus('Fetching + isolating vocals (demucs, ~25 s)…');
+                const extractSpeaker = document.getElementById('voiceModalExtractSpeaker')?.checked || false;
+                if (isolate || extractSpeaker) {
+                    const steps = [isolate && 'isolate vocals', extractSpeaker && 'extract speaker'].filter(Boolean).join(' + ');
+                    setVoiceModalStatus('Fetching + ' + steps + '…');
+                }
                 if (_voiceModalSource === 'youtube') {
                     const url = document.getElementById('voiceModalUrl').value.trim();
                     if (!url) { setVoiceModalStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec, isolate })
+                        body: JSON.stringify({ url, startSec, endSec, isolate, extractSpeaker })
                     });
                 } else {
                     const fileInput = document.getElementById('voiceModalFile');
                     if (_voiceModalSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec, isolate })
+                            body: JSON.stringify({ sourceRef: _voiceModalSourceRef, startSec, endSec, isolate, extractSpeaker })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { setVoiceModalStatus('Choose an audio file first.', 'error'); return; }
@@ -6413,6 +6425,7 @@
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
                         if (isolate) fd.append('isolate', 'true');
+                        if (extractSpeaker) fd.append('extractSpeaker', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6436,7 +6449,8 @@
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
                 const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
-                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + isoNote + '. Listen, then save or re-cut.', 'success');
+                const extNote = data.extractedSpeaker ? (data.extractInfo && data.extractInfo.durationSec ? ' (dominant-speaker kept: ' + data.extractInfo.durationSec.toFixed(1) + 's of ' + dur + 's)' : ' (dominant-speaker kept)') : '';
+                setVoiceModalStatus('Preview: ' + dur + 's' + srcDur + isoNote + extNote + '. Listen, then save or re-cut.', 'success');
                 document.getElementById('voiceModalSaveBtn').disabled = false;
             } catch (e) {
                 setVoiceModalStatus('Network error: ' + e.message, 'error');
@@ -6650,6 +6664,7 @@
             document.getElementById('engineVoiceStart').value = '0';
             document.getElementById('engineVoiceEnd').value = '15';
             const isoCheckbox = document.getElementById('engineVoiceIsolate'); if (isoCheckbox) isoCheckbox.checked = false;
+            const extCheckbox = document.getElementById('engineVoiceExtractSpeaker'); if (extCheckbox) extCheckbox.checked = false;
             document.getElementById('engineVoiceRefText').value = '';
             document.getElementById('engineVoiceStatus').textContent = '';
             document.getElementById('engineVoiceSaveBtn').disabled = false;
@@ -6704,20 +6719,24 @@
             try {
                 let res;
                 const isolate = document.getElementById('engineVoiceIsolate')?.checked || false;
-                if (isolate) _setEngineVoicePreviewStatus('Fetching + isolating vocals (demucs, ~25 s)…');
+                const extractSpeaker = document.getElementById('engineVoiceExtractSpeaker')?.checked || false;
+                if (isolate || extractSpeaker) {
+                    const steps = [isolate && 'isolate vocals', extractSpeaker && 'extract speaker'].filter(Boolean).join(' + ');
+                    _setEngineVoicePreviewStatus('Fetching + ' + steps + '…');
+                }
                 if (_engineVoiceSource === 'youtube') {
                     const url = document.getElementById('engineVoiceUrl').value.trim();
                     if (!url) { _setEngineVoicePreviewStatus('Paste a YouTube URL first.', 'error'); return; }
                     res = await api('/api/superadmin/tts/source/youtube', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url, startSec, endSec, isolate })
+                        body: JSON.stringify({ url, startSec, endSec, isolate, extractSpeaker })
                     });
                 } else {
                     const fileInput = document.getElementById('engineVoiceFile');
                     if (_engineVoiceSourceRef) {
                         res = await api('/api/superadmin/tts/source/retrim', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec, isolate })
+                            body: JSON.stringify({ sourceRef: _engineVoiceSourceRef, startSec, endSec, isolate, extractSpeaker })
                         });
                     } else {
                         if (!fileInput.files || !fileInput.files[0]) { _setEngineVoicePreviewStatus('Choose an audio file first.', 'error'); return; }
@@ -6726,6 +6745,7 @@
                         fd.append('startSec', String(startSec));
                         fd.append('endSec', String(endSec));
                         if (isolate) fd.append('isolate', 'true');
+                        if (extractSpeaker) fd.append('extractSpeaker', 'true');
                         res = await api('/api/superadmin/tts/source/upload', { method: 'POST', body: fd });
                     }
                 }
@@ -6749,7 +6769,8 @@
                 const dur = (data.duration || 0).toFixed(1);
                 const srcDur = data.sourceDuration ? ' (source ' + data.sourceDuration.toFixed(1) + 's)' : '';
                 const isoNote = data.isolated ? (data.isolateInfo && data.isolateInfo.elapsed ? ' (vocals isolated in ' + Math.round(data.isolateInfo.elapsed) + 's)' : ' (vocals isolated)') : '';
-                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + isoNote + '. Listen, then Save (or re-cut).', 'success');
+                const extNote = data.extractedSpeaker ? (data.extractInfo && data.extractInfo.durationSec ? ' (dominant-speaker kept: ' + data.extractInfo.durationSec.toFixed(1) + 's of ' + dur + 's)' : ' (dominant-speaker kept)') : '';
+                _setEngineVoicePreviewStatus('Preview: ' + dur + 's' + srcDur + isoNote + extNote + '. Listen, then Save (or re-cut).', 'success');
             } catch (e) {
                 _setEngineVoicePreviewStatus('Network error: ' + e.message, 'error');
             } finally {

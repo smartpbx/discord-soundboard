@@ -157,6 +157,8 @@ def main():
                     help="Chatterbox only — initial expression slider value (0.25–2.0)")
     ap.add_argument("--isolate-vocals", action="store_true",
                     help="Run demucs vocal isolation on the trimmed clip before deploying. Adds ~25s CPU time; useful when source has background music/noise.")
+    ap.add_argument("--extract-speaker", action="store_true",
+                    help="Diarize + keep only the dominant speaker. Useful when source is a conversation/interview. Adds ~10s. Run AFTER --isolate-vocals for best results.")
     args = ap.parse_args()
 
     if args.end <= args.start:
@@ -194,6 +196,31 @@ def main():
                 emit("isolate_done", elapsed_sec=iso_meta["elapsed_sec"], peak_pre_gain=iso_meta["peak_pre_gain"])
             except Exception as e:
                 emit("isolate_warning", message=str(e))  # non-fatal — keep raw clip
+
+        if args.extract_speaker:
+            emit("extract_start")
+            ext_out = work_dir / "target_only.wav"
+            try:
+                # diarize_extract uses resemblyzer which only lives in the
+                # GPT-SoVITS venv — shell out to that interpreter.
+                gsv_py = "/opt/GPT-SoVITS/.venv/bin/python"
+                tool = str(Path(__file__).parent / "diarize_extract.py")
+                target_sr = 32000 if args.engine == "gptsovits" else 24000
+                proc = run([gsv_py, tool, "--input", str(ref_path), "--output", str(ext_out), "--target-sr", str(target_sr)], timeout=240)
+                # Script emits newline-delimited JSON; pick out the done line
+                done = {}
+                for line in proc.stdout.strip().splitlines():
+                    try:
+                        evt = json.loads(line)
+                        if evt.get("event") == "done": done = evt
+                    except Exception: pass
+                if ext_out.exists():
+                    shutil.move(str(ext_out), str(ref_path))
+                    emit("extract_done", **{k: v for k, v in done.items() if k in ("duration_sec", "elapsed_sec", "dominant_cluster", "cluster_sizes")})
+                else:
+                    emit("extract_warning", message="diarize produced no output; keeping raw clip")
+            except Exception as e:
+                emit("extract_warning", message=str(e))  # non-fatal — keep prev clip
 
         ref_text = args.ref_text.strip() if args.ref_text else None
         if not ref_text:
