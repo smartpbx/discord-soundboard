@@ -1578,12 +1578,12 @@
 
                 <div class="row">
                     <div class="field">
-                        <label for="voiceModalStart">Start (sec)</label>
-                        <input type="number" id="voiceModalStart" min="0" step="0.1" value="0">
+                        <label for="voiceModalStart">Start (m:ss)</label>
+                        <input type="text" id="voiceModalStart" inputmode="decimal" placeholder="0:00" value="0:00" title="Minutes:seconds (e.g. 1:23.5). Bare number is seconds.">
                     </div>
                     <div class="field">
-                        <label for="voiceModalEnd">End (sec)</label>
-                        <input type="number" id="voiceModalEnd" min="0.1" step="0.1" value="10">
+                        <label for="voiceModalEnd">End (m:ss)</label>
+                        <input type="text" id="voiceModalEnd" inputmode="decimal" placeholder="0:10" value="0:10" title="Minutes:seconds (e.g. 1:23.5). Bare number is seconds.">
                     </div>
                     <div class="field" style="flex:1; min-width: 140px;">
                         <button type="button" class="btn btn-primary btn-sm" id="voiceModalGenerateBtn" onclick="generateVoicePreview()">Generate preview</button>
@@ -1818,12 +1818,12 @@
                 </div>
                 <div class="row">
                     <div class="field">
-                        <label for="engineVoiceStart">Start (sec)</label>
-                        <input type="number" id="engineVoiceStart" min="0" step="0.1" value="0">
+                        <label for="engineVoiceStart">Start (m:ss)</label>
+                        <input type="text" id="engineVoiceStart" inputmode="decimal" placeholder="0:00" value="0:00" title="Minutes:seconds (e.g. 1:23.5). Bare number is seconds.">
                     </div>
                     <div class="field">
-                        <label for="engineVoiceEnd">End (sec)</label>
-                        <input type="number" id="engineVoiceEnd" min="0.1" step="0.1" value="10">
+                        <label for="engineVoiceEnd">End (m:ss)</label>
+                        <input type="text" id="engineVoiceEnd" inputmode="decimal" placeholder="0:15" value="0:15" title="Minutes:seconds (e.g. 1:23.5). Bare number is seconds.">
                     </div>
                     <div class="field" style="flex:1; min-width: 140px;">
                         <button type="button" class="btn btn-primary btn-sm" id="engineVoiceGenerateBtn" onclick="generateEngineVoicePreview()">Generate preview</button>
@@ -5925,14 +5925,17 @@
                 if (humanize) {
                     setTtsStatus('<span class="tts-spinner"></span> Humanizing text…');
                     try {
-                        // Pass the voice NAME (not id) so the LLM can tailor
+                        // Pass the voice NAME + engine so the LLM can tailor
                         // disfluencies to the character's real speech pattern
-                        // (e.g. Jordan Peterson gets "precisely" not "like").
+                        // (Jordan Peterson gets "precisely", Trump skips uhhs)
+                        // and insert Fish inline tags ([laughing], [sigh]…)
+                        // only when the engine understands them.
                         const v = ttsVoices.find(x => x.id === voiceId);
                         const voiceName = v && v.name ? v.name : '';
+                        const voiceEngine = v && v.engine ? v.engine : '';
                         const hr = await api('/api/tts/humanize', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text, voiceName }),
+                            body: JSON.stringify({ text, voiceName, engine: voiceEngine }),
                         });
                         if (hr && hr.ok) {
                             const hd = await hr.json().catch(() => ({}));
@@ -6527,8 +6530,8 @@
             }
             document.getElementById('voiceModalUrl').value = '';
             document.getElementById('voiceModalFile').value = '';
-            document.getElementById('voiceModalStart').value = '0';
-            document.getElementById('voiceModalEnd').value = '10';
+            document.getElementById('voiceModalStart').value = '0:00';
+            document.getElementById('voiceModalEnd').value = '0:10';
             const audio = document.getElementById('voiceModalAudio');
             audio.style.display = 'none';
             audio.removeAttribute('src');
@@ -6545,11 +6548,46 @@
             audio.removeAttribute('src');
         }
 
+        // Parse a ref-clip time input. Accepts "m:ss", "m:ss.s", "mm:ss", or
+        // a bare number (interpreted as seconds for backwards compatibility
+        // with pasted values from old URLs like "?t=125"). Returns NaN on
+        // malformed input so callers can surface a validation error.
+        function mmssToSec(raw) {
+            const s = String(raw || '').trim();
+            if (!s) return NaN;
+            if (!s.includes(':')) return parseFloat(s);
+            const parts = s.split(':');
+            if (parts.length !== 2) return NaN;
+            const m = parseInt(parts[0], 10);
+            const sec = parseFloat(parts[1]);
+            if (!Number.isFinite(m) || !Number.isFinite(sec)) return NaN;
+            if (sec < 0 || sec >= 60) return NaN;
+            return m * 60 + sec;
+        }
+
+        // Format seconds as "m:ss" (or "m:ss.s" if there's a non-zero
+        // sub-second component) for display in the time-range inputs.
+        function secToMmss(total) {
+            if (!Number.isFinite(total) || total < 0) return '0:00';
+            const m = Math.floor(total / 60);
+            const sRaw = total - m * 60;
+            // Preserve up to 1 decimal of precision — matches the old step=0.1.
+            const sRounded = Math.round(sRaw * 10) / 10;
+            const hasFraction = Math.abs(sRounded - Math.floor(sRounded)) > 0.01;
+            if (hasFraction) {
+                // "4.5" → "04.5"; "0.5" → "00.5"
+                const whole = Math.floor(sRounded);
+                const frac = Math.round((sRounded - whole) * 10);
+                return m + ':' + String(whole).padStart(2, '0') + '.' + frac;
+            }
+            return m + ':' + String(Math.floor(sRounded)).padStart(2, '0');
+        }
+
         async function generateVoicePreview() {
-            const startSec = parseFloat(document.getElementById('voiceModalStart').value);
-            const endSec = parseFloat(document.getElementById('voiceModalEnd').value);
+            const startSec = mmssToSec(document.getElementById('voiceModalStart').value);
+            const endSec = mmssToSec(document.getElementById('voiceModalEnd').value);
             if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
-                setVoiceModalStatus('Start/end seconds invalid.', 'error');
+                setVoiceModalStatus('Start/end time invalid (use m:ss, e.g. 1:23.5).', 'error');
                 return;
             }
             const btn = document.getElementById('voiceModalGenerateBtn');
@@ -6840,8 +6878,8 @@
             document.getElementById('engineVoiceGender').value = 'male';
             document.getElementById('engineVoiceUrl').value = '';
             const fileInput = document.getElementById('engineVoiceFile'); if (fileInput) fileInput.value = '';
-            document.getElementById('engineVoiceStart').value = '0';
-            document.getElementById('engineVoiceEnd').value = '15';
+            document.getElementById('engineVoiceStart').value = '0:00';
+            document.getElementById('engineVoiceEnd').value = '0:15';
             const isoCheckbox = document.getElementById('engineVoiceIsolate'); if (isoCheckbox) isoCheckbox.checked = false;
             const extCheckbox = document.getElementById('engineVoiceExtractSpeaker'); if (extCheckbox) extCheckbox.checked = false;
             document.getElementById('engineVoiceRefText').value = '';
@@ -6866,8 +6904,8 @@
                     } else if (v.source_kind === 'upload') {
                         switchEngineVoiceSource('upload');
                     }
-                    if (Number.isFinite(v.source_start)) document.getElementById('engineVoiceStart').value = v.source_start;
-                    if (Number.isFinite(v.source_end))   document.getElementById('engineVoiceEnd').value   = v.source_end;
+                    if (Number.isFinite(v.source_start)) document.getElementById('engineVoiceStart').value = secToMmss(v.source_start);
+                    if (Number.isFinite(v.source_end))   document.getElementById('engineVoiceEnd').value   = secToMmss(v.source_end);
                 }
             }
             document.getElementById('engineVoiceOverlay').classList.remove('hidden');
@@ -6887,10 +6925,10 @@
         }
 
         async function generateEngineVoicePreview() {
-            const startSec = parseFloat(document.getElementById('engineVoiceStart').value);
-            const endSec = parseFloat(document.getElementById('engineVoiceEnd').value);
+            const startSec = mmssToSec(document.getElementById('engineVoiceStart').value);
+            const endSec = mmssToSec(document.getElementById('engineVoiceEnd').value);
             if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
-                _setEngineVoicePreviewStatus('Start/end seconds invalid.', 'error'); return;
+                _setEngineVoicePreviewStatus('Start/end time invalid (use m:ss, e.g. 1:23.5).', 'error'); return;
             }
             const btn = document.getElementById('engineVoiceGenerateBtn');
             btn.disabled = true;
