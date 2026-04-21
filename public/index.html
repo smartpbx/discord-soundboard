@@ -602,8 +602,22 @@
         .tts-card-header .card-title { margin-bottom: 0; }
         .tts-close-btn { padding: 0.25rem 0.4rem; font-size: 1rem; line-height: 1; color: var(--text-muted); }
         .tts-close-btn:hover { color: var(--text); }
-        .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
+        .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; padding-right: 2.6rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
         .tts-textarea:focus { outline: none; border-color: var(--accent); }
+        .tts-textarea-wrap { position: relative; }
+        .tts-rewrite-btn {
+            position: absolute; top: 0.3rem; right: 0.3rem;
+            width: 2rem; height: 2rem; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text-muted); font-size: 0.95rem; line-height: 1; cursor: pointer;
+            transition: background 0.12s, color 0.12s, border-color 0.12s;
+        }
+        .tts-rewrite-btn:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--accent); }
+        .tts-rewrite-btn:disabled { opacity: 0.5; cursor: progress; }
+        .tts-rewrite-btn.is-loading { color: var(--accent); border-color: var(--accent); }
+        .tts-rewrite-btn.is-loading .tts-rewrite-icon { animation: tts-rewrite-spin 1.1s linear infinite; }
+        @keyframes tts-rewrite-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         /* TTS controls: fixed widths on the knobs so on ultrawide monitors the
            voice dropdown doesn't span 1500px and the sliders don't swallow the
            rest of the row. Speak + Again stay right-aligned via margin-left:auto
@@ -797,7 +811,12 @@
                 <span class="card-title">Text-to-Speech</span>
                 <button type="button" class="btn btn-ghost tts-close-btn" onclick="hideTtsSection()" title="Close">✕</button>
             </div>
-            <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
+            <div class="tts-textarea-wrap">
+                <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
+                <button type="button" class="tts-rewrite-btn" id="ttsRewriteBtn" onclick="ttsRewriteInVoice()" title="Rewrite the text in the selected voice's style (Trump → rally riff, Herzog → philosophical narration). Replaces the textarea content — humanize separately after.">
+                    <span class="tts-rewrite-icon">✨</span>
+                </button>
+            </div>
             <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
             <div id="ttsEngineHint" class="hidden" style="font-size:0.72rem; color:var(--text-muted); margin:-0.2rem 0 0.4rem; line-height:1.4;"></div>
             <div class="tts-controls">
@@ -5853,6 +5872,49 @@
             const len = (ta.value || '').trim().length;
             cc.textContent = `${len} / ${ttsMaxLen}`;
             cc.classList.toggle('over-limit', len > ttsMaxLen);
+        }
+
+        // Rewrite the TTS textarea content in the selected voice's style via
+        // the Ollama LLM. Unlike humanize (which preserves meaning), this
+        // reshapes phrasing / vocabulary / length to match how the speaker
+        // would actually say it. Replaces the textarea on success; on failure
+        // or when the LLM is unavailable, shows a toast and leaves the text
+        // untouched.
+        async function ttsRewriteInVoice() {
+            const ta = document.getElementById('ttsTextInput');
+            const btn = document.getElementById('ttsRewriteBtn');
+            if (!ta || !btn) return;
+            const text = (ta.value || '').trim();
+            if (!text) { showToast('Type something first.', 'error'); return; }
+            if (text.length > 2000) { showToast('Too long — rewrite caps at 2000 chars.', 'error'); return; }
+            const voiceId = document.getElementById('ttsVoiceSelect')?.value || '';
+            const v = (typeof ttsVoices !== 'undefined' && ttsVoices) ? ttsVoices.find(x => x.id === voiceId) : null;
+            const voiceName = v && v.name ? v.name : '';
+            const voiceEngine = v && v.engine ? v.engine : '';
+            btn.disabled = true;
+            btn.classList.add('is-loading');
+            const prevTitle = btn.title;
+            btn.title = 'Rewriting in voice…';
+            try {
+                const r = await api('/api/tts/rewrite', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, voiceName, engine: voiceEngine }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { showToast(d.error || 'Rewrite failed.', 'error'); return; }
+                if (!d.available) { showToast('Rewrite LLM not configured.', 'error'); return; }
+                if (!d.changed) { showToast('Rewrite matched the original.', 'info'); return; }
+                ta.value = d.rewritten;
+                updateTtsCharCount();
+                ta.focus();
+                showToast('Rewrote in voice of ' + (voiceName || 'selected voice') + '.', 'success');
+            } catch (e) {
+                showToast('Rewrite failed: ' + (e && e.message || 'unknown'), 'error');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('is-loading');
+                btn.title = prevTitle;
+            }
         }
 
         const ttsTextEl = document.getElementById('ttsTextInput');

@@ -4677,6 +4677,32 @@ app.post('/api/tts/humanize', requireAuth, async (req, res) => {
     }
 });
 
+// Rewrite the TTS message in the selected voice's style — unlike humanize,
+// this can reshape phrasing, length, and vocabulary to match how the
+// speaker would actually say it (Trump → rally riff, Herzog → philosophical
+// narration). Client invokes this from the sparkle button on the TTS card;
+// the returned text replaces the textarea value, and the user can still
+// toggle humanize + send as normal.
+app.post('/api/tts/rewrite', requireAuth, async (req, res) => {
+    if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests cannot rewrite.' });
+    const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
+    const voiceName = (req.body && typeof req.body.voiceName === 'string') ? req.body.voiceName.slice(0, 80) : '';
+    const engine = (req.body && typeof req.body.engine === 'string') ? req.body.engine.slice(0, 20).toLowerCase() : '';
+    if (!text.trim()) return res.status(400).json({ error: 'Text required' });
+    if (text.length > 2000) return res.status(400).json({ error: 'Text too long for rewrite (>2000 chars)' });
+    try {
+        const rewriter = require('./lib/tts-rewrite-llm');
+        if (!rewriter.isAvailable()) {
+            return res.json({ available: false, text, rewritten: text, changed: false });
+        }
+        const out = await rewriter.rewrite(text, voiceName, engine);
+        res.json({ available: true, text, rewritten: out, changed: out !== text, voiceName, engine });
+    } catch (e) {
+        console.warn('[tts-rewrite] error:', e && e.message);
+        res.json({ available: true, text, rewritten: text, changed: false, error: (e && e.message) || 'unknown' });
+    }
+});
+
 app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot synthesize tests.' });
