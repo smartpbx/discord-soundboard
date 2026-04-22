@@ -598,88 +598,149 @@
         /* TTS card */
         .tts-toggle-btn { height: 32px; padding: 0 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--surface-hover); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font-weight: 500; cursor: pointer; }
         .tts-toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
-        .tts-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
-        .tts-card-header .card-title { margin-bottom: 0; }
+        .tts-card-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .tts-card-header .card-title { margin-bottom: 0; margin-right: auto; }
         .tts-close-btn { padding: 0.25rem 0.4rem; font-size: 1rem; line-height: 1; color: var(--text-muted); }
         .tts-close-btn:hover { color: var(--text); }
-        .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; padding-right: 2.6rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
+
+        /* Mode switch: pill tabs for Single | Conversation. */
+        .tts-mode-switch { display: inline-flex; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 999px; padding: 2px; }
+        .tts-mode-switch button { padding: 0.25rem 0.75rem; font-size: 0.78rem; border: 0; background: transparent; color: var(--text-muted); border-radius: 999px; cursor: pointer; line-height: 1.3; }
+        .tts-mode-switch button[aria-selected="true"] { background: var(--accent); color: #fff; }
+        .tts-mode-switch button:not([aria-selected="true"]):hover { color: var(--text); }
+
+        /* Textarea + AI cluster (✨ Rewrite + 🧠 Humanize grouped at the right edge). */
+        .tts-textarea { width: 100%; min-height: 60px; max-height: 150px; resize: vertical; padding: 0.5rem; padding-right: 8.2rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.9rem; }
         .tts-textarea:focus { outline: none; border-color: var(--accent); }
         .tts-textarea-wrap { position: relative; }
-        .tts-rewrite-btn {
-            position: absolute; top: 0.3rem; right: 0.3rem;
-            width: 2rem; height: 2rem; padding: 0;
-            display: inline-flex; align-items: center; justify-content: center;
+        .tts-ai-cluster { position: absolute; top: 0.3rem; right: 0.3rem; display: inline-flex; gap: 4px; align-items: center; }
+        .tts-ai-btn {
+            padding: 0.25rem 0.5rem; display: inline-flex; gap: 0.25rem; align-items: center;
             background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
-            color: var(--text-muted); font-size: 0.95rem; line-height: 1; cursor: pointer;
+            color: var(--text-muted); font-size: 0.75rem; line-height: 1; cursor: pointer;
             transition: background 0.12s, color 0.12s, border-color 0.12s;
         }
-        .tts-rewrite-btn:hover { background: var(--surface-hover); color: var(--accent); border-color: var(--accent); }
-        .tts-rewrite-btn:disabled { opacity: 0.5; cursor: progress; }
-        .tts-rewrite-btn.is-loading { color: var(--accent); border-color: var(--accent); }
-        .tts-rewrite-btn.is-loading .tts-rewrite-icon { animation: tts-rewrite-spin 1.1s linear infinite; }
+        .tts-ai-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--surface-hover); }
+        .tts-ai-btn:disabled { opacity: 0.5; cursor: progress; }
+        .tts-ai-btn.is-loading { color: var(--accent); border-color: var(--accent); }
+        .tts-ai-btn.is-loading .tts-rewrite-icon { animation: tts-rewrite-spin 1.1s linear infinite; }
+        .tts-ai-btn.is-active,
+        .tts-ai-btn:has(input:checked) { color: var(--accent); border-color: var(--accent); background: rgba(255,255,255,0.04); }
+        .tts-ai-btn input { display: none; }
         @keyframes tts-rewrite-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .tts-tag-chip {
-            display: inline-block; padding: 1px 6px; margin: 1px 2px;
-            font-family: monospace; font-size: 0.8rem; color: #7ce0a4;
-            background: rgba(124, 224, 164, 0.08);
-            border: 1px solid rgba(124, 224, 164, 0.25);
-            border-radius: 4px; cursor: pointer; line-height: 1.45;
-            transition: background 0.1s, border-color 0.1s, transform 0.05s;
+
+        /* Tag tray: collapsible categorized chips, shared across modes. Clicking
+           a chip inserts into whichever TTS input was last focused (main
+           textarea or a conversation row input). */
+        .tts-tag-tray { margin: 0.5rem 0 0.3rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-hover); padding: 0 0.55rem; }
+        .tts-tag-tray summary {
+            cursor: pointer; list-style: none; padding: 0.35rem 0;
+            display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text-muted);
         }
-        .tts-tag-chip:hover { background: rgba(124, 224, 164, 0.2); border-color: rgba(124, 224, 164, 0.5); }
+        .tts-tag-tray summary::-webkit-details-marker { display: none; }
+        .tts-tag-tray summary::before {
+            content: '▸'; display: inline-block; font-size: 0.7rem; color: var(--text-muted);
+            transition: transform 0.15s;
+        }
+        .tts-tag-tray[open] summary::before { transform: rotate(90deg); }
+        .tts-tag-tray summary .tts-tag-meta { margin-left: auto; color: var(--text-muted); font-style: italic; }
+        .tts-tag-tray-body { padding: 0.2rem 0 0.55rem; }
+        .tts-tag-group { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 0.3rem; }
+        .tts-tag-group-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); width: 100%; margin-top: 0.4rem; }
+        .tts-tag-group-label:first-child, .tts-tag-group:first-child + .tts-tag-group-label { margin-top: 0; }
+        .tts-tag-tray-hint { font-size: 0.7rem; color: var(--text-muted); font-style: italic; margin-top: 0.5rem; line-height: 1.45; }
+        .tts-tag-tray-hint code { background: transparent; color: var(--text); padding: 0 0.15rem; }
+        .tts-tag-chip {
+            display: inline-flex; align-items: center; padding: 2px 7px;
+            font-family: 'SF Mono', Menlo, monospace; font-size: 0.74rem;
+            color: var(--text); background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px; cursor: pointer; line-height: 1.35;
+            transition: color 0.1s, border-color 0.1s, background 0.1s, transform 0.05s;
+        }
+        .tts-tag-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--surface-hover); }
         .tts-tag-chip:active { transform: translateY(1px); }
-        .tts-conv-toggle { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted); cursor: pointer; user-select: none; white-space: nowrap; }
-        .tts-conv-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.3rem; }
-        .tts-conv-row {
+
+        /* Chatterbox cue hint — smaller inline help line. */
+        .tts-cb-hint { font-size: 0.72rem; color: var(--text-muted); margin: 0.3rem 0 0.1rem; line-height: 1.45; }
+        .tts-cb-hint code { background: transparent; color: var(--text); padding: 0 0.15rem; }
+
+        /* Conversation bubbles: alternating accent on the left rail so rows
+           read as a back-and-forth exchange, not a flat form grid. */
+        .tts-conv-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.3rem; }
+        .tts-conv-bubble {
             display: grid;
-            grid-template-columns: minmax(120px, 1fr) minmax(0, 2.5fr) auto auto;
-            gap: 0.35rem; align-items: center;
-            padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border);
+            grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr) auto;
+            gap: 0.4rem; align-items: center;
+            padding: 0.5rem 0.6rem;
+            background: var(--surface-hover); border: 1px solid var(--border); border-left: 3px solid var(--accent);
             border-radius: var(--radius-sm);
         }
-        .tts-conv-actions { display: flex; gap: 0.2rem; align-items: center; flex-wrap: nowrap; }
-        .tts-conv-row select, .tts-conv-row input[type="text"] {
+        .tts-conv-bubble:nth-of-type(even) { border-left-color: #7ce0a4; }
+        .tts-conv-bubble select, .tts-conv-bubble input[type="text"] {
             width: 100%; padding: 0.3rem 0.4rem;
             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
             color: var(--text); font: inherit; font-size: 0.82rem;
         }
-        .tts-conv-row select:focus, .tts-conv-row input[type="text"]:focus { outline: none; border-color: var(--accent); }
-        .tts-conv-pause {
-            display: inline-flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 92px;
-            font-size: 0.7rem; color: var(--text-muted);
-        }
-        .tts-conv-pause label { display: flex; justify-content: space-between; gap: 0.2rem; }
-        .tts-conv-pause input[type="range"] { width: 100%; accent-color: var(--accent); height: 4px; }
+        .tts-conv-bubble select:focus, .tts-conv-bubble input[type="text"]:focus { outline: none; border-color: var(--accent); }
+        .tts-conv-actions { display: flex; gap: 0.2rem; align-items: center; flex-wrap: nowrap; }
         .tts-conv-row-btn {
-            width: 1.8rem; height: 1.8rem; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+            width: 1.7rem; height: 1.7rem; padding: 0; display: inline-flex; align-items: center; justify-content: center;
             background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
-            color: var(--text-muted); font-size: 0.9rem; line-height: 1; cursor: pointer;
+            color: var(--text-muted); font-size: 0.8rem; line-height: 1; cursor: pointer;
         }
         .tts-conv-row-btn:hover:not(:disabled) { background: var(--surface); color: var(--text); border-color: var(--accent); }
         .tts-conv-row-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .tts-conv-row-btn.is-danger:hover { color: #f08c8c; border-color: #f08c8c; }
-        .tts-conv-humanize { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
-        .tts-conv-humanize input { accent-color: var(--accent); margin: 0; }
+        .tts-conv-row-btn.is-active { color: var(--accent); border-color: var(--accent); }
+
+        /* Pause chip: sits between bubbles, indicates the silence gap before
+           the next line. idx=0 has no preceding pause, so it's suppressed. */
+        .tts-conv-gap {
+            display: flex; align-items: center; gap: 0.5rem;
+            margin-left: 1rem; padding: 0.1rem 0;
+            font-size: 0.68rem; color: var(--text-muted); letter-spacing: 0.02em;
+        }
+        .tts-conv-gap::before { content: '·'; font-size: 1.1rem; color: var(--text-muted); }
+        .tts-conv-gap input[type="range"] { width: 110px; accent-color: var(--accent); height: 3px; }
+        .tts-conv-gap-val { font-variant-numeric: tabular-nums; min-width: 3.2rem; text-align: right; }
+
+        .tts-conv-empty {
+            border: 1px dashed var(--border); border-radius: var(--radius-sm);
+            padding: 0.7rem; font-size: 0.78rem; color: var(--text-muted); font-style: italic;
+            margin-bottom: 0.4rem;
+        }
         .tts-conv-addbtn {
-            align-self: flex-start; padding: 0.3rem 0.6rem; font-size: 0.8rem;
+            align-self: flex-start; padding: 0.3rem 0.7rem; font-size: 0.78rem;
             background: var(--surface-hover); border: 1px dashed var(--border); border-radius: var(--radius-sm);
             color: var(--text-muted); cursor: pointer;
         }
         .tts-conv-addbtn:hover { color: var(--accent); border-color: var(--accent); }
         @media (max-width: 640px) {
-            .tts-conv-row { grid-template-columns: 1fr; }
-            .tts-conv-pause { min-width: 0; }
+            .tts-conv-bubble { grid-template-columns: 1fr; }
+            .tts-conv-gap { margin-left: 0.5rem; }
         }
-        /* TTS controls: fixed widths on the knobs so on ultrawide monitors the
-           voice dropdown doesn't span 1500px and the sliders don't swallow the
-           rest of the row. Speak + Again stay right-aligned via margin-left:auto
-           on the action group below. */
-        .tts-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
-        .tts-controls > select#ttsVoiceSelect { flex: 0 1 280px; min-width: 200px; padding: 0.45rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.85rem; }
-        .tts-controls > select#ttsForcedEmotion { flex: 0 0 auto; min-width: 6rem; padding: 0.3rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; }
-        .tts-controls #ttsVolumeSlider, .tts-controls #ttsExpressionSlider { flex: 0 0 140px; }
-        .tts-controls .tts-action-group { margin-left: auto; display: flex; gap: 0.4rem; }
-        .tts-char-count { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+
+        /* Labeled control rows: split into a "setup" row (voice + knobs) and an
+           "act" row (Speak/Again). Every input gets a small uppercase label so
+           the "200%" / "0.70" readouts are unambiguous. */
+        .tts-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.55rem; }
+        .tts-ctrl-row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; }
+        .tts-ctrl-row.tts-ctrl-act { justify-content: flex-end; gap: 0.4rem; align-items: center; }
+        .tts-ctrl-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .tts-ctrl-field.is-grow { flex: 1 1 200px; min-width: 180px; }
+        .tts-ctrl-field.is-slider { flex: 0 0 165px; }
+        .tts-ctrl-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+        .tts-ctrl-slider-row { display: flex; align-items: center; gap: 0.4rem; }
+        .tts-ctrl-slider-row input[type="range"] { flex: 1; accent-color: var(--accent); height: 5px; }
+        .tts-ctrl-slider-row .tts-ctrl-val { font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--text); min-width: 3rem; text-align: right; }
+        .tts-ctrl-row select {
+            padding: 0.42rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text); font: inherit; font-size: 0.85rem;
+        }
+        .tts-ctrl-row select:focus { outline: none; border-color: var(--accent); }
+
+        .tts-char-count { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
         .tts-char-count.over-limit { color: var(--danger); }
         .tts-status { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; }
         .tts-status.error { color: var(--danger); }
@@ -861,58 +922,76 @@
         <div class="card hidden" id="ttsCard">
             <div class="tts-card-header">
                 <span class="card-title">Text-to-Speech</span>
-                <label class="tts-conv-toggle" title="Build a multi-voice exchange — each line picks its own voice, and the server synthesizes + stitches them into one playback with configurable pauses between speakers.">
-                    <input type="checkbox" id="ttsConvToggle" style="accent-color:var(--accent); margin:0;">
-                    <span>💬 Conversation mode</span>
-                </label>
+                <div class="tts-mode-switch" role="tablist" aria-label="TTS mode">
+                    <button type="button" id="ttsModeSingleBtn" role="tab" aria-selected="true" onclick="ttsConvSetMode(false)">Single</button>
+                    <button type="button" id="ttsModeConvBtn" role="tab" aria-selected="false" onclick="ttsConvSetMode(true)" title="Multi-voice exchange — each line picks its own voice, server stitches them into one playback with configurable pauses.">💬 Conversation</button>
+                </div>
+                <!-- Hidden checkbox kept so existing JS that reads #ttsConvToggle keeps working. -->
+                <input type="checkbox" id="ttsConvToggle" style="display:none">
                 <button type="button" class="btn btn-ghost tts-close-btn" onclick="hideTtsSection()" title="Close">✕</button>
             </div>
             <div id="ttsSingleBlock">
                 <div class="tts-textarea-wrap">
-                    <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
-                    <button type="button" class="tts-rewrite-btn" id="ttsRewriteBtn" onclick="ttsRewriteInVoice()" title="Rewrite the text in the selected voice's style (Trump → rally riff, Herzog → philosophical narration). For Fish voices it can also insert inline [tags] like [laughing], [sigh], [shouting], [whisper], [pause] to drive delivery. Replaces the textarea content — humanize separately after.">
-                        <span class="tts-rewrite-icon">✨</span>
-                    </button>
+                    <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say... (Enter = Speak, Shift+Enter = newline)" maxlength="5000"></textarea>
+                    <div class="tts-ai-cluster">
+                        <button type="button" class="tts-ai-btn" id="ttsRewriteBtn" onclick="ttsRewriteInVoice()" title="Rewrite in the selected voice's style — reshapes phrasing, vocabulary, and length to match how the speaker would actually say it. For Fish voices also inserts inline [tags] like [laughing], [sigh], [shouting].">
+                            <span class="tts-rewrite-icon">✨</span><span>Rewrite</span>
+                        </button>
+                        <label class="tts-ai-btn" id="ttsHumanizeLabel" title="Run the text through an LLM first to add natural pauses (uhhs, commas, ellipses) and tighten punctuation. Makes the synth sound more human.">
+                            <input type="checkbox" id="ttsHumanize">
+                            <span>🧠 Humanize</span>
+                        </label>
+                    </div>
                 </div>
                 <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
             </div>
-            <div id="ttsConvBlock" class="hidden" style="margin-bottom:0.4rem;">
+            <div id="ttsConvBlock" class="hidden">
                 <div id="ttsConvList" class="tts-conv-list"></div>
-                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.4rem;">
+                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem;">
                     <button type="button" class="tts-conv-addbtn" onclick="ttsConvAddLine()">+ Add line</button>
-                    <span style="font-size:0.72rem; color:var(--text-muted);">Up to 12 lines. Pauses are per-line silence inserted before that line. ✨ and Humanize still work per row.</span>
+                    <span style="font-size:0.7rem; color:var(--text-muted);">Up to 12 lines · tag chips below insert into the last-focused line.</span>
                 </div>
             </div>
-            <div id="ttsEngineHint" class="hidden" style="font-size:0.72rem; color:var(--text-muted); margin:-0.2rem 0 0.4rem; line-height:1.4;"></div>
+            <!-- Shared tag tray: collapsible, categorized, targets whichever TTS
+                 input was last focused so it works in both single + conv modes. -->
+            <div id="ttsEngineHint" class="hidden"></div>
             <div class="tts-controls">
-                <select id="ttsVoiceSelect"><option value="">Loading voices...</option></select>
-                <div style="display:flex;align-items:center;gap:0.4rem;min-width:120px;">
-                    <span style="font-size:0.8rem;color:var(--text-muted);">🔊</span>
-                    <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume" style="flex:1;accent-color:var(--accent);height:6px;">
-                    <span id="ttsVolumeLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">100%</span>
+                <div class="tts-ctrl-row" id="ttsCtrlSetupRow">
+                    <div class="tts-ctrl-field is-grow" id="ttsCtrlVoiceField">
+                        <span class="tts-ctrl-label">Voice</span>
+                        <select id="ttsVoiceSelect"><option value="">Loading voices…</option></select>
+                    </div>
+                    <div class="tts-ctrl-field is-slider">
+                        <span class="tts-ctrl-label">🔊 Volume</span>
+                        <div class="tts-ctrl-slider-row">
+                            <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume">
+                            <span class="tts-ctrl-val" id="ttsVolumeLabel">100%</span>
+                        </div>
+                    </div>
+                    <div class="tts-ctrl-field is-slider hidden" id="ttsExpressionWrap" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
+                        <span class="tts-ctrl-label">🎭 Expression</span>
+                        <div class="tts-ctrl-slider-row">
+                            <input type="range" id="ttsExpressionSlider" min="0.25" max="2.0" step="0.05" value="0.5">
+                            <span class="tts-ctrl-val" id="ttsExpressionLabel">0.50</span>
+                        </div>
+                    </div>
+                    <div class="tts-ctrl-field" id="ttsCtrlEmotionField">
+                        <span class="tts-ctrl-label">Emotion</span>
+                        <select id="ttsForcedEmotion" title="Force an emotion (otherwise auto-detected from text: ALL CAPS = yell, ... = soft, [angry]/[sad]/... tags, etc.)">
+                            <option value="">Auto</option>
+                            <option value="neutral">Neutral</option>
+                            <option value="soft">Soft</option>
+                            <option value="excited">Excited</option>
+                            <option value="yell">Yell</option>
+                            <option value="angry">Angry</option>
+                            <option value="sad">Sad</option>
+                            <option value="happy">Happy</option>
+                        </select>
+                    </div>
                 </div>
-                <div id="ttsExpressionWrap" class="hidden" style="display:none;align-items:center;gap:0.4rem;min-width:160px;" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
-                    <span style="font-size:0.8rem;color:var(--text-muted);">🎭</span>
-                    <input type="range" id="ttsExpressionSlider" min="0.25" max="2.0" step="0.05" value="0.5" style="flex:1;accent-color:var(--accent);height:6px;">
-                    <span id="ttsExpressionLabel" style="font-size:0.8rem;color:var(--text-muted);min-width:2.5rem;">0.50</span>
-                </div>
-                <select id="ttsForcedEmotion" title="Force an emotion (otherwise auto-detected from text: ALL CAPS = yell, ... = soft, [angry]/[sad]/... tags, etc.)">
-                    <option value="">🎭 Auto</option>
-                    <option value="neutral">Neutral</option>
-                    <option value="soft">Soft</option>
-                    <option value="excited">Excited</option>
-                    <option value="yell">Yell</option>
-                    <option value="angry">Angry</option>
-                    <option value="sad">Sad</option>
-                    <option value="happy">Happy</option>
-                </select>
-                <label id="ttsHumanizeLabel" title="Run the text through an LLM first to add natural pauses (uhhs, commas, ellipses) and tighten punctuation. Makes the synth sound more human." style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer; user-select:none; white-space:nowrap;">
-                    <input type="checkbox" id="ttsHumanize" style="accent-color:var(--accent); margin:0;">
-                    <span>🧠 Humanize</span>
-                </label>
-                <div class="tts-action-group">
+                <div class="tts-ctrl-row tts-ctrl-act">
                     <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
-                    <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different. Click until you like one.">🔄 Again</button>
+                    <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different.">🔄 Again</button>
                 </div>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
@@ -5869,63 +5948,99 @@
             updateTtsExpressionVisibility();
         }
 
+        // Fish tag vocabulary bucketed so the tray collapses the 34 chips
+        // into scannable groups instead of one neon wall.
+        const FISH_TAG_GROUPS = {
+            'Delivery': ['[pause]', '[short pause]', '[emphasis]', '[whisper]', '[low voice]', '[low volume]', '[shouting]', '[screaming]', '[loud]', '[volume up]', '[volume down]', '[interrupting]', '[echo]', '[with strong accent]'],
+            'Emotion': ['[excited]', '[excited tone]', '[delight]', '[laughing]', '[laughing tone]', '[chuckle]', '[chuckling]', '[audience laughter]', '[sad]', '[angry]', '[surprised]', '[shocked]'],
+            'Body': ['[sigh]', '[inhale]', '[exhale]', '[panting]', '[moaning]', '[tsk]', '[clearing throat]'],
+            'Other': ['[singing]'],
+        };
+        const CB_TAGS = ['[angry]', '[sad]', '[happy]', '[whisper]', '[soft]', '[yell]', '[shouting]'];
+
+        function _buildTagTrayHtml(engine) {
+            // Remember the tray's open/closed state across sessions.
+            const openPref = localStorage.getItem('ttsTagTrayOpen');
+            const open = openPref === null ? true : openPref === '1';
+            let html = '<details class="tts-tag-tray"' + (open ? ' open' : '') + ' ontoggle="localStorage.setItem(\'ttsTagTrayOpen\', this.open ? \'1\' : \'0\')">';
+            if (engine === 'fish') {
+                const total = Object.values(FISH_TAG_GROUPS).reduce((a, b) => a + b.length, 0);
+                html += '<summary><span>Fish tags — click to insert</span><span class="tts-tag-meta">' + total + ' common, 15k+ free-form</span></summary>';
+                html += '<div class="tts-tag-tray-body">';
+                for (const [label, tags] of Object.entries(FISH_TAG_GROUPS)) {
+                    html += '<div class="tts-tag-group-label">' + label + '</div>';
+                    html += '<div class="tts-tag-group">';
+                    for (const t of tags) {
+                        html += '<button type="button" class="tts-tag-chip" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>';
+                    }
+                    html += '</div>';
+                }
+                html += '<div class="tts-tag-tray-hint">Put them inline: <code>hello [whisper] let\'s be quiet</code>. Or invent your own: <code>[pitch up]</code>, <code>[professional tone]</code>, <code>[in a small voice]</code>.</div>';
+                html += '</div>';
+            } else {
+                html += '<summary><span>Chatterbox cues — click to insert</span><span class="tts-tag-meta">' + CB_TAGS.length + ' tags</span></summary>';
+                html += '<div class="tts-tag-tray-body">';
+                html += '<div class="tts-tag-group">';
+                for (const t of CB_TAGS) {
+                    html += '<button type="button" class="tts-tag-chip" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>';
+                }
+                html += '</div>';
+                html += '<div class="tts-tag-tray-hint">Plus text cues: <code>ALL CAPS</code> ⇒ yell · trailing <code>...</code> ⇒ soft · <code>!!!</code> ⇒ excited.</div>';
+                html += '</div>';
+            }
+            html += '</details>';
+            return html;
+        }
+
+        // Build the tag tray + expression slider visibility. Called on voice
+        // change, mode switch, and any time the conversation roster changes so
+        // tags surface in conv mode too (picks Fish if any row is Fish, else
+        // Chatterbox if any row is Chatterbox, else hides).
         function updateTtsExpressionVisibility() {
             const sel = document.getElementById('ttsVoiceSelect');
             const wrap = document.getElementById('ttsExpressionWrap');
-            if (!sel || !wrap) return;
-            const v = ttsVoices.find(x => x.id === sel.value);
-            const isCb = v && v.engine === 'chatterbox';
-            wrap.classList.toggle('hidden', !isCb);
-            wrap.style.display = isCb ? 'flex' : 'none';
-            if (isCb) {
-                const def = Number.isFinite(v.default_exaggeration) ? Number(v.default_exaggeration) : 0.5;
-                ttsExpression = def;
-                const slider = document.getElementById('ttsExpressionSlider');
-                if (slider) slider.value = def;
-                const label = document.getElementById('ttsExpressionLabel');
-                if (label) label.textContent = def.toFixed(2);
-            }
-            // Per-engine usage hint (mostly for Fish, which uses inline tags
-            // that the other engines ignore). Hidden if no voice picked.
-            const hint = document.getElementById('ttsEngineHint');
-            if (hint) {
-                if (!v) { hint.classList.add('hidden'); hint.innerHTML = ''; }
-                else if (v.engine === 'fish') {
-                    hint.classList.remove('hidden');
-                    // Fish S2 Pro uses [tag] syntax and supports 15,000+ free-form
-                    // descriptors (per its README). These are the documented common
-                    // ones; the user can also invent tags like [pitch up] or
-                    // [professional broadcast tone]. Each chip is clickable to
-                    // insert at the TTS textarea's cursor position.
-                    const fishTags = [
-                        '[pause]','[short pause]','[emphasis]',
-                        '[whisper]','[low voice]','[low volume]',
-                        '[shouting]','[screaming]','[loud]','[volume up]','[volume down]',
-                        '[excited]','[excited tone]','[delight]',
-                        '[laughing]','[laughing tone]','[chuckle]','[chuckling]','[audience laughter]',
-                        '[sad]','[angry]','[surprised]','[shocked]',
-                        '[sigh]','[inhale]','[exhale]','[panting]','[moaning]',
-                        '[singing]','[tsk]','[clearing throat]','[interrupting]',
-                        '[echo]','[with strong accent]',
-                    ];
-                    const tagPills = fishTags.map(t =>
-                        '<button type="button" class="tts-tag-chip" title="Click to insert at cursor" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>'
-                    ).join('');
-                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags (' + fishTags.length + ' common, 15k+ free-form supported — click to insert):</span><br>'
-                        + '<span style="line-height:1.8">' + tagPills + '</span><br>'
-                        + '<span style="color:var(--text-muted);font-style:italic">Put them inline: <code>hello [whisper] let\'s be quiet</code>. Or invent your own: <code>[pitch up]</code>, <code>[professional tone]</code>, <code>[in a small voice]</code>.</span>';
-                } else if (v.engine === 'chatterbox') {
-                    hint.classList.remove('hidden');
-                    const cbTags = ['[angry]', '[sad]', '[happy]', '[whisper]', '[yell]', '[shouting]'];
-                    const cbPills = cbTags.map(t =>
-                        '<button type="button" class="tts-tag-chip" title="Click to insert at cursor" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>'
-                    ).join('');
-                    hint.innerHTML = '<span style="color:var(--accent);">Chatterbox cues:</span> '
-                        + 'ALL CAPS ⇒ yell · trailing <code>...</code> ⇒ soft · <code>!!!</code> ⇒ excited<br>'
-                        + '<span style="color:var(--accent);">Tags (click to insert):</span> ' + cbPills;
-                } else {
-                    hint.classList.add('hidden'); hint.innerHTML = '';
+            const convMode = !!document.getElementById('ttsConvToggle')?.checked;
+            const mainVoice = (Array.isArray(ttsVoices) ? ttsVoices : []).find(x => x.id === sel?.value);
+
+            // Expression slider: Chatterbox-only, single-mode only. Conversation
+            // rows don't currently expose per-voice exaggeration; the expression
+            // preprocessor still runs server-side per row.
+            const showExpr = !convMode && mainVoice && mainVoice.engine === 'chatterbox';
+            if (wrap) {
+                wrap.classList.toggle('hidden', !showExpr);
+                wrap.style.display = showExpr ? 'flex' : 'none';
+                if (showExpr) {
+                    const def = Number.isFinite(mainVoice.default_exaggeration) ? Number(mainVoice.default_exaggeration) : 0.5;
+                    ttsExpression = def;
+                    const slider = document.getElementById('ttsExpressionSlider');
+                    if (slider) slider.value = def;
+                    const label = document.getElementById('ttsExpressionLabel');
+                    if (label) label.textContent = def.toFixed(2);
                 }
+            }
+
+            // Pick the engine for the tag tray based on whichever voices are
+            // currently relevant.
+            let engineForTags = null;
+            if (convMode) {
+                const roster = (Array.isArray(ttsConvLines) ? ttsConvLines : [])
+                    .map(l => (Array.isArray(ttsVoices) ? ttsVoices : []).find(v => v.id === l.voiceId))
+                    .filter(Boolean);
+                if (roster.some(v => v.engine === 'fish')) engineForTags = 'fish';
+                else if (roster.some(v => v.engine === 'chatterbox')) engineForTags = 'chatterbox';
+            } else if (mainVoice) {
+                if (mainVoice.engine === 'fish') engineForTags = 'fish';
+                else if (mainVoice.engine === 'chatterbox') engineForTags = 'chatterbox';
+            }
+
+            const tray = document.getElementById('ttsEngineHint');
+            if (!tray) return;
+            if (!engineForTags) {
+                tray.classList.add('hidden');
+                tray.innerHTML = '';
+            } else {
+                tray.classList.remove('hidden');
+                tray.innerHTML = _buildTagTrayHtml(engineForTags);
             }
         }
 
@@ -5950,15 +6065,40 @@
             const len = (ta.value || '').trim().length;
             cc.textContent = `${len} / ${ttsMaxLen}`;
             cc.classList.toggle('over-limit', len > ttsMaxLen);
+            // ✨ Rewrite only makes sense when there's text to rewrite — it
+            // doesn't generate content. Disable when empty so users don't
+            // click and get a toast.
+            const rewriteBtn = document.getElementById('ttsRewriteBtn');
+            if (rewriteBtn) rewriteBtn.disabled = len === 0;
         }
 
-        // Insert an inline expression tag at the current cursor position in the
-        // TTS textarea (or replace the current selection). Auto-pads with a
-        // single space on either side when neighbors aren't already whitespace,
-        // leaves the cursor right after the inserted tag, and fires an `input`
-        // event so the char counter stays in sync.
+        // Remember which TTS text input the user last interacted with so tag
+        // chips and other shared affordances can target the right field in
+        // both single and conversation modes.
+        let _ttsLastFocusedInput = null;
+        function _isTtsTargetInput(el) {
+            if (!el) return false;
+            if (el.id === 'ttsTextInput') return true;
+            if (el.tagName === 'INPUT' && el.type === 'text' && el.closest && el.closest('#ttsConvList')) return true;
+            return false;
+        }
+
+        // Insert an inline expression tag at the cursor of the last-focused TTS
+        // input (main textarea or a conversation row input). Auto-pads with a
+        // single space when neighbors aren't whitespace, leaves the cursor
+        // right after the tag, and fires an `input` event for downstream
+        // listeners (char count, conv persistence).
         function insertTtsTag(tag) {
-            const ta = document.getElementById('ttsTextInput');
+            let ta = _ttsLastFocusedInput;
+            if (!ta || !document.body.contains(ta)) {
+                // Fallback: pick a sensible default per mode.
+                const convMode = !!document.getElementById('ttsConvToggle')?.checked;
+                if (convMode) {
+                    ta = document.querySelector('#ttsConvList input[type="text"]');
+                } else {
+                    ta = document.getElementById('ttsTextInput');
+                }
+            }
             if (!ta || !tag) return;
             const start = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
             const end = typeof ta.selectionEnd === 'number' ? ta.selectionEnd : ta.value.length;
@@ -5973,6 +6113,15 @@
             try { ta.setSelectionRange(caret, caret); } catch {}
             ta.dispatchEvent(new Event('input', { bubbles: true }));
         }
+        // Track focus at the card level so the tag tray + any shared affordance
+        // knows which input is the insertion target.
+        (function(){
+            const card = document.getElementById('ttsCard');
+            if (!card) return;
+            card.addEventListener('focusin', (e) => {
+                if (_isTtsTargetInput(e.target)) _ttsLastFocusedInput = e.target;
+            });
+        })();
 
         // Rewrite the TTS textarea content in the selected voice's style via
         // the Ollama LLM. Unlike humanize (which preserves meaning), this
@@ -6079,20 +6228,32 @@
             if (!host) return;
             host.innerHTML = '';
             ttsConvLines.forEach((line, idx) => {
+                // Pause chip BEFORE this bubble. Skipped for idx=0 because
+                // "pause before the first line" is meaningless — playback
+                // starts right when the clip begins.
+                if (idx > 0) {
+                    const gap = document.createElement('div');
+                    gap.className = 'tts-conv-gap';
+                    gap.innerHTML =
+                        '<span>Pause before</span>'
+                        + '<input type="range" min="0" max="2000" step="50" value="' + line.pauseMs + '" oninput="ttsConvUpdatePause(' + idx + ',this.value)" title="Silence gap before this line">'
+                        + '<span class="tts-conv-gap-val" id="ttsConvPauseLbl_' + idx + '">' + line.pauseMs + 'ms</span>';
+                    host.appendChild(gap);
+                }
+                // Bubble itself: voice select + text + actions. Alternating
+                // left-border accent colors (set in CSS via :nth-of-type(even))
+                // give the list a visual cadence that reads as "exchange".
                 const row = document.createElement('div');
-                row.className = 'tts-conv-row';
+                row.className = 'tts-conv-bubble';
                 const upDisabled = idx === 0 ? 'disabled' : '';
                 const downDisabled = idx === ttsConvLines.length - 1 ? 'disabled' : '';
                 const rmDisabled = ttsConvLines.length <= 1 ? 'disabled' : '';
+                const humanizeActive = line.humanize ? ' is-active' : '';
                 row.innerHTML =
-                    '<select onchange="ttsConvUpdate(' + idx + ',\'voiceId\',this.value)">' + _ttsConvVoiceOptions(line.voiceId) + '</select>'
+                    '<select onchange="ttsConvUpdate(' + idx + ',\'voiceId\',this.value); updateTtsExpressionVisibility()">' + _ttsConvVoiceOptions(line.voiceId) + '</select>'
                     + '<input type="text" placeholder="Line ' + (idx + 1) + ' text…" maxlength="1000" value="' + _ttsConvEsc(line.text) + '" oninput="ttsConvUpdate(' + idx + ',\'text\',this.value)" onkeydown="ttsConvLineKey(event,' + idx + ')">'
-                    + '<div class="tts-conv-pause">'
-                    +   '<label><span>Pause</span><span id="ttsConvPauseLbl_' + idx + '">' + line.pauseMs + 'ms</span></label>'
-                    +   '<input type="range" min="0" max="2000" step="50" value="' + line.pauseMs + '" oninput="ttsConvUpdatePause(' + idx + ',this.value)">'
-                    + '</div>'
                     + '<div class="tts-conv-actions">'
-                    +   '<label class="tts-conv-humanize" title="Humanize this line in the picked voice\'s style"><input type="checkbox" ' + (line.humanize ? 'checked' : '') + ' onchange="ttsConvUpdate(' + idx + ',\'humanize\',this.checked)"><span>🧠</span></label>'
+                    +   '<button type="button" class="tts-conv-row-btn' + humanizeActive + '" data-role="humanize-' + idx + '" onclick="ttsConvToggleHumanize(' + idx + ')" title="Humanize this line in the picked voice\'s style">🧠</button>'
                     +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvRewrite(' + idx + ')" title="Rewrite this line in the picked voice\'s style">✨</button>'
                     +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvMove(' + idx + ',-1)" ' + upDisabled + ' title="Move up">▲</button>'
                     +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvMove(' + idx + ',1)" ' + downDisabled + ' title="Move down">▼</button>'
@@ -6101,6 +6262,18 @@
                 host.appendChild(row);
             });
         }
+
+        // Humanize toggle on a conversation row — update state + flip the
+        // button's active class without a full re-render so focus/scroll
+        // stay put.
+        function ttsConvToggleHumanize(idx) {
+            if (!ttsConvLines[idx]) return;
+            ttsConvLines[idx].humanize = !ttsConvLines[idx].humanize;
+            ttsConvSave();
+            const btn = document.querySelector('#ttsConvList .tts-conv-row-btn[data-role="humanize-' + idx + '"]');
+            if (btn) btn.classList.toggle('is-active', ttsConvLines[idx].humanize);
+        }
+        window.ttsConvToggleHumanize = ttsConvToggleHumanize;
 
         function ttsConvUpdate(idx, field, value) {
             if (!ttsConvLines[idx]) return;
@@ -6124,7 +6297,7 @@
             ttsConvSave();
             // Focus the just-added text input.
             setTimeout(() => {
-                const rows = document.querySelectorAll('#ttsConvList .tts-conv-row');
+                const rows = document.querySelectorAll('#ttsConvList .tts-conv-bubble');
                 const last = rows[rows.length - 1];
                 const ti = last && last.querySelector('input[type="text"]');
                 if (ti) ti.focus();
@@ -6156,7 +6329,7 @@
             const v = (Array.isArray(ttsVoices) ? ttsVoices : []).find(x => x.id === line.voiceId);
             const voiceName = v && v.name ? v.name : '';
             const voiceEngine = v && v.engine ? v.engine : '';
-            const btn = document.querySelectorAll('#ttsConvList .tts-conv-row')[idx]?.querySelector('.tts-conv-row-btn[onclick*="ttsConvRewrite"]');
+            const btn = document.querySelectorAll('#ttsConvList .tts-conv-bubble')[idx]?.querySelector('.tts-conv-row-btn[onclick*="ttsConvRewrite"]');
             if (btn) { btn.disabled = true; btn.textContent = '…'; }
             try {
                 const r = await api('/api/tts/rewrite', {
@@ -6187,30 +6360,42 @@
             }
         }
 
-        // Flip between single-line and conversation modes. Hides the controls
-        // that don't apply in conversation mode (main voice select, humanize,
-        // forced emotion, expression slider, 🔄 Again) — each conversation row
-        // carries its own voice + humanize toggle instead.
+        // Flip between single and conversation modes. Hides the single-mode-
+        // only controls (main voice field, expression slider, forced emotion,
+        // 🔄 Again) in conversation mode — each conv row carries its own
+        // voice + humanize. Tag tray re-renders so chips pick the right
+        // engine for whichever voices are in play.
         function ttsConvSetMode(enabled) {
             const single = document.getElementById('ttsSingleBlock');
             const conv = document.getElementById('ttsConvBlock');
-            const hint = document.getElementById('ttsEngineHint');
-            const voiceSel = document.getElementById('ttsVoiceSelect');
+            // Single-mode-only control fields. We hide the whole labeled field
+            // wrapper so the "Voice" / "Emotion" labels don't float alone.
+            const voiceField = document.getElementById('ttsCtrlVoiceField');
+            const emotionField = document.getElementById('ttsCtrlEmotionField');
             const exprWrap = document.getElementById('ttsExpressionWrap');
-            const forcedEmo = document.getElementById('ttsForcedEmotion');
-            const humanizeLbl = document.getElementById('ttsHumanizeLabel');
             const againBtn = document.getElementById('ttsAgainBtn');
+            const singleBtn = document.getElementById('ttsModeSingleBtn');
+            const convBtn = document.getElementById('ttsModeConvBtn');
+            const toggle = document.getElementById('ttsConvToggle');
+
             const setHidden = (el, hide) => { if (!el) return; el.classList.toggle('hidden', !!hide); if (hide) el.style.display = 'none'; else el.style.removeProperty('display'); };
             setHidden(single, enabled);
             setHidden(conv, !enabled);
-            setHidden(hint, enabled);
-            setHidden(voiceSel, enabled);
+            setHidden(voiceField, enabled);
+            setHidden(emotionField, enabled);
             setHidden(exprWrap, enabled);
-            setHidden(forcedEmo, enabled);
-            setHidden(humanizeLbl, enabled);
             setHidden(againBtn, enabled);
+
+            // Segmented-control visuals.
+            if (singleBtn) singleBtn.setAttribute('aria-selected', String(!enabled));
+            if (convBtn) convBtn.setAttribute('aria-selected', String(!!enabled));
+            // Hidden checkbox kept in sync for any legacy code reading it.
+            if (toggle) toggle.checked = !!enabled;
+
             savePrefs({ ttsConvMode: !!enabled });
             if (enabled) ttsConvRender();
+            // Tag tray depends on mode + voice roster.
+            if (typeof updateTtsExpressionVisibility === 'function') updateTtsExpressionVisibility();
         }
 
         // Expose for onclick attributes (Firefox is strict about global fn visibility inside modules; we're not using modules but keep the pattern).
@@ -6246,6 +6431,10 @@
         // Restore Humanize checkbox state from prefs
         const ttsHumanizeEl = document.getElementById('ttsHumanize');
         if (ttsHumanizeEl) ttsHumanizeEl.checked = !!loadPrefs().ttsHumanize;
+
+        // Run once so the ✨ Rewrite button starts disabled when the textarea
+        // is empty (it only rewrites existing text — no generation).
+        if (typeof updateTtsCharCount === 'function') updateTtsCharCount();
 
         const ttsVolSlider = document.getElementById('ttsVolumeSlider');
         if (ttsVolSlider) {
