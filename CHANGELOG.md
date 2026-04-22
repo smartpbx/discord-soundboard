@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **Removed 🔀 3 takes picker** — Fish (the only engine in active use) is deterministic, so N takes always returned N identical WAVs. Removed button, panel, client JS, and the `/api/tts/takes` + `/api/tts/takes/commit` endpoints. Revisit if a stochastic engine comes back.
+- **What's New modal now always fetches fresh** — previously the client cached the changelog in memory on load, so if a deploy landed while the page was open you'd see stale notes until a hard refresh. Tiny file, no reason to cache.
+- **First-visit "New" badge logic fixed** — the top release entry now flags as NEW on your first-ever open instead of silently blending in.
+
 ## 2026-04-22 — e301ec6
 - **TTS clip caching** — every synth output gets hashed by its payload and kept in a disk LRU under `data/tts-cache/`. Repeat phrases (and every unchanged line in a conversation replay) skip the GPU entirely, so a Conv-mode edit that only changes line 3 reuses line 1, 2, 4, 5. Size-capped via `TTS_CACHE_MAX_MB` env (default 500 MB); set `TTS_CACHE_ENABLED=0` to turn off.
 - **Voice presets** — save the current voice + expression + emotion + volume + humanize combo as a named preset, apply in one click. Preset dropdown lives at the left of the setup row with "Save current" and "Manage" actions. Up to 30 presets in localStorage.

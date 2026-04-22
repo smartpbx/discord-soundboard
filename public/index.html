@@ -1068,18 +1068,9 @@
                         </div>
                     </div>
                     <div class="tts-act-spacer"></div>
-                    <button type="button" class="tts-pill-btn" id="ttsTakesBtn" onclick="ttsTakes(3)" title="Generate 3 candidate takes of the same line so you can pick the best-sounding one before playing. Bypasses the synth cache so each take is fresh.">🔀 3 takes</button>
                     <button type="button" class="tts-pill-btn is-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
                     <button type="button" class="tts-pill-btn hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different.">🔄 Again</button>
                 </div>
-            </div>
-            <div id="ttsTakesPanel" class="hidden" style="margin-top:0.6rem; padding:0.5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm);">
-                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
-                    <span style="font-size:0.78rem; color:var(--text);">Pick a take to play in Discord:</span>
-                    <span style="flex:1;"></span>
-                    <button type="button" class="tts-pill-btn" onclick="ttsTakesClose()" style="padding:0.25rem 0.55rem; font-size:0.75rem;">Dismiss</button>
-                </div>
-                <div id="ttsTakesList"></div>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
             <audio id="ttsLocalAudio" muted preload="auto" style="display:none"></audio>
@@ -2217,7 +2208,6 @@
         // `lastSeenChangelogSha` get a "NEW" badge + accent border; opening
         // the modal marks them seen.
         let _ttsLoadedVersion = null;  // what the page was served with
-        let _changelogText = null;     // cached raw markdown
 
         async function _fetchVersion() {
             try {
@@ -2226,13 +2216,14 @@
                 return await r.json();
             } catch { return null; }
         }
+        // Always fetch fresh — the file is small, and an in-memory cache
+        // made the modal show stale notes when a deploy landed while the
+        // page was open but before the user reloaded.
         async function _fetchChangelog() {
-            if (_changelogText) return _changelogText;
             try {
                 const r = await fetch('/api/changelog', { cache: 'no-store' });
                 if (!r.ok) return '# Changelog\n\nNot available.\n';
-                _changelogText = await r.text();
-                return _changelogText;
+                return await r.text();
             } catch { return '# Changelog\n\nFetch failed.\n'; }
         }
 
@@ -2289,12 +2280,24 @@
             }
             const lastSeen = localStorage.getItem('lastSeenChangelogSha') || '';
             // Anything above the lastSeen entry is "new" — once we hit it,
-            // everything below is already seen.
-            let hitLastSeen = !lastSeen;
+            // everything below is already seen. First-ever open (no
+            // lastSeen) → nothing has a boundary to cross, so the top
+            // entry alone gets the NEW badge (avoids flooding the modal
+            // with "NEW" on every row the first time someone opens it).
+            let hitLastSeen = false;
+            let firstVisitTopEntryMarked = !lastSeen ? false : true;
             const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const html = entries.map(e => {
-                const isNew = !hitLastSeen;
-                if (!hitLastSeen && e.sha && e.sha.startsWith(lastSeen)) hitLastSeen = true;
+                let isNew = !hitLastSeen;
+                if (!lastSeen) {
+                    // First-ever open: only flag the first SHA-bearing entry.
+                    if (!firstVisitTopEntryMarked && e.sha) {
+                        firstVisitTopEntryMarked = true;
+                    } else {
+                        isNew = false;
+                    }
+                }
+                if (!hitLastSeen && lastSeen && e.sha && e.sha.startsWith(lastSeen)) hitLastSeen = true;
                 const head = e.sha
                     ? '<span class="whats-new-date">' + esc(e.date) + '</span><span class="whats-new-sha">' + esc(e.sha) + '</span>'
                     : '<span class="whats-new-date">' + esc(e.title || '—') + '</span>';
@@ -6806,8 +6809,6 @@
             // Hide the whole row so the bottom of the card doesn't leave a gap.
             const setupRow = document.getElementById('ttsCtrlSetupRow');
             const againBtn = document.getElementById('ttsAgainBtn');
-            const takesBtn = document.getElementById('ttsTakesBtn');
-            const takesPanel = document.getElementById('ttsTakesPanel');
             const singleBtn = document.getElementById('ttsModeSingleBtn');
             const convBtn = document.getElementById('ttsModeConvBtn');
             const toggle = document.getElementById('ttsConvToggle');
@@ -6817,8 +6818,6 @@
             setHidden(conv, !enabled);
             setHidden(setupRow, enabled);
             setHidden(againBtn, enabled);
-            setHidden(takesBtn, enabled);
-            setHidden(takesPanel, enabled);
 
             // Segmented-control visuals.
             if (singleBtn) singleBtn.setAttribute('aria-selected', String(!enabled));
@@ -7003,119 +7002,6 @@
             } finally {
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
-            }
-        }
-
-        // Generate N candidate takes of the current line for A/B picking.
-        // Server synthesizes each take with cache bypass (so the stochastic
-        // Chatterbox sampler produces variants), returns a list of wavIds.
-        // Each take previews via /api/tts/wav/:id; clicking "Use this"
-        // commits that specific take to the Discord queue.
-        let _ttsTakesCtx = null;  // { text, voiceId }
-        async function ttsTakes(count) {
-            if (ttsBusy) return;
-            const ta = document.getElementById('ttsTextInput');
-            const sel = document.getElementById('ttsVoiceSelect');
-            if (!ta || !sel) return;
-            const text = (ta.value || '').trim();
-            if (!text) { setTtsStatus('Type something first.', true); return; }
-            if (text.length > ttsMaxLen) { setTtsStatus('Text too long (' + text.length + '/' + ttsMaxLen + ').', true); return; }
-            const voiceId = sel.value;
-            if (!voiceId) { setTtsStatus('Select a voice.', true); return; }
-            savePrefs({ ttsVoice: voiceId });
-
-            const n = Math.max(2, Math.min(5, count || 3));
-            ttsBusy = true;
-            const btn = document.getElementById('ttsTakesBtn');
-            const speakBtn = document.getElementById('ttsSpeakBtn');
-            if (btn) { btn.disabled = true; btn.textContent = 'Synthesizing ' + n + '…'; }
-            if (speakBtn) speakBtn.disabled = true;
-            setTtsStatus('<span class="tts-spinner"></span> Synthesizing ' + n + ' takes… (serialized, ~' + (n * 5) + '–' + (n * 12) + 's)');
-            ttsTakesClose();
-
-            try {
-                const v = (Array.isArray(ttsVoices) ? ttsVoices : []).find(x => x.id === voiceId);
-                const isCb = v && v.engine === 'chatterbox';
-                const body = {
-                    text, voiceId, count: n,
-                    ...(isCb ? { exaggeration: ttsExpression } : {}),
-                    ...(document.getElementById('ttsForcedEmotion')?.value ? { forcedEmotion: document.getElementById('ttsForcedEmotion').value } : {}),
-                };
-                const r = await api('/api/tts/takes', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const d = await r.json().catch(() => ({}));
-                if (!r.ok) {
-                    setTtsStatus(d.error || 'Takes generation failed.', true);
-                    showToast(d.error || 'Takes failed', 'error');
-                    if (d.cooldownRemaining) setTtsStatus('Wait ' + d.cooldownRemaining + 's before using TTS again.', true);
-                    return;
-                }
-                if (!Array.isArray(d.takes) || !d.takes.length) {
-                    setTtsStatus('No takes returned.', true);
-                    return;
-                }
-                _ttsTakesCtx = { text: d.text || text, voiceId: d.voiceId || voiceId };
-                ttsTakesRender(d.takes);
-                setTtsStatus('');
-            } catch (e) {
-                setTtsStatus('Takes request failed.', true);
-                showToast('Takes request failed', 'error');
-            } finally {
-                ttsBusy = false;
-                if (btn) { btn.disabled = false; btn.textContent = '🔀 ' + n + ' takes'; }
-                if (speakBtn) speakBtn.disabled = false;
-            }
-        }
-
-        function ttsTakesRender(takes) {
-            const panel = document.getElementById('ttsTakesPanel');
-            const host = document.getElementById('ttsTakesList');
-            if (!panel || !host) return;
-            host.innerHTML = takes.map(t => {
-                const src = '/api/tts/wav/' + encodeURIComponent(t.wavId);
-                return '<div style="display:flex; align-items:center; gap:0.5rem; padding:0.35rem 0; border-bottom:1px solid var(--border);">'
-                    + '<span style="font-size:0.78rem; color:var(--text-muted); min-width:3.2rem;">Take ' + t.take + '</span>'
-                    + '<audio controls preload="none" src="' + src + '" style="flex:1; height:32px;"></audio>'
-                    + '<button type="button" class="tts-pill-btn is-primary" onclick="ttsTakesCommit(\'' + t.wavId + '\')" style="padding:0.3rem 0.7rem; font-size:0.75rem;">▶ Use this</button>'
-                    + '</div>';
-            }).join('');
-            panel.classList.remove('hidden');
-        }
-
-        function ttsTakesClose() {
-            const panel = document.getElementById('ttsTakesPanel');
-            const host = document.getElementById('ttsTakesList');
-            if (panel) panel.classList.add('hidden');
-            if (host) host.innerHTML = '';
-            _ttsTakesCtx = null;
-        }
-
-        async function ttsTakesCommit(wavId) {
-            if (!_ttsTakesCtx) { showToast('Takes expired — regenerate.', 'error'); return; }
-            try {
-                const r = await api('/api/tts/takes/commit', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        wavId, text: _ttsTakesCtx.text, voiceId: _ttsTakesCtx.voiceId,
-                        volume: ttsVolume,
-                    }),
-                });
-                const d = await r.json().catch(() => ({}));
-                if (!r.ok) { showToast(d.error || 'Commit failed.', 'error'); return; }
-                if (d.queuePosition && d.queuePosition > 1) {
-                    setTtsStatus('Queued (#' + d.queuePosition + ')');
-                    showToast('Queued take for TTS (#' + d.queuePosition + ')', 'info');
-                } else {
-                    setTtsStatus('');
-                    showToast('Speaking take in Discord', 'success');
-                }
-                if (d.localWavId) playTtsLocalWaveform(d.localWavId);
-                fetchTtsRecents();
-                ttsTakesClose();
-            } catch (e) {
-                showToast('Commit request failed', 'error');
             }
         }
 
