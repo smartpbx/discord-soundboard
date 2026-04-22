@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **Squared-off TTS card buttons** — Single/Conversation mode switch, Speak/Again, and update-banner buttons no longer use pill-round corners; they now match the flat square style of the sound filter chips and TTS/URL/Song/Upload row elsewhere in the UI.
+
 ## 2026-04-22 — 95773db
 - **Fish tag tray flattened** — dropped the DELIVERY / EMOTION / BODY / OTHER groupings so the expanded tray takes far less vertical space. Chip corners squared down (2px) to match the rest of the app's flat button style.
 - **Per-line emotion dropdown in conversation mode** — each row now has its own Auto/Neutral/Soft/Excited/Yell/Angry/Sad/Happy selector, matching single mode. Forces the emotion for that line's synth.
