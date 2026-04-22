@@ -618,6 +618,16 @@
         .tts-rewrite-btn.is-loading { color: var(--accent); border-color: var(--accent); }
         .tts-rewrite-btn.is-loading .tts-rewrite-icon { animation: tts-rewrite-spin 1.1s linear infinite; }
         @keyframes tts-rewrite-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .tts-tag-chip {
+            display: inline-block; padding: 1px 6px; margin: 1px 2px;
+            font-family: monospace; font-size: 0.8rem; color: #7ce0a4;
+            background: rgba(124, 224, 164, 0.08);
+            border: 1px solid rgba(124, 224, 164, 0.25);
+            border-radius: 4px; cursor: pointer; line-height: 1.45;
+            transition: background 0.1s, border-color 0.1s, transform 0.05s;
+        }
+        .tts-tag-chip:hover { background: rgba(124, 224, 164, 0.2); border-color: rgba(124, 224, 164, 0.5); }
+        .tts-tag-chip:active { transform: translateY(1px); }
         /* TTS controls: fixed widths on the knobs so on ultrawide monitors the
            voice dropdown doesn't span 1500px and the sliders don't swallow the
            rest of the row. Speak + Again stay right-aligned via margin-left:auto
@@ -5824,7 +5834,8 @@
                     // Fish S2 Pro uses [tag] syntax and supports 15,000+ free-form
                     // descriptors (per its README). These are the documented common
                     // ones; the user can also invent tags like [pitch up] or
-                    // [professional broadcast tone].
+                    // [professional broadcast tone]. Each chip is clickable to
+                    // insert at the TTS textarea's cursor position.
                     const fishTags = [
                         '[pause]','[short pause]','[emphasis]',
                         '[whisper]','[low voice]','[low volume]',
@@ -5836,15 +5847,21 @@
                         '[singing]','[tsk]','[clearing throat]','[interrupting]',
                         '[echo]','[with strong accent]',
                     ];
-                    const tagPills = fishTags.map(t => '<code style="color:#7ce0a4">' + t + '</code>').join(' ');
-                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags (' + fishTags.length + ' common, 15k+ free-form supported):</span><br>'
+                    const tagPills = fishTags.map(t =>
+                        '<button type="button" class="tts-tag-chip" title="Click to insert at cursor" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>'
+                    ).join('');
+                    hint.innerHTML = '<span style="color:var(--accent);">Fish tags (' + fishTags.length + ' common, 15k+ free-form supported — click to insert):</span><br>'
                         + '<span style="line-height:1.8">' + tagPills + '</span><br>'
                         + '<span style="color:var(--text-muted);font-style:italic">Put them inline: <code>hello [whisper] let\'s be quiet</code>. Or invent your own: <code>[pitch up]</code>, <code>[professional tone]</code>, <code>[in a small voice]</code>.</span>';
                 } else if (v.engine === 'chatterbox') {
                     hint.classList.remove('hidden');
+                    const cbTags = ['[angry]', '[sad]', '[happy]', '[whisper]', '[yell]', '[shouting]'];
+                    const cbPills = cbTags.map(t =>
+                        '<button type="button" class="tts-tag-chip" title="Click to insert at cursor" onclick="insertTtsTag(\'' + t + '\')">' + t + '</button>'
+                    ).join('');
                     hint.innerHTML = '<span style="color:var(--accent);">Chatterbox cues:</span> '
-                        + 'ALL CAPS ⇒ yell · trailing <code>...</code> ⇒ soft · '
-                        + '<code>!!!</code> ⇒ excited · <code>[angry]</code> / <code>[sad]</code> / <code>[happy]</code> tags supported.';
+                        + 'ALL CAPS ⇒ yell · trailing <code>...</code> ⇒ soft · <code>!!!</code> ⇒ excited<br>'
+                        + '<span style="color:var(--accent);">Tags (click to insert):</span> ' + cbPills;
                 } else {
                     hint.classList.add('hidden'); hint.innerHTML = '';
                 }
@@ -5872,6 +5889,28 @@
             const len = (ta.value || '').trim().length;
             cc.textContent = `${len} / ${ttsMaxLen}`;
             cc.classList.toggle('over-limit', len > ttsMaxLen);
+        }
+
+        // Insert an inline expression tag at the current cursor position in the
+        // TTS textarea (or replace the current selection). Auto-pads with a
+        // single space on either side when neighbors aren't already whitespace,
+        // leaves the cursor right after the inserted tag, and fires an `input`
+        // event so the char counter stays in sync.
+        function insertTtsTag(tag) {
+            const ta = document.getElementById('ttsTextInput');
+            if (!ta || !tag) return;
+            const start = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
+            const end = typeof ta.selectionEnd === 'number' ? ta.selectionEnd : ta.value.length;
+            const before = ta.value.slice(0, start);
+            const after = ta.value.slice(end);
+            const needsLead = before.length > 0 && !/\s$/.test(before);
+            const needsTrail = after.length > 0 && !/^\s/.test(after);
+            const insertion = (needsLead ? ' ' : '') + tag + (needsTrail ? ' ' : '');
+            ta.value = before + insertion + after;
+            const caret = start + insertion.length;
+            ta.focus();
+            try { ta.setSelectionRange(caret, caret); } catch {}
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
         // Rewrite the TTS textarea content in the selected voice's style via
