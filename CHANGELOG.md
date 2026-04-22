@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **Fish tag tray flattened** — dropped the DELIVERY / EMOTION / BODY / OTHER groupings so the expanded tray takes far less vertical space. Chip corners squared down (2px) to match the rest of the app's flat button style.
+- **Per-line emotion dropdown in conversation mode** — each row now has its own Auto/Neutral/Soft/Excited/Yell/Angry/Sad/Happy selector, matching single mode. Forces the emotion for that line's synth.
+- **What's New modal already scrolls** — the body has `max-height: calc(100vh - 4rem); overflow-y: auto`, so older release notes are always reachable below the latest entry.
+
 ## 2026-04-22 — 7b6fd87
 - **Version stamp in the header menu** + **What's New modal** — footer of the hamburger menu shows the running `vX · shortSha`; click to open the changelog. Unseen entries highlight with a "New" badge.
 - **Update banner** — page polls `/api/version` every 60s; when the deployed build changes, a purple banner prompts to reload so you're not stuck on stale JS/CSS.

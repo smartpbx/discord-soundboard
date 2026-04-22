@@ -4834,6 +4834,7 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
 
     // Validate + normalize each line before touching the TTS server.
     const disabled = getTtsDisabledVoices();
+    const ALLOWED_EMOTIONS = new Set(['', 'neutral', 'soft', 'excited', 'yell', 'angry', 'sad', 'happy']);
     const parsedLines = [];
     for (let i = 0; i < lines.length; i++) {
         const l = lines[i] || {};
@@ -4850,7 +4851,8 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
             : (i === 0 ? 0 : 400);
         const wantsHumanize = !!l.humanize;
         const voiceName = typeof l.voiceName === 'string' ? l.voiceName.slice(0, 80) : '';
-        parsedLines.push({ voiceId, text, pauseMs, wantsHumanize, voiceName });
+        const emotion = (typeof l.emotion === 'string' && ALLOWED_EMOTIONS.has(l.emotion)) ? l.emotion : '';
+        parsedLines.push({ voiceId, text, pauseMs, wantsHumanize, voiceName, emotion });
     }
 
     // Cooldown — one conversation = one TTS play.
@@ -4917,10 +4919,12 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
                 use_rvc: rvcOverrides[line.voiceId] ?? true,
             };
             // Chatterbox expression preprocessor — Fish/GSV ignore this field.
+            // Per-line forced emotion overrides the regex / LLM classifier.
             if (line.voiceId.startsWith('cb_')) {
                 try {
                     const { segmentText } = require('./lib/tts-expression');
-                    const segments = segmentText(lineText, {});
+                    const segOpts = line.emotion ? { forcedEmotion: line.emotion } : {};
+                    const segments = segmentText(lineText, segOpts);
                     if (segments && (segments.length > 1 || (segments.length === 1 && segments[0].emotion !== 'neutral'))) {
                         synthPayload.segments = segments;
                     }
