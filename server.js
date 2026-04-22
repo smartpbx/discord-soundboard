@@ -56,6 +56,90 @@ const DEFAULT_GUEST_COOLDOWN_SEC = 10;
 const DEFAULT_GUEST_MAX_DURATION = 7;
 const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
 
+// ---------------------------------------------------------------------------
+// Per-user permission overrides
+//
+// Every role-level limit (TTS cap, playback cooldown, Suno quota, upload
+// size, etc.) can be overridden per username. Storage lives inside
+// guest.json under `userOverrides: { <lowercased username>: { field: value,
+// ... } }`. Each getter below consults the override map first and falls
+// back to the existing role default when no override exists, so passing
+// `username` to a getter is purely additive — callers that don't pass one
+// keep getting role-level behavior as before.
+// ---------------------------------------------------------------------------
+const USER_OVERRIDE_FIELDS = [
+    // Numbers (≥0). Use "" / null / undefined in setUserOverrides to clear.
+    'ttsMaxTextLength', 'ttsCooldownSec',
+    'sunoDailyLimit',
+    'urlStreamMaxDurationSec',
+    'userMaxDuration', 'userCooldownSec',
+    'userMaxUploadDuration', 'userMaxUploadBytes',
+    // Booleans
+    'ttsEnabled',
+    'urlStreamEnabled',
+    'userUploadEnabled',
+];
+const USER_OVERRIDE_BOOLEAN_FIELDS = new Set(['ttsEnabled', 'urlStreamEnabled', 'userUploadEnabled']);
+
+function _normalizeUsername(u) {
+    return String(u || '').trim().toLowerCase();
+}
+function getUserOverride(username, field) {
+    const un = _normalizeUsername(username);
+    if (!un) return undefined;
+    const d = loadGuestData();
+    const all = d.userOverrides && typeof d.userOverrides === 'object' ? d.userOverrides : {};
+    const rec = all[un];
+    if (!rec || typeof rec !== 'object') return undefined;
+    return rec[field];
+}
+function getAllUserOverrides() {
+    const d = loadGuestData();
+    const all = d.userOverrides && typeof d.userOverrides === 'object' ? d.userOverrides : {};
+    const clean = {};
+    for (const [un, rec] of Object.entries(all)) {
+        if (!rec || typeof rec !== 'object') continue;
+        const filtered = {};
+        for (const f of USER_OVERRIDE_FIELDS) if (f in rec) filtered[f] = rec[f];
+        if (Object.keys(filtered).length) clean[un] = filtered;
+    }
+    return clean;
+}
+function setUserOverrides(username, overrides) {
+    const un = _normalizeUsername(username);
+    if (!un) return false;
+    if (!overrides || typeof overrides !== 'object') return false;
+    const d = loadGuestData();
+    d.userOverrides = d.userOverrides && typeof d.userOverrides === 'object' ? d.userOverrides : {};
+    const next = { ...(d.userOverrides[un] || {}) };
+    for (const f of USER_OVERRIDE_FIELDS) {
+        if (!(f in overrides)) continue;
+        const v = overrides[f];
+        if (v === null || v === undefined || v === '') {
+            delete next[f];
+        } else if (USER_OVERRIDE_BOOLEAN_FIELDS.has(f)) {
+            next[f] = !!v;
+        } else {
+            const n = Number(v);
+            if (!Number.isFinite(n) || n < 0) continue;
+            next[f] = n;
+        }
+    }
+    if (Object.keys(next).length === 0) delete d.userOverrides[un];
+    else d.userOverrides[un] = next;
+    saveGuestData(d);
+    return true;
+}
+function clearAllUserOverrides(username) {
+    const un = _normalizeUsername(username);
+    if (!un) return false;
+    const d = loadGuestData();
+    if (!d.userOverrides || !d.userOverrides[un]) return false;
+    delete d.userOverrides[un];
+    saveGuestData(d);
+    return true;
+}
+
 function getGuestCooldownSec(ip) {
     const d = loadGuestData();
     if (ip) {
@@ -175,7 +259,9 @@ function appendGuestHistory(ip, filename, displayName) {
     saveGuestData(d);
 }
 
-function getUserUploadEnabled() {
+function getUserUploadEnabled(username) {
+    const ov = getUserOverride(username, 'userUploadEnabled');
+    if (typeof ov === 'boolean') return ov;
     const d = loadGuestData();
     return d.userUploadEnabled === true;
 }
@@ -197,7 +283,9 @@ function setGuestUploadEnabled(enabled) {
     saveGuestData(d);
 }
 
-function getUserMaxUploadDuration() {
+function getUserMaxUploadDuration(username) {
+    const ov = Number(getUserOverride(username, 'userMaxUploadDuration'));
+    if (Number.isFinite(ov) && ov > 0) return ov;
     const d = loadGuestData();
     const n = Number(d.userMaxUploadDuration);
     return Number.isFinite(n) && n > 0 ? n : (Number(d.maxUploadDuration) || 7);
@@ -209,7 +297,9 @@ function setUserMaxUploadDuration(sec) {
     saveGuestData(d);
 }
 
-function getUserMaxUploadBytes() {
+function getUserMaxUploadBytes(username) {
+    const ov = Number(getUserOverride(username, 'userMaxUploadBytes'));
+    if (Number.isFinite(ov) && ov > 0) return ov;
     const d = loadGuestData();
     const n = Number(d.userMaxUploadBytes);
     return Number.isFinite(n) && n > 0 ? n : (Number(d.maxUploadBytes) || DEFAULT_MAX_UPLOAD_BYTES);
@@ -245,7 +335,9 @@ function setGuestMaxUploadBytes(bytes) {
     saveGuestData(d);
 }
 
-function getUserMaxDuration() {
+function getUserMaxDuration(username) {
+    const ov = Number(getUserOverride(username, 'userMaxDuration'));
+    if (Number.isFinite(ov) && ov > 0) return ov;
     const d = loadGuestData();
     const n = Number(d.userMaxDuration);
     return Number.isFinite(n) && n > 0 ? n : 7;
@@ -257,7 +349,9 @@ function setUserMaxDuration(sec) {
     saveGuestData(d);
 }
 
-function getUserCooldownSec() {
+function getUserCooldownSec(username) {
+    const ov = Number(getUserOverride(username, 'userCooldownSec'));
+    if (Number.isFinite(ov) && ov >= 0) return ov;
     const d = loadGuestData();
     const n = Number(d.userCooldownSec);
     return Number.isFinite(n) && n >= 0 ? n : 0;
@@ -282,7 +376,13 @@ function setAutoNormalizeUploads(enabled) {
 }
 
 // --- TTS settings (stored in guest.json alongside other settings) ---
-function getTtsEnabled() {
+function getTtsEnabled(username) {
+    // Per-user kill switch: if the override is explicitly false, TTS is off
+    // for that user regardless of the global setting. An explicit `true`
+    // override does NOT override a global OFF — the global toggle is still
+    // the higher authority.
+    const ov = getUserOverride(username, 'ttsEnabled');
+    if (ov === false) return false;
     const d = loadGuestData();
     return d.ttsEnabled === true;
 }
@@ -291,7 +391,9 @@ function setTtsEnabled(v) {
     d.ttsEnabled = !!v;
     saveGuestData(d);
 }
-function getTtsMaxTextLength(role) {
+function getTtsMaxTextLength(role, username) {
+    const ov = Number(getUserOverride(username, 'ttsMaxTextLength'));
+    if (Number.isFinite(ov) && ov >= 0) return ov;
     const d = loadGuestData();
     const defaults = { guest: 0, user: 200, admin: 500, superadmin: 2000 };
     const key = 'ttsMaxTextLength_' + role;
@@ -303,7 +405,9 @@ function setTtsMaxTextLength(role, len) {
     d['ttsMaxTextLength_' + role] = Number(len) >= 0 ? Number(len) : 0;
     saveGuestData(d);
 }
-function getTtsCooldownSec(role) {
+function getTtsCooldownSec(role, username) {
+    const ov = Number(getUserOverride(username, 'ttsCooldownSec'));
+    if (Number.isFinite(ov) && ov >= 0) return ov;
     const d = loadGuestData();
     const defaults = { guest: 30, user: 15, admin: 5, superadmin: 0 };
     const key = 'ttsCooldownSec_' + role;
@@ -326,7 +430,9 @@ function setSunoEnabled(v) {
     d.sunoEnabled = !!v;
     saveGuestData(d);
 }
-function getSunoDailyLimit(role) {
+function getSunoDailyLimit(role, username) {
+    const ov = Number(getUserOverride(username, 'sunoDailyLimit'));
+    if (Number.isFinite(ov) && ov >= 0) return ov;
     const d = loadGuestData();
     const defaults = { guest: 0, user: 0, admin: 5, superadmin: 50 };
     const key = 'sunoDailyLimit_' + role;
@@ -366,7 +472,9 @@ function decrementSunoUsage(username) {
 }
 
 // --- URL streaming settings (per-role enable + max duration) ---
-function getUrlStreamEnabled(role) {
+function getUrlStreamEnabled(role, username) {
+    const ov = getUserOverride(username, 'urlStreamEnabled');
+    if (typeof ov === 'boolean') return ov;
     const d = loadGuestData();
     // Default: admin + superadmin on, user/guest off
     const defaults = { guest: false, user: false, admin: true, superadmin: true };
@@ -378,7 +486,9 @@ function setUrlStreamEnabled(role, v) {
     d['urlStreamEnabled_' + role] = v === true;
     saveGuestData(d);
 }
-function getUrlStreamMaxDurationSec(role) {
+function getUrlStreamMaxDurationSec(role, username) {
+    const ov = Number(getUserOverride(username, 'urlStreamMaxDurationSec'));
+    if (Number.isFinite(ov) && ov >= 0) return ov;
     const d = loadGuestData();
     const defaults = { guest: 0, user: 60, admin: 300, superadmin: 1800 };
     const key = 'urlStreamMaxDurationSec_' + role;
@@ -1944,11 +2054,12 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.sunoAvailable = !!(process.env.SUNO_API_KEY || '').trim();
         out.sunoDailyLimit = { guest: getSunoDailyLimit('guest'), user: getSunoDailyLimit('user'), admin: getSunoDailyLimit('admin'), superadmin: getSunoDailyLimit('superadmin') };
     }
-    // Suno: per-role availability for all users
+    // Suno: per-role availability for all users (honors per-user override).
     {
         const role = req.session.user.role;
-        const limit = getSunoDailyLimit(role);
-        const used = getSunoUsageToday(req.session.user.username);
+        const un = req.session.user.username;
+        const limit = getSunoDailyLimit(role, un);
+        const used = getSunoUsageToday(un);
         out.sunoSelf = {
             available: getSunoEnabled() && !!(process.env.SUNO_API_KEY || '').trim() && limit > 0,
             limit,
@@ -1956,20 +2067,21 @@ app.get('/api/settings', requireAuth, (req, res) => {
             remaining: Math.max(0, limit - used),
         };
     }
-    // TTS availability for all roles
-    out.ttsEnabled = getTtsEnabled();
+    // TTS availability for all roles — self values reflect per-user overrides.
+    const username = req.session.user.username;
+    out.ttsEnabled = getTtsEnabled(username);
     out.ttsAvailable = !!TTS_API_URL;
     out.autoNormalizeUploads = getAutoNormalizeUploads();
     const role = req.session.user.role;
-    out.ttsMaxTextLength_self = getTtsMaxTextLength(role);
-    out.ttsCooldownSec_self = getTtsCooldownSec(role);
-    // URL streaming: per-role config (superadmin sees full matrix, others get only their own)
+    out.ttsMaxTextLength_self = getTtsMaxTextLength(role, username);
+    out.ttsCooldownSec_self = getTtsCooldownSec(role, username);
+    // URL streaming: per-role config (superadmin sees full matrix, others get only their own).
     if (req.session.user.role === 'superadmin') {
         out.urlStreamEnabled = { guest: getUrlStreamEnabled('guest'), user: getUrlStreamEnabled('user'), admin: getUrlStreamEnabled('admin'), superadmin: getUrlStreamEnabled('superadmin') };
         out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
     }
-    out.urlStreamEnabled_self = getUrlStreamEnabled(role);
-    out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role);
+    out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
+    out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
@@ -1980,12 +2092,12 @@ app.get('/api/settings', requireAuth, (req, res) => {
                 out.guestMaxUploadBytes = getGuestMaxUploadBytes();
             }
         } else {
-            out.userMaxDuration = getUserMaxDuration();
-            out.userCooldownSec = getUserCooldownSec();
-            out.userUploadEnabled = getUserUploadEnabled();
-            if (getUserUploadEnabled()) {
-                out.userMaxUploadDuration = getUserMaxUploadDuration();
-                out.userMaxUploadBytes = getUserMaxUploadBytes();
+            out.userMaxDuration = getUserMaxDuration(username);
+            out.userCooldownSec = getUserCooldownSec(username);
+            out.userUploadEnabled = getUserUploadEnabled(username);
+            if (getUserUploadEnabled(username)) {
+                out.userMaxUploadDuration = getUserMaxUploadDuration(username);
+                out.userMaxUploadBytes = getUserMaxUploadBytes(username);
             }
         }
     }
@@ -2276,6 +2388,59 @@ app.patch('/api/me/password', requireAuth, (req, res) => {
     res.json({ ok: true });
 });
 
+// --- Per-user permission overrides ---------------------------------------
+// Return the entire override map + the list of known usernames so the UI
+// can render a settings table keyed by user. Role defaults are already
+// exposed via /api/settings; this endpoint is purely the "override
+// against the role default" layer.
+app.get('/api/superadmin/user-overrides', requireSuperadmin, (req, res) => {
+    const users = [];
+    USERS.forEach((u, un) => {
+        users.push({ username: un, role: u.role, managed: !envUsernames.has(un), disabled: u.disabled === true });
+    });
+    users.sort((a, b) => a.username.localeCompare(b.username));
+    res.json({
+        users,
+        overrides: getAllUserOverrides(),
+        fields: USER_OVERRIDE_FIELDS,
+    });
+});
+
+// Set / clear overrides for a single user. Body is a partial map — include
+// only the fields you want to change. Pass `null` / `""` / `undefined` for
+// a field to clear it (fall back to role default).
+app.put('/api/superadmin/user-overrides/:username', requireSuperadmin, (req, res) => {
+    const un = _normalizeUsername(req.params.username);
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    if (!USERS.has(un)) return res.status(404).json({ error: 'User not found' });
+    const body = req.body || {};
+    if (!setUserOverrides(un, body)) return res.status(400).json({ error: 'Invalid override payload' });
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'user.overrides.set',
+        target: un,
+        details: body,
+    });
+    const all = getAllUserOverrides();
+    res.json({ ok: true, username: un, overrides: all[un] || {} });
+});
+
+// Clear ALL overrides for a user — faster than sending null for every
+// field individually.
+app.delete('/api/superadmin/user-overrides/:username', requireSuperadmin, (req, res) => {
+    const un = _normalizeUsername(req.params.username);
+    if (!un) return res.status(400).json({ error: 'Username required' });
+    if (!clearAllUserOverrides(un)) return res.status(404).json({ error: 'No overrides for this user' });
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'user.overrides.clear',
+        target: un,
+    });
+    res.json({ ok: true });
+});
+
 app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     const un = String(req.params.username || '').trim().toLowerCase();
     if (!un) return res.status(400).json({ error: 'Username required' });
@@ -2542,10 +2707,11 @@ app.delete('/api/guest/cooldown-override/:ip', requireSuperadmin, (req, res) => 
 
 function uploadHandler(req, res, next) {
     const role = req.session?.user?.role;
+    const un = req.session?.user?.username;
     const isAdminOrSuper = role === 'admin' || role === 'superadmin';
     const canDirectUpload = isAdminOrSuper;
     const canGuestPendingUpload = role === 'guest' && getGuestUploadEnabled();
-    const canUserPendingUpload = role === 'user' && getUserUploadEnabled();
+    const canUserPendingUpload = role === 'user' && getUserUploadEnabled(un);
     const canPendingUpload = canGuestPendingUpload || canUserPendingUpload;
     if (!canDirectUpload && !canPendingUpload) return res.status(403).json({ error: 'Upload not allowed for your role.' });
     upload.single('soundFile')(req, res, (err) => {
@@ -2607,7 +2773,8 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
 
     const stat = fs.statSync(tempPath);
     const size = stat.size;
-    const maxBytes = role === 'guest' ? getGuestMaxUploadBytes() : getUserMaxUploadBytes();
+    const un2 = req.session?.user?.username;
+    const maxBytes = role === 'guest' ? getGuestMaxUploadBytes() : getUserMaxUploadBytes(un2);
     if (size > maxBytes) {
         fs.unlink(tempPath, () => {});
         return res.status(400).json({ error: `File too large. Max ${Math.round(maxBytes / 1024)}KB.` });
@@ -2616,7 +2783,7 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
     fs.rename(tempPath, targetPath, (err) => {
         if (err) return res.status(500).json({ error: 'Error saving file' });
         const duration = probeDuration(targetPath);
-        const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : getUserMaxUploadDuration();
+        const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : getUserMaxUploadDuration(un2);
         if (duration != null && duration > maxDur) {
             fs.unlinkSync(targetPath);
             return res.status(400).json({ error: `File too long. Max ${maxDur} seconds. This file is ${Math.ceil(duration)}s.` });
@@ -2839,7 +3006,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
     } else if (role === 'user') {
         const un = req.session.user.username;
         const lastPlay = userLastPlayByUsername.get(un);
-        const cooldownSec = getUserCooldownSec();
+        const cooldownSec = getUserCooldownSec(un);
         if (lastPlay != null && cooldownSec > 0) {
             const elapsed = (Date.now() - lastPlay) / 1000;
             if (elapsed < cooldownSec) {
@@ -2856,7 +3023,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
         const end = metaEnd != null && metaEnd <= duration ? metaEnd : duration;
         effectiveDuration = Math.max(0, end - start);
     }
-    const maxDur = isGuest ? getGuestMaxDuration() : getUserMaxDuration();
+    const maxDur = isGuest ? getGuestMaxDuration() : getUserMaxDuration(req.session?.user?.username);
     if ((role === 'user' || isGuest) && effectiveDuration != null && effectiveDuration > maxDur) {
         return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(effectiveDuration)}s.` });
     }
@@ -3141,7 +3308,8 @@ function killActiveUrlStream() {
 // Discord or import it as a sound — all without re-downloading.
 app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
     const role = req.session.user.role;
-    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const un = req.session.user.username;
+    if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     const url = validateStreamUrl(req.body?.url);
     if (!url) return res.status(400).json({ error: 'Invalid URL.' });
     sweepUrlPreviews();
@@ -3161,7 +3329,7 @@ app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
     }
     // Cap preview download by the play-max for this role so we don't
     // spend minutes downloading a source a user role couldn't stream anyway.
-    const maxPlay = getUrlStreamMaxDurationSec(role);
+    const maxPlay = getUrlStreamMaxDurationSec(role, un);
     if (maxPlay > 0 && duration != null && duration > maxPlay) {
         return res.status(403).json({ error: `This clip is ${Math.ceil(duration)}s. Your role is limited to ${maxPlay}s.` });
     }
@@ -3226,11 +3394,12 @@ app.get('/api/stream-url/preview/:id/audio', requireAuth, (req, res) => {
 // save; user/guest goes into the existing pending-upload queue.
 app.post('/api/stream-url/import', requireAuth, async (req, res) => {
     const role = req.session.user.role;
-    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const un = req.session.user.username;
+    if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     const isAdminOrSuper = role === 'admin' || role === 'superadmin';
     const canDirectUpload = isAdminOrSuper;
     const canGuestPendingUpload = role === 'guest' && getGuestUploadEnabled();
-    const canUserPendingUpload = role === 'user' && getUserUploadEnabled();
+    const canUserPendingUpload = role === 'user' && getUserUploadEnabled(un);
     const canPendingUpload = canGuestPendingUpload || canUserPendingUpload;
     if (!canDirectUpload && !canPendingUpload) return res.status(403).json({ error: 'Importing to the library is not allowed for your role.' });
 
@@ -3249,7 +3418,7 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
     if (trimLen < 0.25) return res.status(400).json({ error: 'Trim length must be at least 0.25s.' });
 
     // Enforce the user's upload-duration cap (same as /api/upload).
-    const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : (role === 'user' ? getUserMaxUploadDuration() : null);
+    const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : (role === 'user' ? getUserMaxUploadDuration(un) : null);
     if (maxDur != null && trimLen > maxDur) {
         return res.status(400).json({ error: `Trim length ${Math.ceil(trimLen)}s exceeds your ${maxDur}s limit.` });
     }
@@ -3314,7 +3483,8 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
 
 app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
     const role = req.session.user.role;
-    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    const un = req.session.user.username;
+    if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     const url = validateStreamUrl(req.body?.url);
     if (!url) return res.status(400).json({ error: 'Invalid URL.' });
     const r = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
@@ -3339,8 +3509,9 @@ app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
 
 app.post('/api/stream-url', requireAuth, async (req, res) => {
     const role = req.session.user.role;
+    const un = req.session.user.username;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot stream URLs.' });
-    if (!getUrlStreamEnabled(role)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
+    if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first.' });
 
     const body = req.body || {};
@@ -3402,7 +3573,7 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         }
     }
 
-    const maxDur = getUrlStreamMaxDurationSec(role);
+    const maxDur = getUrlStreamMaxDurationSec(role, un);
     const checkDur = previewEntry ? effectiveDuration : duration;
     if (maxDur > 0 && checkDur != null && checkDur > maxDur) {
         return res.status(403).json({ error: `Length ${Math.ceil(checkDur)}s exceeds your ${maxDur}s cap.` });
@@ -3844,15 +4015,16 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     // emotion preset on the TTS-server side.
     const expressionEnabled = useExpression !== false && voiceId.startsWith('cb_');
 
-    // Check TTS availability
+    const role = req.session.user.role;
+    const isGuest = role === 'guest';
+    const un = req.session.user.username;
+
+    // Check TTS availability (honors per-user kill switch via username).
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
-    if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+    if (!getTtsEnabled(un)) return res.status(403).json({ error: 'TTS is disabled' });
 
     // Check if voice is disabled
     if (getTtsDisabledVoices().includes(voiceId)) return res.status(403).json({ error: 'This voice is currently disabled.' });
-
-    const role = req.session.user.role;
-    const isGuest = role === 'guest';
 
     // Check guest access
     if (isGuest) {
@@ -3861,15 +4033,15 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
     }
 
-    // Text length limit
-    const maxLen = getTtsMaxTextLength(role);
+    // Text length limit (per-user override wins over role default).
+    const maxLen = getTtsMaxTextLength(role, un);
     if (maxLen <= 0) return res.status(403).json({ error: 'TTS is not available for your role.' });
     const trimmed = text.trim();
-    if (trimmed.length > maxLen) return res.status(400).json({ error: `Text too long. Maximum ${maxLen} characters for your role.` });
+    if (trimmed.length > maxLen) return res.status(400).json({ error: `Text too long. Maximum ${maxLen} characters.` });
     if (!trimmed) return res.status(400).json({ error: 'Text is empty' });
 
-    // TTS cooldown (separate from sound cooldown)
-    const cooldownSec = getTtsCooldownSec(role);
+    // TTS cooldown (separate from sound cooldown).
+    const cooldownSec = getTtsCooldownSec(role, un);
     if (isGuest) {
         const ip = getClientIP(req);
         const last = ttsLastPlayByIP.get(ip);
@@ -4835,6 +5007,7 @@ async function stitchConversationWavs(wavs) {
 // gates as /api/tts/speak; cooldown counts the whole conversation as one play.
 app.post('/api/tts/conversation', requireAuth, async (req, res) => {
     const role = req.session.user.role;
+    const un = req.session.user.username;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot use conversation mode.' });
     const body = req.body || {};
     const lines = Array.isArray(body.lines) ? body.lines : null;
@@ -4844,9 +5017,9 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
     const volume = typeof body.volume === 'number' ? Math.max(0, Math.min(2, body.volume)) : 1;
 
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
-    if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+    if (!getTtsEnabled(un)) return res.status(403).json({ error: 'TTS is disabled' });
 
-    const maxLen = getTtsMaxTextLength(role);
+    const maxLen = getTtsMaxTextLength(role, un);
     if (maxLen <= 0) return res.status(403).json({ error: 'TTS is not available for your role.' });
 
     // Validate + normalize each line before touching the TTS server.
@@ -4873,9 +5046,8 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
     }
 
     // Cooldown — one conversation = one TTS play.
-    const cooldownSec = getTtsCooldownSec(role);
+    const cooldownSec = getTtsCooldownSec(role, un);
     if (role === 'user') {
-        const un = req.session.user.username;
         const last = ttsLastPlayByUsername.get(un);
         if (last != null && cooldownSec > 0) {
             const elapsed = (Date.now() - last) / 1000;
@@ -5310,9 +5482,10 @@ app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, r
 function requireSunoAllowed(req, res, next) {
     if (!getSunoEnabled()) return res.status(403).json({ error: 'Song generation is disabled.' });
     const role = req.session.user.role;
-    const limit = getSunoDailyLimit(role);
+    const username = req.session.user.username;
+    const limit = getSunoDailyLimit(role, username);
     if (limit <= 0) return res.status(403).json({ error: 'Your role cannot generate songs.' });
-    const used = getSunoUsageToday(req.session.user.username);
+    const used = getSunoUsageToday(username);
     if (used >= limit) return res.status(429).json({ error: `Daily Suno limit reached (${used}/${limit}). Try again tomorrow.`, used, limit });
     req._sunoLimit = { used, limit };
     next();
@@ -5323,7 +5496,7 @@ app.get('/api/suno/config', requireAuth, (req, res) => {
     const username = req.session.user.username;
     res.json({
         enabled: getSunoEnabled() && !!(process.env.SUNO_API_KEY || '').trim(),
-        limit: getSunoDailyLimit(role),
+        limit: getSunoDailyLimit(role, username),
         used_today: getSunoUsageToday(username),
     });
 });

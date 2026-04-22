@@ -4319,14 +4319,17 @@
                 const managed = u.managed === true;
                 const disabled = u.disabled === true;
                 let actions = '';
+                const overridesBtn = '<button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="openUserOverrides(this.dataset.username, \'' + esc(u.role) + '\')" title="Per-user permission overrides (TTS cap, cooldown, upload limits, etc.)">Overrides</button>';
                 if (managed) {
                     const roleOpts = '<option value="user"' + (u.role === 'user' ? ' selected' : '') + '>User</option><option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
                     const banBtn = disabled
                         ? '<button type="button" class="btn btn-primary block-btn" data-username="' + esc(u.username) + '" onclick="toggleUserDisabled(this.dataset.username, false)" title="Re-enable login">Enable</button>'
                         : '<button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="toggleUserDisabled(this.dataset.username, true)" title="Block login without deleting the account">Disable</button>';
-                    actions = '<select class="user-role-select" data-username="' + esc(u.username) + '" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);margin-right:0.35rem" onchange="updateUserRole(this.dataset.username, this.value)">' + roleOpts + '</select>' + banBtn + ' <button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="resetUserPassword(this.dataset.username)" title="Reset password">Reset PW</button> <button type="button" class="btn btn-danger block-btn" data-username="' + esc(u.username) + '" onclick="deleteUser(this.dataset.username)">Delete</button>';
+                    actions = '<select class="user-role-select" data-username="' + esc(u.username) + '" style="padding:0.25rem;font-size:0.85rem;background:var(--surface-hover);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);margin-right:0.35rem" onchange="updateUserRole(this.dataset.username, this.value)">' + roleOpts + '</select>' + banBtn + ' ' + overridesBtn + ' <button type="button" class="btn btn-ghost block-btn" data-username="' + esc(u.username) + '" onclick="resetUserPassword(this.dataset.username)" title="Reset password">Reset PW</button> <button type="button" class="btn btn-danger block-btn" data-username="' + esc(u.username) + '" onclick="deleteUser(this.dataset.username)">Delete</button>';
                 } else {
-                    actions = '<span style="color:var(--text-muted);font-size:0.8em">(env)</span>';
+                    // Env-configured users can still have overrides, even though
+                    // password / role / delete aren't available for them.
+                    actions = '<span style="color:var(--text-muted);font-size:0.8em; margin-right:0.4rem;">(env)</span>' + overridesBtn;
                 }
                 const nameLabel = disabled
                     ? esc(u.username) + ' <span style="color:var(--danger); font-size:0.75em;">(disabled)</span>'
@@ -4363,6 +4366,146 @@
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'DELETE' });
             if (res && res.ok) fetchUsers();
             else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+
+        // ---- Per-user permission overrides --------------------------------
+        // Each override field has a label, a type (num / bool), and a hint
+        // describing what it controls. The modal builds a form from this
+        // table, pre-filled with the user's current overrides (empty = fall
+        // back to role default, shown in grey beside each input).
+        const USER_OVERRIDE_FIELD_META = [
+            { key: 'ttsEnabled',              type: 'bool', label: 'TTS enabled',              hint: 'Per-user kill switch. Global TTS toggle still wins when off.' },
+            { key: 'ttsMaxTextLength',        type: 'num',  label: 'TTS max chars',            hint: '0 disables TTS for this user entirely.' },
+            { key: 'ttsCooldownSec',          type: 'num',  label: 'TTS cooldown (s)',         hint: 'Seconds between TTS requests.' },
+            { key: 'sunoDailyLimit',          type: 'num',  label: 'Suno daily limit',         hint: 'Songs per day. 0 disables.' },
+            { key: 'urlStreamEnabled',        type: 'bool', label: 'URL streaming enabled',    hint: 'Allow streaming YouTube/TikTok/etc. URLs.' },
+            { key: 'urlStreamMaxDurationSec', type: 'num',  label: 'URL stream max (s)',       hint: 'Max playable duration for URL streams.' },
+            { key: 'userMaxDuration',         type: 'num',  label: 'Playback max (s)',         hint: 'Max length a single sound can play.' },
+            { key: 'userCooldownSec',         type: 'num',  label: 'Playback cooldown (s)',    hint: 'Seconds between plays.' },
+            { key: 'userUploadEnabled',       type: 'bool', label: 'Upload enabled',           hint: 'Allow uploads (goes to pending queue).' },
+            { key: 'userMaxUploadDuration',   type: 'num',  label: 'Upload max duration (s)',  hint: 'Longest upload accepted.' },
+            { key: 'userMaxUploadBytes',      type: 'num',  label: 'Upload max size (bytes)',  hint: 'Biggest upload accepted.' },
+        ];
+        // Ephemeral state while the modal is open. Populated by openUserOverrides.
+        let _userOverridesCtx = null; // { username, role, current, roleDefaults }
+
+        function _userOverridesEsc(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        async function openUserOverrides(username, role) {
+            const body = document.getElementById('userOverridesBody');
+            const nameEl = document.getElementById('userOverridesName');
+            if (!body || !nameEl) return;
+            nameEl.textContent = username + ' (' + role + ')';
+            body.innerHTML = '<p style="color:var(--text-muted); font-style:italic;">Loading…</p>';
+            document.getElementById('userOverridesOverlay').classList.remove('hidden');
+            // Fetch both the override map and the role-default matrix so the
+            // modal can show "role default = 500" next to each field.
+            const [ovRes, setRes] = await Promise.all([
+                api('/api/superadmin/user-overrides'),
+                api('/api/settings'),
+            ]);
+            if (!ovRes || !ovRes.ok) { body.innerHTML = '<p style="color:var(--danger);">Failed to load overrides.</p>'; return; }
+            const ov = await ovRes.json();
+            const settings = setRes && setRes.ok ? await setRes.json() : {};
+            const current = (ov.overrides || {})[username.toLowerCase()] || {};
+
+            // Derive role defaults for each field from /api/settings response.
+            const roleDefaults = {
+                ttsEnabled: settings.ttsEnabled === true,
+                ttsMaxTextLength: (settings.ttsMaxTextLength || {})[role],
+                ttsCooldownSec: (settings.ttsCooldownSec || {})[role],
+                sunoDailyLimit: (settings.sunoDailyLimit || {})[role],
+                urlStreamEnabled: (settings.urlStreamEnabled || {})[role],
+                urlStreamMaxDurationSec: (settings.urlStreamMaxDurationSec || {})[role],
+                userMaxDuration: settings.userMaxDuration,
+                userCooldownSec: settings.userCooldownSec,
+                userUploadEnabled: settings.userUploadEnabled,
+                userMaxUploadDuration: settings.userMaxUploadDuration,
+                userMaxUploadBytes: settings.userMaxUploadBytes,
+            };
+
+            _userOverridesCtx = { username: username.toLowerCase(), role, current, roleDefaults };
+            _renderUserOverridesForm();
+        }
+
+        function _renderUserOverridesForm() {
+            const ctx = _userOverridesCtx;
+            const body = document.getElementById('userOverridesBody');
+            if (!ctx || !body) return;
+            const esc = _userOverridesEsc;
+            body.innerHTML = USER_OVERRIDE_FIELD_META.map(f => {
+                const cur = ctx.current[f.key];
+                const def = ctx.roleDefaults[f.key];
+                const defLabel = def === undefined || def === null ? '—' : (typeof def === 'boolean' ? (def ? 'on' : 'off') : String(def));
+                let input;
+                if (f.type === 'bool') {
+                    const hasOverride = typeof cur === 'boolean';
+                    const checked = hasOverride ? cur : false;
+                    input =
+                        '<select id="uov_' + esc(f.key) + '" style="padding:0.35rem 0.4rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font: inherit; font-size: 0.85rem;">'
+                        + '<option value=""' + (!hasOverride ? ' selected' : '') + '>— role default —</option>'
+                        + '<option value="true"' + (hasOverride && checked ? ' selected' : '') + '>On</option>'
+                        + '<option value="false"' + (hasOverride && !checked ? ' selected' : '') + '>Off</option>'
+                        + '</select>';
+                } else {
+                    const val = Number.isFinite(Number(cur)) ? String(cur) : '';
+                    input = '<input type="number" id="uov_' + esc(f.key) + '" min="0" step="1" value="' + esc(val) + '" placeholder="role default" style="width:8rem; padding:0.35rem 0.4rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font: inherit; font-size: 0.85rem;">';
+                }
+                return '<div style="display:grid; grid-template-columns: 1fr auto; gap:0.5rem; align-items:center; padding: 0.35rem 0; border-bottom:1px solid var(--border);">'
+                    + '<div>'
+                    +   '<div style="color:var(--text); font-size:0.88rem; font-weight:500;">' + esc(f.label) + ' <span style="color:var(--text-muted); font-weight:400; font-size:0.75rem;">role default: ' + esc(defLabel) + '</span></div>'
+                    +   '<div style="color:var(--text-muted); font-size:0.72rem; margin-top:0.1rem;">' + esc(f.hint) + '</div>'
+                    + '</div>'
+                    + '<div>' + input + '</div>'
+                    + '</div>';
+            }).join('');
+        }
+
+        function closeUserOverrides() {
+            const el = document.getElementById('userOverridesOverlay');
+            if (el) el.classList.add('hidden');
+            _userOverridesCtx = null;
+        }
+
+        async function saveUserOverrides() {
+            const ctx = _userOverridesCtx;
+            if (!ctx) return;
+            const payload = {};
+            for (const f of USER_OVERRIDE_FIELD_META) {
+                const el = document.getElementById('uov_' + f.key);
+                if (!el) continue;
+                const raw = el.value;
+                if (f.type === 'bool') {
+                    if (raw === '') payload[f.key] = null;
+                    else payload[f.key] = raw === 'true';
+                } else {
+                    if (raw === '' || raw === null || raw === undefined) payload[f.key] = null;
+                    else {
+                        const n = Number(raw);
+                        if (Number.isFinite(n) && n >= 0) payload[f.key] = n;
+                    }
+                }
+            }
+            const res = await api('/api/superadmin/user-overrides/' + encodeURIComponent(ctx.username), {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res || !res.ok) { showToast(d.error || 'Save failed', 'error'); return; }
+            showToast('Overrides saved for ' + ctx.username, 'success');
+            closeUserOverrides();
+        }
+
+        async function clearAllUserOverridesConfirm() {
+            const ctx = _userOverridesCtx;
+            if (!ctx) return;
+            if (!confirm('Remove every override for ' + ctx.username + '? They revert to role defaults.')) return;
+            const res = await api('/api/superadmin/user-overrides/' + encodeURIComponent(ctx.username), { method: 'DELETE' });
+            const d = await res.json().catch(() => ({}));
+            if (res && res.ok) { showToast('Cleared overrides for ' + ctx.username, 'success'); closeUserOverrides(); }
+            else { showToast(d.error || 'Clear failed', 'error'); }
         }
 
         async function setPlaybackLocked(locked) {
@@ -9266,6 +9409,19 @@
             <h3>What's New <button type="button" class="shortcuts-close" onclick="closeWhatsNew()" title="Close">✕</button></h3>
             <div class="whats-new-meta" id="whatsNewMeta">Loading…</div>
             <div id="whatsNewBody">Loading changelog…</div>
+        </div>
+    </div>
+
+    <div class="whats-new-overlay hidden" id="userOverridesOverlay" onclick="if(event.target===this)closeUserOverrides()">
+        <div class="whats-new-modal" style="max-width: 640px;">
+            <h3>User overrides: <span id="userOverridesName" style="color:var(--accent);">—</span> <button type="button" class="shortcuts-close" onclick="closeUserOverrides()" title="Close">✕</button></h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin:0 0 1rem;">Overrides replace the role default for this user. Leave a field blank (or toggle off) to fall back to the role default. Role default in grey is shown beside each field.</p>
+            <div id="userOverridesBody" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1.2rem; border-top:1px solid var(--border); padding-top:0.8rem;">
+                <button type="button" class="tts-pill-btn" onclick="clearAllUserOverridesConfirm()" title="Remove every override for this user — they revert entirely to role defaults.">Clear all</button>
+                <button type="button" class="tts-pill-btn" onclick="closeUserOverrides()">Cancel</button>
+                <button type="button" class="tts-pill-btn is-primary" onclick="saveUserOverrides()">Save</button>
+            </div>
         </div>
     </div>
 

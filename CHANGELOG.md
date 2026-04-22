@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **Per-user permission overrides** — every role-level limit can now be overridden per username. Superadmin → Users → "Overrides" on any user opens a modal with: TTS enabled + max chars + cooldown, Suno daily limit, URL streaming enabled + max duration, playback max duration + cooldown, upload enabled + max duration + max size. Leaving a field blank (or set to "— role default —" for bools) falls back to the role default. Stored in `guest.json.userOverrides`; works for env-configured users too. Endpoints: `GET /api/superadmin/user-overrides`, `PUT /api/superadmin/user-overrides/:username`, `DELETE /api/superadmin/user-overrides/:username`.
+
 ## 2026-04-22 — d60e066
 - **Removed 🔀 3 takes picker** — Fish (the only engine in active use) is deterministic, so N takes always returned N identical WAVs. Removed button, panel, client JS, and the `/api/tts/takes` + `/api/tts/takes/commit` endpoints. Revisit if a stochastic engine comes back.
 - **What's New modal now always fetches fresh** — previously the client cached the changelog in memory on load, so if a deploy landed while the page was open you'd see stale notes until a hard refresh. Tiny file, no reason to cache.
