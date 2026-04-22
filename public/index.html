@@ -1030,6 +1030,10 @@
             <div id="ttsEngineHint" class="hidden"></div>
             <div class="tts-controls">
                 <div class="tts-ctrl-row" id="ttsCtrlSetupRow">
+                    <div class="tts-ctrl-field" id="ttsCtrlPresetField" style="flex: 0 0 160px;">
+                        <span class="tts-ctrl-label">Preset</span>
+                        <select id="ttsPresetSelect" onchange="ttsPresetOnChange(this.value)" title="Saved voice + knob combos. Pick one to apply; save the current setup with a name; or manage existing."><option value="">— select —</option></select>
+                    </div>
                     <div class="tts-ctrl-field is-grow" id="ttsCtrlVoiceField">
                         <span class="tts-ctrl-label">Voice</span>
                         <select id="ttsVoiceSelect"><option value="">Loading voices…</option></select>
@@ -1064,9 +1068,18 @@
                         </div>
                     </div>
                     <div class="tts-act-spacer"></div>
+                    <button type="button" class="tts-pill-btn" id="ttsTakesBtn" onclick="ttsTakes(3)" title="Generate 3 candidate takes of the same line so you can pick the best-sounding one before playing. Bypasses the synth cache so each take is fresh.">🔀 3 takes</button>
                     <button type="button" class="tts-pill-btn is-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
                     <button type="button" class="tts-pill-btn hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different.">🔄 Again</button>
                 </div>
+            </div>
+            <div id="ttsTakesPanel" class="hidden" style="margin-top:0.6rem; padding:0.5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm);">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                    <span style="font-size:0.78rem; color:var(--text);">Pick a take to play in Discord:</span>
+                    <span style="flex:1;"></span>
+                    <button type="button" class="tts-pill-btn" onclick="ttsTakesClose()" style="padding:0.25rem 0.55rem; font-size:0.75rem;">Dismiss</button>
+                </div>
+                <div id="ttsTakesList"></div>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
             <audio id="ttsLocalAudio" muted preload="auto" style="display:none"></audio>
@@ -6228,6 +6241,178 @@
             return html;
         }
 
+        // ---- Voice presets -------------------------------------------------
+        // Saved combos of voice + knobs. Persisted in localStorage under
+        // `ttsPresets` as an array of { id, name, voiceId, exaggeration,
+        // forcedEmotion, volume, humanize }. Applied to single-mode controls
+        // only — conversation mode already carries per-row voice/emotion.
+        function _ttsPresetsLoad() {
+            try {
+                const raw = localStorage.getItem('ttsPresets');
+                if (!raw) return [];
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr : [];
+            } catch { return []; }
+        }
+        function _ttsPresetsSave(list) {
+            try { localStorage.setItem('ttsPresets', JSON.stringify(list)); } catch {}
+        }
+        function _ttsPresetCurrent() {
+            const voiceId = document.getElementById('ttsVoiceSelect')?.value || '';
+            const exag = Number(document.getElementById('ttsExpressionSlider')?.value ?? 0.5);
+            const forcedEmotion = document.getElementById('ttsForcedEmotion')?.value || '';
+            const volume = Number(document.getElementById('ttsVolumeSlider')?.value ?? 1);
+            const humanize = !!document.getElementById('ttsHumanize')?.checked;
+            return { voiceId, exaggeration: exag, forcedEmotion, volume, humanize };
+        }
+        function _ttsPresetsRenderDropdown() {
+            const sel = document.getElementById('ttsPresetSelect');
+            if (!sel) return;
+            const presets = _ttsPresetsLoad();
+            const currentVal = sel.value;
+            let html = '<option value="">— select —</option>';
+            if (presets.length) {
+                html += '<optgroup label="Saved">';
+                for (const p of presets) {
+                    html += '<option value="p:' + (p.id || '') + '">' + _ttsEscAttr(p.name || '(unnamed)') + '</option>';
+                }
+                html += '</optgroup>';
+            }
+            html += '<optgroup label="Actions">';
+            html += '<option value="__save__">+ Save current…</option>';
+            if (presets.length) html += '<option value="__manage__">⚙ Manage…</option>';
+            html += '</optgroup>';
+            sel.innerHTML = html;
+            // Don't restore __save__/__manage__ selections — they're one-shots.
+            if (currentVal && currentVal.startsWith('p:') && sel.querySelector('option[value="' + currentVal + '"]')) {
+                sel.value = currentVal;
+            }
+        }
+        function _ttsEscAttr(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function ttsPresetApply(presetId) {
+            const presets = _ttsPresetsLoad();
+            const p = presets.find(x => x.id === presetId);
+            if (!p) { showToast('Preset not found.', 'error'); return; }
+            const voiceSel = document.getElementById('ttsVoiceSelect');
+            if (voiceSel && voiceSel.querySelector('option[value="' + p.voiceId + '"]')) {
+                voiceSel.value = p.voiceId;
+                savePrefs({ ttsVoice: p.voiceId });
+            }
+            const exSlider = document.getElementById('ttsExpressionSlider');
+            const exLabel = document.getElementById('ttsExpressionLabel');
+            if (Number.isFinite(p.exaggeration) && exSlider) {
+                exSlider.value = p.exaggeration;
+                ttsExpression = Number(p.exaggeration);
+                if (exLabel) exLabel.textContent = ttsExpression.toFixed(2);
+                savePrefs({ ttsExpression });
+            }
+            const emoSel = document.getElementById('ttsForcedEmotion');
+            if (emoSel) emoSel.value = p.forcedEmotion || '';
+            const volSlider = document.getElementById('ttsVolumeSlider');
+            const volLabel = document.getElementById('ttsVolumeLabel');
+            if (Number.isFinite(p.volume) && volSlider) {
+                volSlider.value = p.volume;
+                ttsVolume = Number(p.volume);
+                if (volLabel) volLabel.textContent = Math.round(ttsVolume * 100) + '%';
+                savePrefs({ ttsVolume });
+            }
+            const hum = document.getElementById('ttsHumanize');
+            if (hum) {
+                hum.checked = !!p.humanize;
+                savePrefs({ ttsHumanize: !!p.humanize });
+            }
+            // Rebuild tag tray + expression visibility since voice may have changed.
+            if (typeof updateTtsExpressionVisibility === 'function') updateTtsExpressionVisibility();
+            showToast('Applied preset: ' + (p.name || '—'), 'success');
+        }
+
+        function ttsPresetSaveCurrent() {
+            const cur = _ttsPresetCurrent();
+            if (!cur.voiceId) { showToast('Pick a voice before saving a preset.', 'error'); return; }
+            const name = prompt('Name this preset (e.g. "Trump rally", "Calm Herzog"):', '');
+            if (name == null) return;  // cancelled
+            const trimmed = String(name).trim();
+            if (!trimmed) { showToast('Name required.', 'error'); return; }
+            const presets = _ttsPresetsLoad();
+            const id = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+            presets.unshift({ id, name: trimmed.slice(0, 60), ...cur, createdAt: Date.now() });
+            // Cap at 30 presets — anything beyond is noise in the dropdown.
+            if (presets.length > 30) presets.length = 30;
+            _ttsPresetsSave(presets);
+            _ttsPresetsRenderDropdown();
+            document.getElementById('ttsPresetSelect').value = 'p:' + id;
+            showToast('Saved preset: ' + trimmed, 'success');
+        }
+
+        function ttsPresetDelete(presetId) {
+            const presets = _ttsPresetsLoad().filter(p => p.id !== presetId);
+            _ttsPresetsSave(presets);
+            _ttsPresetsRenderDropdown();
+            _ttsPresetRenderManage();
+        }
+        function ttsPresetRename(presetId) {
+            const presets = _ttsPresetsLoad();
+            const p = presets.find(x => x.id === presetId);
+            if (!p) return;
+            const name = prompt('New name:', p.name || '');
+            if (name == null) return;
+            const trimmed = String(name).trim();
+            if (!trimmed) return;
+            p.name = trimmed.slice(0, 60);
+            _ttsPresetsSave(presets);
+            _ttsPresetsRenderDropdown();
+            _ttsPresetRenderManage();
+        }
+
+        function _ttsPresetRenderManage() {
+            const host = document.getElementById('ttsPresetList');
+            if (!host) return;
+            const presets = _ttsPresetsLoad();
+            if (!presets.length) {
+                host.innerHTML = '<p style="color:var(--text-muted); font-style:italic;">No presets saved yet.</p>';
+                return;
+            }
+            const esc = _ttsEscAttr;
+            host.innerHTML = presets.map(p => {
+                const knobs = [
+                    p.voiceId ? 'voice: ' + p.voiceId : null,
+                    Number.isFinite(p.exaggeration) ? 'exag: ' + p.exaggeration.toFixed(2) : null,
+                    p.forcedEmotion ? 'emo: ' + p.forcedEmotion : null,
+                    Number.isFinite(p.volume) ? 'vol: ' + Math.round(p.volume * 100) + '%' : null,
+                    p.humanize ? 'humanize' : null,
+                ].filter(Boolean).join(' · ');
+                return '<div style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0; border-bottom:1px solid var(--border);">'
+                    + '<div style="flex:1; min-width:0;">'
+                    +   '<div style="color:var(--text); font-size:0.9rem; font-weight:500;">' + esc(p.name) + '</div>'
+                    +   '<div style="color:var(--text-muted); font-size:0.72rem; font-family:\'SF Mono\',Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(knobs) + '</div>'
+                    + '</div>'
+                    + '<button type="button" class="tts-pill-btn" onclick="ttsPresetRename(\'' + esc(p.id) + '\')" style="padding:0.3rem 0.6rem; font-size:0.75rem;">Rename</button>'
+                    + '<button type="button" class="tts-pill-btn" onclick="ttsPresetDelete(\'' + esc(p.id) + '\')" style="padding:0.3rem 0.6rem; font-size:0.75rem;">Delete</button>'
+                    + '</div>';
+            }).join('');
+        }
+
+        function openTtsPresetManage() {
+            _ttsPresetRenderManage();
+            const el = document.getElementById('ttsPresetOverlay');
+            if (el) el.classList.remove('hidden');
+        }
+        function closeTtsPresetManage() {
+            const el = document.getElementById('ttsPresetOverlay');
+            if (el) el.classList.add('hidden');
+        }
+
+        function ttsPresetOnChange(val) {
+            if (!val) return;
+            const sel = document.getElementById('ttsPresetSelect');
+            if (val === '__save__') { ttsPresetSaveCurrent(); if (sel) sel.value = ''; return; }
+            if (val === '__manage__') { openTtsPresetManage(); if (sel) sel.value = ''; return; }
+            if (val.startsWith('p:')) { ttsPresetApply(val.slice(2)); return; }
+        }
+
         // Build the tag tray + expression slider visibility. Called on voice
         // change, mode switch, and any time the conversation roster changes so
         // tags surface in conv mode too (picks Fish if any row is Fish, else
@@ -6621,6 +6806,8 @@
             // Hide the whole row so the bottom of the card doesn't leave a gap.
             const setupRow = document.getElementById('ttsCtrlSetupRow');
             const againBtn = document.getElementById('ttsAgainBtn');
+            const takesBtn = document.getElementById('ttsTakesBtn');
+            const takesPanel = document.getElementById('ttsTakesPanel');
             const singleBtn = document.getElementById('ttsModeSingleBtn');
             const convBtn = document.getElementById('ttsModeConvBtn');
             const toggle = document.getElementById('ttsConvToggle');
@@ -6630,6 +6817,8 @@
             setHidden(conv, !enabled);
             setHidden(setupRow, enabled);
             setHidden(againBtn, enabled);
+            setHidden(takesBtn, enabled);
+            setHidden(takesPanel, enabled);
 
             // Segmented-control visuals.
             if (singleBtn) singleBtn.setAttribute('aria-selected', String(!enabled));
@@ -6660,6 +6849,9 @@
             ttsConvSetMode(ttsConvToggleEl.checked);
             ttsConvToggleEl.addEventListener('change', (e) => ttsConvSetMode(e.target.checked));
         }
+
+        // Render the preset dropdown from localStorage on load.
+        if (typeof _ttsPresetsRenderDropdown === 'function') _ttsPresetsRenderDropdown();
 
         const ttsTextEl = document.getElementById('ttsTextInput');
         if (ttsTextEl) {
@@ -6811,6 +7003,119 @@
             } finally {
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
+            }
+        }
+
+        // Generate N candidate takes of the current line for A/B picking.
+        // Server synthesizes each take with cache bypass (so the stochastic
+        // Chatterbox sampler produces variants), returns a list of wavIds.
+        // Each take previews via /api/tts/wav/:id; clicking "Use this"
+        // commits that specific take to the Discord queue.
+        let _ttsTakesCtx = null;  // { text, voiceId }
+        async function ttsTakes(count) {
+            if (ttsBusy) return;
+            const ta = document.getElementById('ttsTextInput');
+            const sel = document.getElementById('ttsVoiceSelect');
+            if (!ta || !sel) return;
+            const text = (ta.value || '').trim();
+            if (!text) { setTtsStatus('Type something first.', true); return; }
+            if (text.length > ttsMaxLen) { setTtsStatus('Text too long (' + text.length + '/' + ttsMaxLen + ').', true); return; }
+            const voiceId = sel.value;
+            if (!voiceId) { setTtsStatus('Select a voice.', true); return; }
+            savePrefs({ ttsVoice: voiceId });
+
+            const n = Math.max(2, Math.min(5, count || 3));
+            ttsBusy = true;
+            const btn = document.getElementById('ttsTakesBtn');
+            const speakBtn = document.getElementById('ttsSpeakBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Synthesizing ' + n + '…'; }
+            if (speakBtn) speakBtn.disabled = true;
+            setTtsStatus('<span class="tts-spinner"></span> Synthesizing ' + n + ' takes… (serialized, ~' + (n * 5) + '–' + (n * 12) + 's)');
+            ttsTakesClose();
+
+            try {
+                const v = (Array.isArray(ttsVoices) ? ttsVoices : []).find(x => x.id === voiceId);
+                const isCb = v && v.engine === 'chatterbox';
+                const body = {
+                    text, voiceId, count: n,
+                    ...(isCb ? { exaggeration: ttsExpression } : {}),
+                    ...(document.getElementById('ttsForcedEmotion')?.value ? { forcedEmotion: document.getElementById('ttsForcedEmotion').value } : {}),
+                };
+                const r = await api('/api/tts/takes', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    setTtsStatus(d.error || 'Takes generation failed.', true);
+                    showToast(d.error || 'Takes failed', 'error');
+                    if (d.cooldownRemaining) setTtsStatus('Wait ' + d.cooldownRemaining + 's before using TTS again.', true);
+                    return;
+                }
+                if (!Array.isArray(d.takes) || !d.takes.length) {
+                    setTtsStatus('No takes returned.', true);
+                    return;
+                }
+                _ttsTakesCtx = { text: d.text || text, voiceId: d.voiceId || voiceId };
+                ttsTakesRender(d.takes);
+                setTtsStatus('');
+            } catch (e) {
+                setTtsStatus('Takes request failed.', true);
+                showToast('Takes request failed', 'error');
+            } finally {
+                ttsBusy = false;
+                if (btn) { btn.disabled = false; btn.textContent = '🔀 ' + n + ' takes'; }
+                if (speakBtn) speakBtn.disabled = false;
+            }
+        }
+
+        function ttsTakesRender(takes) {
+            const panel = document.getElementById('ttsTakesPanel');
+            const host = document.getElementById('ttsTakesList');
+            if (!panel || !host) return;
+            host.innerHTML = takes.map(t => {
+                const src = '/api/tts/wav/' + encodeURIComponent(t.wavId);
+                return '<div style="display:flex; align-items:center; gap:0.5rem; padding:0.35rem 0; border-bottom:1px solid var(--border);">'
+                    + '<span style="font-size:0.78rem; color:var(--text-muted); min-width:3.2rem;">Take ' + t.take + '</span>'
+                    + '<audio controls preload="none" src="' + src + '" style="flex:1; height:32px;"></audio>'
+                    + '<button type="button" class="tts-pill-btn is-primary" onclick="ttsTakesCommit(\'' + t.wavId + '\')" style="padding:0.3rem 0.7rem; font-size:0.75rem;">▶ Use this</button>'
+                    + '</div>';
+            }).join('');
+            panel.classList.remove('hidden');
+        }
+
+        function ttsTakesClose() {
+            const panel = document.getElementById('ttsTakesPanel');
+            const host = document.getElementById('ttsTakesList');
+            if (panel) panel.classList.add('hidden');
+            if (host) host.innerHTML = '';
+            _ttsTakesCtx = null;
+        }
+
+        async function ttsTakesCommit(wavId) {
+            if (!_ttsTakesCtx) { showToast('Takes expired — regenerate.', 'error'); return; }
+            try {
+                const r = await api('/api/tts/takes/commit', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        wavId, text: _ttsTakesCtx.text, voiceId: _ttsTakesCtx.voiceId,
+                        volume: ttsVolume,
+                    }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { showToast(d.error || 'Commit failed.', 'error'); return; }
+                if (d.queuePosition && d.queuePosition > 1) {
+                    setTtsStatus('Queued (#' + d.queuePosition + ')');
+                    showToast('Queued take for TTS (#' + d.queuePosition + ')', 'info');
+                } else {
+                    setTtsStatus('');
+                    showToast('Speaking take in Discord', 'success');
+                }
+                if (d.localWavId) playTtsLocalWaveform(d.localWavId);
+                fetchTtsRecents();
+                ttsTakesClose();
+            } catch (e) {
+                showToast('Commit request failed', 'error');
             }
         }
 
@@ -9075,6 +9380,14 @@
             <h3>What's New <button type="button" class="shortcuts-close" onclick="closeWhatsNew()" title="Close">✕</button></h3>
             <div class="whats-new-meta" id="whatsNewMeta">Loading…</div>
             <div id="whatsNewBody">Loading changelog…</div>
+        </div>
+    </div>
+
+    <div class="whats-new-overlay hidden" id="ttsPresetOverlay" onclick="if(event.target===this)closeTtsPresetManage()">
+        <div class="whats-new-modal">
+            <h3>Manage voice presets <button type="button" class="shortcuts-close" onclick="closeTtsPresetManage()" title="Close">✕</button></h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin:0 0 0.8rem;">Saved combos of voice + expression + emotion + volume + humanize. Applied to the Single-mode TTS card.</p>
+            <div id="ttsPresetList"></div>
         </div>
     </div>
 </body>

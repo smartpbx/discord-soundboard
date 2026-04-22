@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **TTS clip caching** — every synth output gets hashed by its payload and kept in a disk LRU under `data/tts-cache/`. Repeat phrases (and every unchanged line in a conversation replay) skip the GPU entirely, so a Conv-mode edit that only changes line 3 reuses line 1, 2, 4, 5. Size-capped via `TTS_CACHE_MAX_MB` env (default 500 MB); set `TTS_CACHE_ENABLED=0` to turn off.
+- **Voice presets** — save the current voice + expression + emotion + volume + humanize combo as a named preset, apply in one click. Preset dropdown lives at the left of the setup row with "Save current" and "Manage" actions. Up to 30 presets in localStorage.
+- **🔀 3 takes picker** — new button next to Speak that synthesizes 3 candidate takes (cache-bypassed, so each one is a fresh stochastic Chatterbox sample). Inline panel with 3 audio previews + "Use this" per take; clicking commits that specific take to the Discord queue.
+
 ## 2026-04-22 — 2df4135
 - **Squared-off TTS card buttons** — Single/Conversation mode switch, Speak/Again, and update-banner buttons no longer use pill-round corners; they now match the flat square style of the sound filter chips and TTS/URL/Song/Upload row elsewhere in the UI.
 

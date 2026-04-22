@@ -3965,35 +3965,47 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         }
     }
 
-    // Call TTS service (serialized — parallel generations on the same GPU garble).
-    console.log('[TTS] queued for synthesis voice=%s text_len=%d pending=%d expr=%s', voiceId, trimmed.length, ttsSynthPending, !!synthPayload.segments);
-    let ttsRes;
-    try {
-        ttsRes = await runTtsSynthSerially(() => {
-            return ttsFetch('/synthesize', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(synthPayload),
-                timeout: 120000,
-            });
-        });
-    } catch (e) {
-        console.error('[TTS] fetch error:', e);
-        return res.status(503).json({ error: 'TTS service unreachable' });
-    }
-    if (!ttsRes || !ttsRes.ok) {
-        const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
-        console.error('[TTS] synthesis failed:', detail);
-        return res.status(502).json({ error: `TTS synthesis failed: ${detail}` });
-    }
+    // Disk-cache check: same payload → same WAV, skip the GPU round-trip.
+    // Cache key canonicalizes the synth payload (text + voice_id + segments
+    // + use_rvc + exaggeration etc.); volume stays out since it's applied
+    // post-synth during Discord playback.
+    const ttsCache = require('./lib/tts-cache');
+    const cacheKey = ttsCache.keyFor(synthPayload);
+    let wavBuffer = ttsCache.get(cacheKey);
+    let cacheHit = !!wavBuffer;
 
-    let wavBuffer;
-    try {
-        const ab = await ttsRes.arrayBuffer();
-        wavBuffer = Buffer.from(ab);
-    } catch (e) {
-        console.error('[TTS] buffer error:', e);
-        return res.status(502).json({ error: 'Failed to read TTS audio' });
+    if (!wavBuffer) {
+        // Call TTS service (serialized — parallel generations on the same GPU garble).
+        console.log('[TTS] synth miss voice=%s text_len=%d pending=%d expr=%s', voiceId, trimmed.length, ttsSynthPending, !!synthPayload.segments);
+        let ttsRes;
+        try {
+            ttsRes = await runTtsSynthSerially(() => {
+                return ttsFetch('/synthesize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(synthPayload),
+                    timeout: 120000,
+                });
+            });
+        } catch (e) {
+            console.error('[TTS] fetch error:', e);
+            return res.status(503).json({ error: 'TTS service unreachable' });
+        }
+        if (!ttsRes || !ttsRes.ok) {
+            const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
+            console.error('[TTS] synthesis failed:', detail);
+            return res.status(502).json({ error: `TTS synthesis failed: ${detail}` });
+        }
+        try {
+            const ab = await ttsRes.arrayBuffer();
+            wavBuffer = Buffer.from(ab);
+        } catch (e) {
+            console.error('[TTS] buffer error:', e);
+            return res.status(502).json({ error: 'Failed to read TTS audio' });
+        }
+        try { ttsCache.put(cacheKey, wavBuffer); } catch {}
+    } else {
+        console.log('[TTS] synth cache hit voice=%s text_len=%d sha=%s…', voiceId, trimmed.length, cacheKey.slice(0, 12));
     }
 
     // Cache for legacy "save last TTS" feature
@@ -4811,6 +4823,151 @@ async function stitchConversationWavs(wavs) {
     }
 }
 
+// Generate N candidate Chatterbox takes of the same line so the user can
+// pick the best-sounding one before committing to Discord playback.
+// Bypasses the disk cache entirely — the whole point is to get variation
+// from Chatterbox's stochastic sampler on each call. Returned wavIds live
+// in the 2-minute ttsWavCache window; commit one via /api/tts/takes/commit.
+app.post('/api/tts/takes', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot generate takes.' });
+    const { text, voiceId, exaggeration: reqExag, forcedEmotion, useExpression } = req.body || {};
+    const count = Math.max(2, Math.min(5, parseInt(req.body?.count, 10) || 3));
+
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
+    if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
+    const trimmed = text.trim();
+    if (!trimmed) return res.status(400).json({ error: 'Text is empty' });
+
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
+    if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+    if (getTtsDisabledVoices().includes(voiceId)) return res.status(403).json({ error: 'This voice is currently disabled.' });
+
+    const maxLen = getTtsMaxTextLength(role);
+    if (maxLen <= 0) return res.status(403).json({ error: 'TTS is not available for your role.' });
+    if (trimmed.length > maxLen) return res.status(400).json({ error: `Text too long (>${maxLen} chars)` });
+
+    // Cooldown — takes count as one TTS action overall (it's expensive,
+    // burns the cooldown so people can't spam it).
+    const cooldownSec = getTtsCooldownSec(role);
+    if (role === 'user') {
+        const un = req.session.user.username;
+        const last = ttsLastPlayByUsername.get(un);
+        if (last != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - last) / 1000;
+            if (elapsed < cooldownSec) return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)}s before using TTS again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
+        }
+    }
+
+    const exaggeration = typeof reqExag === 'number' ? Math.max(0.25, Math.min(2.0, reqExag)) : 0.5;
+    const expressionEnabled = useExpression !== false && voiceId.startsWith('cb_');
+    const synthPayload = { text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration };
+    if (expressionEnabled) {
+        try {
+            const { segmentText } = require('./lib/tts-expression');
+            const segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
+            if (segments && (segments.length > 1 || (segments.length === 1 && segments[0].emotion !== 'neutral'))) {
+                synthPayload.segments = segments;
+            }
+        } catch {}
+    }
+
+    const takes = [];
+    try {
+        for (let i = 0; i < count; i++) {
+            const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(synthPayload), timeout: 120000,
+            }));
+            if (!ttsRes || !ttsRes.ok) {
+                const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
+                return res.status(502).json({ error: `Take ${i+1} synth failed: ${String(detail).slice(0, 200)}` });
+            }
+            const ab = await ttsRes.arrayBuffer();
+            const buf = Buffer.from(ab);
+            const wavId = ttsWavCacheStash(buf);
+            takes.push({ take: i + 1, wavId, bytes: buf.length });
+            console.log('[TTS takes] take %d/%d synth ok voice=%s bytes=%d', i + 1, count, voiceId, buf.length);
+        }
+    } catch (e) {
+        console.error('[TTS takes] error:', e);
+        return res.status(502).json({ error: 'Takes generation failed: ' + (e && e.message || 'unknown') });
+    }
+
+    if (role === 'user') ttsLastPlayByUsername.set(req.session.user.username, Date.now());
+
+    res.json({ ok: true, takes, text: trimmed, voiceId });
+});
+
+// Commit a previously-synthesized take from /api/tts/takes to the Discord
+// playback queue. Buffer is looked up by wavId in the short-lived
+// ttsWavCache; all the usual voice-connection + playback-lock + queue-size
+// checks still run here.
+app.post('/api/tts/takes/commit', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot commit takes.' });
+    const { wavId, text, voiceId, volume: reqVolume } = req.body || {};
+    if (!wavId || typeof wavId !== 'string') return res.status(400).json({ error: 'wavId required' });
+    if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'voiceId required' });
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: 'text required' });
+    const entry = ttsWavCache.get(wavId);
+    if (!entry) return res.status(404).json({ error: 'Take expired or not found — generate again.' });
+
+    const ttsVolume = typeof reqVolume === 'number' ? Math.max(0, Math.min(2, reqVolume)) : 1;
+
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first' });
+    const meta = loadSoundsMeta();
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
+    }
+    const conn = getVoiceConnection(activeGuildId);
+    if (conn && conn.state && conn.state.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15000); }
+        catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
+    }
+    if (ttsQueue.length >= getTtsMaxQueueSize()) {
+        return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()})` });
+    }
+
+    const trimmed = String(text).trim();
+    const wavBuffer = entry.buffer;
+    ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
+    const localWavId = ttsWavCacheStash(wavBuffer);  // fresh TTL so the waveform render has time
+
+    const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
+    const startedBy = { username: req.session.user.username, role };
+
+    let recentId = null;
+    try {
+        const username = req.session.user.username;
+        const ts = Date.now();
+        const fname = `${username.replace(/[^a-zA-Z0-9_-]/g, '_')}_${ts}.wav`;
+        const wavPath = path.join(TTS_RECENTS_DIR, fname);
+        fs.writeFileSync(wavPath, wavBuffer);
+        recentId = statsDb.insertTtsRecent({
+            owner: username, text: trimmed, voiceId, voiceLabel: null,
+            displayName: ttsDisplayName, wavPath: fname,
+        });
+        const toEvict = statsDb.listTtsRecentsBeyond(username, TTS_RECENTS_PER_USER);
+        for (const old of toEvict) {
+            try {
+                const p = path.join(TTS_RECENTS_DIR, path.basename(old.wav_path));
+                if (p.startsWith(TTS_RECENTS_DIR) && fs.existsSync(p)) fs.unlinkSync(p);
+            } catch {}
+            statsDb.deleteTtsRecent(old.id);
+        }
+    } catch (e) { console.warn('[TTS takes commit] persist failed:', e.message); }
+
+    const queueItem = { id: ++ttsQueueIdCounter, wavBuffer, text: trimmed, voiceId, ttsVolume, displayName: ttsDisplayName, startedBy, username: req.session.user.username, recentId };
+    ttsQueue.push(queueItem);
+    const queuePosition = ttsQueue.length;
+    processTtsQueue();
+    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
+});
+
 // Multi-voice TTS conversation — synthesizes an ordered list of {voice, text}
 // lines, optionally humanizes each through its speaker profile, and stitches
 // them into a single WAV (per-line silence pads for pacing). Runs through the
@@ -4886,6 +5043,7 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
     }
 
     const rvcOverrides = getTtsVoiceRvcOverrides();
+    const ttsCacheConv = require('./lib/tts-cache');
     const wavs = [];
     try {
         for (let i = 0; i < parsedLines.length; i++) {
@@ -4931,17 +5089,28 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
                 } catch {}
             }
 
-            const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(synthPayload), timeout: 120000,
-            }));
-            if (!ttsRes || !ttsRes.ok) {
-                const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
-                return res.status(502).json({ error: `Line ${i+1} synthesis failed: ${String(detail).slice(0, 200)}` });
+            // Per-line cache check — edits to one line don't invalidate the
+            // others, so a small tweak to line 3 of a 5-line exchange reuses
+            // 4 cached WAVs.
+            const lineKey = ttsCacheConv.keyFor(synthPayload);
+            let lineWav = ttsCacheConv.get(lineKey);
+            if (lineWav) {
+                console.log('[TTS Conv] line %d/%d cache hit voice=%s', i+1, parsedLines.length, line.voiceId);
+            } else {
+                const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(synthPayload), timeout: 120000,
+                }));
+                if (!ttsRes || !ttsRes.ok) {
+                    const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
+                    return res.status(502).json({ error: `Line ${i+1} synthesis failed: ${String(detail).slice(0, 200)}` });
+                }
+                const ab = await ttsRes.arrayBuffer();
+                lineWav = Buffer.from(ab);
+                try { ttsCacheConv.put(lineKey, lineWav); } catch {}
+                console.log('[TTS Conv] line %d/%d synth ok voice=%s chars=%d pauseBefore=%dms', i+1, parsedLines.length, line.voiceId, lineText.length, line.pauseMs);
             }
-            const ab = await ttsRes.arrayBuffer();
-            wavs.push({ buffer: Buffer.from(ab), pauseMs: line.pauseMs });
-            console.log('[TTS Conv] line %d/%d synth ok voice=%s chars=%d pauseBefore=%dms', i+1, parsedLines.length, line.voiceId, lineText.length, line.pauseMs);
+            wavs.push({ buffer: lineWav, pauseMs: line.pauseMs });
         }
     } catch (e) {
         console.error('[TTS Conv] synth loop error:', e);
