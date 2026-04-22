@@ -628,6 +628,48 @@
         }
         .tts-tag-chip:hover { background: rgba(124, 224, 164, 0.2); border-color: rgba(124, 224, 164, 0.5); }
         .tts-tag-chip:active { transform: translateY(1px); }
+        .tts-conv-toggle { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted); cursor: pointer; user-select: none; white-space: nowrap; }
+        .tts-conv-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.3rem; }
+        .tts-conv-row {
+            display: grid;
+            grid-template-columns: minmax(120px, 1fr) minmax(0, 2.5fr) auto auto;
+            gap: 0.35rem; align-items: center;
+            padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+        .tts-conv-actions { display: flex; gap: 0.2rem; align-items: center; flex-wrap: nowrap; }
+        .tts-conv-row select, .tts-conv-row input[type="text"] {
+            width: 100%; padding: 0.3rem 0.4rem;
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text); font: inherit; font-size: 0.82rem;
+        }
+        .tts-conv-row select:focus, .tts-conv-row input[type="text"]:focus { outline: none; border-color: var(--accent); }
+        .tts-conv-pause {
+            display: inline-flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 92px;
+            font-size: 0.7rem; color: var(--text-muted);
+        }
+        .tts-conv-pause label { display: flex; justify-content: space-between; gap: 0.2rem; }
+        .tts-conv-pause input[type="range"] { width: 100%; accent-color: var(--accent); height: 4px; }
+        .tts-conv-row-btn {
+            width: 1.8rem; height: 1.8rem; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text-muted); font-size: 0.9rem; line-height: 1; cursor: pointer;
+        }
+        .tts-conv-row-btn:hover:not(:disabled) { background: var(--surface); color: var(--text); border-color: var(--accent); }
+        .tts-conv-row-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .tts-conv-row-btn.is-danger:hover { color: #f08c8c; border-color: #f08c8c; }
+        .tts-conv-humanize { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+        .tts-conv-humanize input { accent-color: var(--accent); margin: 0; }
+        .tts-conv-addbtn {
+            align-self: flex-start; padding: 0.3rem 0.6rem; font-size: 0.8rem;
+            background: var(--surface-hover); border: 1px dashed var(--border); border-radius: var(--radius-sm);
+            color: var(--text-muted); cursor: pointer;
+        }
+        .tts-conv-addbtn:hover { color: var(--accent); border-color: var(--accent); }
+        @media (max-width: 640px) {
+            .tts-conv-row { grid-template-columns: 1fr; }
+            .tts-conv-pause { min-width: 0; }
+        }
         /* TTS controls: fixed widths on the knobs so on ultrawide monitors the
            voice dropdown doesn't span 1500px and the sliders don't swallow the
            rest of the row. Speak + Again stay right-aligned via margin-left:auto
@@ -819,15 +861,28 @@
         <div class="card hidden" id="ttsCard">
             <div class="tts-card-header">
                 <span class="card-title">Text-to-Speech</span>
+                <label class="tts-conv-toggle" title="Build a multi-voice exchange — each line picks its own voice, and the server synthesizes + stitches them into one playback with configurable pauses between speakers.">
+                    <input type="checkbox" id="ttsConvToggle" style="accent-color:var(--accent); margin:0;">
+                    <span>💬 Conversation mode</span>
+                </label>
                 <button type="button" class="btn btn-ghost tts-close-btn" onclick="hideTtsSection()" title="Close">✕</button>
             </div>
-            <div class="tts-textarea-wrap">
-                <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
-                <button type="button" class="tts-rewrite-btn" id="ttsRewriteBtn" onclick="ttsRewriteInVoice()" title="Rewrite the text in the selected voice's style (Trump → rally riff, Herzog → philosophical narration). For Fish voices it can also insert inline [tags] like [laughing], [sigh], [shouting], [whisper], [pause] to drive delivery. Replaces the textarea content — humanize separately after.">
-                    <span class="tts-rewrite-icon">✨</span>
-                </button>
+            <div id="ttsSingleBlock">
+                <div class="tts-textarea-wrap">
+                    <textarea id="ttsTextInput" class="tts-textarea" placeholder="Type something to say..." maxlength="5000"></textarea>
+                    <button type="button" class="tts-rewrite-btn" id="ttsRewriteBtn" onclick="ttsRewriteInVoice()" title="Rewrite the text in the selected voice's style (Trump → rally riff, Herzog → philosophical narration). For Fish voices it can also insert inline [tags] like [laughing], [sigh], [shouting], [whisper], [pause] to drive delivery. Replaces the textarea content — humanize separately after.">
+                        <span class="tts-rewrite-icon">✨</span>
+                    </button>
+                </div>
+                <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
             </div>
-            <div class="tts-char-count" id="ttsCharCount">0 / 500</div>
+            <div id="ttsConvBlock" class="hidden" style="margin-bottom:0.4rem;">
+                <div id="ttsConvList" class="tts-conv-list"></div>
+                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.4rem;">
+                    <button type="button" class="tts-conv-addbtn" onclick="ttsConvAddLine()">+ Add line</button>
+                    <span style="font-size:0.72rem; color:var(--text-muted);">Up to 12 lines. Pauses are per-line silence inserted before that line. ✨ and Humanize still work per row.</span>
+                </div>
+            </div>
             <div id="ttsEngineHint" class="hidden" style="font-size:0.72rem; color:var(--text-muted); margin:-0.2rem 0 0.4rem; line-height:1.4;"></div>
             <div class="tts-controls">
                 <select id="ttsVoiceSelect"><option value="">Loading voices...</option></select>
@@ -851,7 +906,7 @@
                     <option value="sad">Sad</option>
                     <option value="happy">Happy</option>
                 </select>
-                <label title="Run the text through an LLM first to add natural pauses (uhhs, commas, ellipses) and tighten punctuation. Makes the synth sound more human." style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer; user-select:none; white-space:nowrap;">
+                <label id="ttsHumanizeLabel" title="Run the text through an LLM first to add natural pauses (uhhs, commas, ellipses) and tighten punctuation. Makes the synth sound more human." style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer; user-select:none; white-space:nowrap;">
                     <input type="checkbox" id="ttsHumanize" style="accent-color:var(--accent); margin:0;">
                     <span>🧠 Humanize</span>
                 </label>
@@ -5775,6 +5830,12 @@
                     populateTtsVoices();
                     // Re-render recent TTS so voice labels are accurate once voices are loaded.
                     if (ttsRecentsList.length) renderTtsRecents();
+                    // Re-render conversation rows (if visible) — the initial
+                    // render happens before voices load, so the per-row voice
+                    // selects show "Loading voices…" until we refresh here.
+                    if (document.getElementById('ttsConvToggle')?.checked && typeof ttsConvRender === 'function') {
+                        ttsConvRender();
+                    }
                 }
             } catch {}
         }
@@ -5956,9 +6017,231 @@
             }
         }
 
+        // --- Multi-voice conversation mode ---------------------------------
+        // Users can compose an exchange like "Trump: hello. Biden: uhh look
+        // folks." — each row picks its own voice, has optional humanize,
+        // and a pauseMs slider that inserts silence before that line when
+        // the server stitches the lines together.
+        let ttsConvLines = [];
+
+        function _ttsConvEsc(s) {
+            return (s != null ? String(s) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function _ttsConvVoiceOptions(selectedId) {
+            // Build the same voice option list the main dropdown uses, but as
+            // an HTML string for inline grid rendering. Falls back to a single
+            // "loading…" option until ttsVoices is populated.
+            if (!Array.isArray(ttsVoices) || !ttsVoices.length) {
+                return '<option value="">Loading voices…</option>';
+            }
+            const byEngine = new Map();
+            for (const v of ttsVoices) {
+                const e = v.engine || 'other';
+                if (!byEngine.has(e)) byEngine.set(e, []);
+                byEngine.get(e).push(v);
+            }
+            let html = '<option value="">— pick voice —</option>';
+            for (const [engine, voices] of byEngine.entries()) {
+                html += '<optgroup label="' + _ttsConvEsc(engine) + '">';
+                for (const v of voices) {
+                    const sel = v.id === selectedId ? ' selected' : '';
+                    html += '<option value="' + _ttsConvEsc(v.id) + '"' + sel + '>' + _ttsConvEsc(v.name || v.id) + '</option>';
+                }
+                html += '</optgroup>';
+            }
+            return html;
+        }
+
+        function ttsConvLoad() {
+            const prefs = loadPrefs();
+            if (Array.isArray(prefs.ttsConvLines) && prefs.ttsConvLines.length) {
+                ttsConvLines = prefs.ttsConvLines.slice(0, 12).map(l => ({
+                    voiceId: typeof l.voiceId === 'string' ? l.voiceId : '',
+                    text: typeof l.text === 'string' ? l.text : '',
+                    pauseMs: Number.isFinite(l.pauseMs) ? Math.max(0, Math.min(5000, l.pauseMs | 0)) : 400,
+                    humanize: !!l.humanize,
+                }));
+            } else {
+                ttsConvLines = [
+                    { voiceId: '', text: '', pauseMs: 0, humanize: false },
+                    { voiceId: '', text: '', pauseMs: 400, humanize: false },
+                ];
+            }
+        }
+
+        function ttsConvSave() {
+            savePrefs({ ttsConvLines });
+        }
+
+        function ttsConvRender() {
+            const host = document.getElementById('ttsConvList');
+            if (!host) return;
+            host.innerHTML = '';
+            ttsConvLines.forEach((line, idx) => {
+                const row = document.createElement('div');
+                row.className = 'tts-conv-row';
+                const upDisabled = idx === 0 ? 'disabled' : '';
+                const downDisabled = idx === ttsConvLines.length - 1 ? 'disabled' : '';
+                const rmDisabled = ttsConvLines.length <= 1 ? 'disabled' : '';
+                row.innerHTML =
+                    '<select onchange="ttsConvUpdate(' + idx + ',\'voiceId\',this.value)">' + _ttsConvVoiceOptions(line.voiceId) + '</select>'
+                    + '<input type="text" placeholder="Line ' + (idx + 1) + ' text…" maxlength="1000" value="' + _ttsConvEsc(line.text) + '" oninput="ttsConvUpdate(' + idx + ',\'text\',this.value)" onkeydown="ttsConvLineKey(event,' + idx + ')">'
+                    + '<div class="tts-conv-pause">'
+                    +   '<label><span>Pause</span><span id="ttsConvPauseLbl_' + idx + '">' + line.pauseMs + 'ms</span></label>'
+                    +   '<input type="range" min="0" max="2000" step="50" value="' + line.pauseMs + '" oninput="ttsConvUpdatePause(' + idx + ',this.value)">'
+                    + '</div>'
+                    + '<div class="tts-conv-actions">'
+                    +   '<label class="tts-conv-humanize" title="Humanize this line in the picked voice\'s style"><input type="checkbox" ' + (line.humanize ? 'checked' : '') + ' onchange="ttsConvUpdate(' + idx + ',\'humanize\',this.checked)"><span>🧠</span></label>'
+                    +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvRewrite(' + idx + ')" title="Rewrite this line in the picked voice\'s style">✨</button>'
+                    +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvMove(' + idx + ',-1)" ' + upDisabled + ' title="Move up">▲</button>'
+                    +   '<button type="button" class="tts-conv-row-btn" onclick="ttsConvMove(' + idx + ',1)" ' + downDisabled + ' title="Move down">▼</button>'
+                    +   '<button type="button" class="tts-conv-row-btn is-danger" onclick="ttsConvRemove(' + idx + ')" ' + rmDisabled + ' title="Remove line">✕</button>'
+                    + '</div>';
+                host.appendChild(row);
+            });
+        }
+
+        function ttsConvUpdate(idx, field, value) {
+            if (!ttsConvLines[idx]) return;
+            ttsConvLines[idx][field] = value;
+            ttsConvSave();
+        }
+        function ttsConvUpdatePause(idx, value) {
+            if (!ttsConvLines[idx]) return;
+            const ms = Math.max(0, Math.min(5000, parseInt(value, 10) || 0));
+            ttsConvLines[idx].pauseMs = ms;
+            const lbl = document.getElementById('ttsConvPauseLbl_' + idx);
+            if (lbl) lbl.textContent = ms + 'ms';
+            ttsConvSave();
+        }
+        function ttsConvAddLine() {
+            if (ttsConvLines.length >= 12) { showToast('Max 12 lines per conversation.', 'error'); return; }
+            // Seed next line with a 400ms default pause — this is the "natural
+            // speaker-to-speaker" gap; user can scrub to 0 for rapid back-and-forth.
+            ttsConvLines.push({ voiceId: '', text: '', pauseMs: 400, humanize: false });
+            ttsConvRender();
+            ttsConvSave();
+            // Focus the just-added text input.
+            setTimeout(() => {
+                const rows = document.querySelectorAll('#ttsConvList .tts-conv-row');
+                const last = rows[rows.length - 1];
+                const ti = last && last.querySelector('input[type="text"]');
+                if (ti) ti.focus();
+            }, 0);
+        }
+        function ttsConvRemove(idx) {
+            if (ttsConvLines.length <= 1) return;
+            ttsConvLines.splice(idx, 1);
+            ttsConvRender();
+            ttsConvSave();
+        }
+        function ttsConvMove(idx, delta) {
+            const to = idx + delta;
+            if (to < 0 || to >= ttsConvLines.length) return;
+            const [item] = ttsConvLines.splice(idx, 1);
+            ttsConvLines.splice(to, 0, item);
+            ttsConvRender();
+            ttsConvSave();
+        }
+
+        // Per-row rewrite: same endpoint as the main ✨ button, but scoped to
+        // this single line and keyed off its own voice pick.
+        async function ttsConvRewrite(idx) {
+            const line = ttsConvLines[idx];
+            if (!line) return;
+            const text = (line.text || '').trim();
+            if (!text) { showToast('Line ' + (idx + 1) + ' is empty.', 'error'); return; }
+            if (!line.voiceId) { showToast('Pick a voice for line ' + (idx + 1) + ' first.', 'error'); return; }
+            const v = (Array.isArray(ttsVoices) ? ttsVoices : []).find(x => x.id === line.voiceId);
+            const voiceName = v && v.name ? v.name : '';
+            const voiceEngine = v && v.engine ? v.engine : '';
+            const btn = document.querySelectorAll('#ttsConvList .tts-conv-row')[idx]?.querySelector('.tts-conv-row-btn[onclick*="ttsConvRewrite"]');
+            if (btn) { btn.disabled = true; btn.textContent = '…'; }
+            try {
+                const r = await api('/api/tts/rewrite', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, voiceName, engine: voiceEngine }),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { showToast(d.error || 'Rewrite failed.', 'error'); return; }
+                if (!d.available) { showToast('Rewrite LLM not configured.', 'error'); return; }
+                if (!d.changed) { showToast('Rewrite matched the original.', 'info'); return; }
+                ttsConvLines[idx].text = d.rewritten;
+                ttsConvSave();
+                ttsConvRender();
+                showToast('Rewrote line ' + (idx + 1) + ' as ' + (voiceName || 'voice') + '.', 'success');
+            } catch (e) {
+                showToast('Rewrite failed: ' + (e && e.message || 'unknown'), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '✨'; }
+            }
+        }
+
+        // Per-line text input key handler: Enter submits the whole
+        // conversation, Shift+Enter is ignored (input is single-line).
+        function ttsConvLineKey(e, idx) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                ttsSpeak();
+            }
+        }
+
+        // Flip between single-line and conversation modes. Hides the controls
+        // that don't apply in conversation mode (main voice select, humanize,
+        // forced emotion, expression slider, 🔄 Again) — each conversation row
+        // carries its own voice + humanize toggle instead.
+        function ttsConvSetMode(enabled) {
+            const single = document.getElementById('ttsSingleBlock');
+            const conv = document.getElementById('ttsConvBlock');
+            const hint = document.getElementById('ttsEngineHint');
+            const voiceSel = document.getElementById('ttsVoiceSelect');
+            const exprWrap = document.getElementById('ttsExpressionWrap');
+            const forcedEmo = document.getElementById('ttsForcedEmotion');
+            const humanizeLbl = document.getElementById('ttsHumanizeLabel');
+            const againBtn = document.getElementById('ttsAgainBtn');
+            const setHidden = (el, hide) => { if (!el) return; el.classList.toggle('hidden', !!hide); if (hide) el.style.display = 'none'; else el.style.removeProperty('display'); };
+            setHidden(single, enabled);
+            setHidden(conv, !enabled);
+            setHidden(hint, enabled);
+            setHidden(voiceSel, enabled);
+            setHidden(exprWrap, enabled);
+            setHidden(forcedEmo, enabled);
+            setHidden(humanizeLbl, enabled);
+            setHidden(againBtn, enabled);
+            savePrefs({ ttsConvMode: !!enabled });
+            if (enabled) ttsConvRender();
+        }
+
+        // Expose for onclick attributes (Firefox is strict about global fn visibility inside modules; we're not using modules but keep the pattern).
+        window.ttsConvUpdate = ttsConvUpdate;
+        window.ttsConvUpdatePause = ttsConvUpdatePause;
+        window.ttsConvAddLine = ttsConvAddLine;
+        window.ttsConvRemove = ttsConvRemove;
+        window.ttsConvMove = ttsConvMove;
+        window.ttsConvRewrite = ttsConvRewrite;
+        window.ttsConvLineKey = ttsConvLineKey;
+
+        ttsConvLoad();
+
+        const ttsConvToggleEl = document.getElementById('ttsConvToggle');
+        if (ttsConvToggleEl) {
+            ttsConvToggleEl.checked = !!loadPrefs().ttsConvMode;
+            ttsConvSetMode(ttsConvToggleEl.checked);
+            ttsConvToggleEl.addEventListener('change', (e) => ttsConvSetMode(e.target.checked));
+        }
+
         const ttsTextEl = document.getElementById('ttsTextInput');
         if (ttsTextEl) {
             ttsTextEl.addEventListener('input', updateTtsCharCount);
+            // Enter = Speak, Shift+Enter = newline. Matches the Discord
+            // message-send convention users expect.
+            ttsTextEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                    e.preventDefault();
+                    ttsSpeak();
+                }
+            });
         }
         // Restore Humanize checkbox state from prefs
         const ttsHumanizeEl = document.getElementById('ttsHumanize');
@@ -6000,6 +6283,11 @@
 
         async function ttsSpeak() {
             if (ttsBusy) return;
+            // Conversation mode: route to the multi-line endpoint instead of
+            // single-line /api/tts/speak.
+            if (document.getElementById('ttsConvToggle')?.checked) {
+                return ttsSpeakConversation();
+            }
             const ta = document.getElementById('ttsTextInput');
             const sel = document.getElementById('ttsVoiceSelect');
             if (!ta || !sel) return;
@@ -6086,6 +6374,65 @@
             } catch (e) {
                 setTtsStatus('TTS request failed.', true);
                 showToast('TTS request failed', 'error');
+            } finally {
+                ttsBusy = false;
+                if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }
+            }
+        }
+
+        // Multi-voice conversation speak: validates the line list, posts to
+        // /api/tts/conversation, and surfaces the same queued/spoken feedback
+        // as single-line TTS. Server stitches with per-line silence padding.
+        async function ttsSpeakConversation() {
+            if (ttsBusy) return;
+            if (!Array.isArray(ttsConvLines) || !ttsConvLines.length) { setTtsStatus('Add at least one line.', true); return; }
+            // Client-side trim of empty trailing rows so a stray blank line
+            // doesn't blow up the server validation.
+            const lines = ttsConvLines
+                .map(l => ({ voiceId: l.voiceId, text: (l.text || '').trim(), pauseMs: l.pauseMs | 0, humanize: !!l.humanize }))
+                .filter(l => l.text || l.voiceId);
+            if (!lines.length) { setTtsStatus('No non-empty lines.', true); return; }
+            if (lines.length > 12) { setTtsStatus('Max 12 lines.', true); return; }
+            for (let i = 0; i < lines.length; i++) {
+                if (!lines[i].voiceId) { setTtsStatus('Line ' + (i + 1) + ': pick a voice.', true); return; }
+                if (!lines[i].text) { setTtsStatus('Line ' + (i + 1) + ': empty text.', true); return; }
+                if (lines[i].text.length > ttsMaxLen) { setTtsStatus('Line ' + (i + 1) + ': too long (' + lines[i].text.length + '/' + ttsMaxLen + ').', true); return; }
+            }
+            // Attach voiceName per line so the server humanize has the right
+            // display-name hint (otherwise it falls back to the id stem).
+            const voicesById = new Map((Array.isArray(ttsVoices) ? ttsVoices : []).map(v => [v.id, v]));
+            const payloadLines = lines.map(l => {
+                const v = voicesById.get(l.voiceId);
+                return { ...l, voiceName: (v && v.name) || '' };
+            });
+            ttsBusy = true;
+            const btn = document.getElementById('ttsSpeakBtn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Synthesizing…'; }
+            setTtsStatus('<span class="tts-spinner"></span> Synthesizing ' + lines.length + '-line conversation… (one per voice, stitched together)');
+            try {
+                const r = await api('/api/tts/conversation', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lines: payloadLines, volume: ttsVolume }),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    setTtsStatus(data.error || 'Conversation TTS failed.', true);
+                    showToast(data.error || 'Conversation TTS failed', 'error');
+                    if (data.cooldownRemaining) setTtsStatus('Wait ' + data.cooldownRemaining + 's before using TTS again.', true);
+                } else {
+                    if (data.queuePosition && data.queuePosition > 1) {
+                        setTtsStatus('Queued (#' + data.queuePosition + ')');
+                        showToast('Queued for TTS (#' + data.queuePosition + ')', 'info');
+                    } else {
+                        setTtsStatus('');
+                        showToast('Speaking conversation in Discord', 'success');
+                    }
+                    if (data.localWavId) playTtsLocalWaveform(data.localWavId);
+                    fetchTtsRecents();
+                }
+            } catch (e) {
+                setTtsStatus('Conversation TTS request failed.', true);
+                showToast('Conversation TTS request failed', 'error');
             } finally {
                 ttsBusy = false;
                 if (btn) { btn.disabled = false; btn.textContent = '🗣 Speak'; }

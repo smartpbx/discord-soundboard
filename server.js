@@ -4703,6 +4703,268 @@ app.post('/api/tts/rewrite', requireAuth, async (req, res) => {
     }
 });
 
+// Stitch a list of TTS WAV buffers into one WAV with per-line silence gaps.
+// Uses ffmpeg's adelay+concat filter graph so we don't depend on all lines
+// sharing the same PCM codec/sample-rate (ffmpeg transcodes as it concatenates).
+// Returns a single WAV buffer. Temp dir is cleaned up best-effort.
+async function stitchConversationWavs(wavs) {
+    if (!Array.isArray(wavs) || wavs.length === 0) throw new Error('no lines to stitch');
+    if (wavs.length === 1 && !(wavs[0].pauseMs > 0)) return wavs[0].buffer;
+
+    const os = require('os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-conv-'));
+    const tmpFiles = [];
+    try {
+        for (let i = 0; i < wavs.length; i++) {
+            const p = path.join(tmpDir, `line_${i}.wav`);
+            fs.writeFileSync(p, wavs[i].buffer);
+            tmpFiles.push(p);
+        }
+        const args = ['-nostdin'];
+        for (const f of tmpFiles) { args.push('-i', f); }
+        const filterParts = [];
+        const concatLabels = [];
+        for (let i = 0; i < wavs.length; i++) {
+            const delay = Math.max(0, Math.min(5000, wavs[i].pauseMs | 0));
+            if (delay > 0) {
+                filterParts.push(`[${i}:a]adelay=${delay}:all=1[d${i}]`);
+                concatLabels.push(`[d${i}]`);
+            } else {
+                concatLabels.push(`[${i}:a]`);
+            }
+        }
+        filterParts.push(`${concatLabels.join('')}concat=n=${wavs.length}:v=0:a=1[out]`);
+        args.push('-filter_complex', filterParts.join(';'), '-map', '[out]', '-ar', '24000', '-ac', '1', '-f', 'wav', '-');
+
+        return await new Promise((resolve, reject) => {
+            const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            const chunks = [];
+            const stderr = [];
+            ff.stdout.on('data', c => chunks.push(c));
+            ff.stderr.on('data', c => stderr.push(c));
+            ff.on('error', reject);
+            ff.on('close', (code) => {
+                if (code !== 0) return reject(new Error('ffmpeg exited ' + code + ': ' + Buffer.concat(stderr).toString('utf8').slice(-400)));
+                resolve(Buffer.concat(chunks));
+            });
+        });
+    } finally {
+        try {
+            for (const f of tmpFiles) { try { fs.unlinkSync(f); } catch {} }
+            fs.rmdirSync(tmpDir);
+        } catch {}
+    }
+}
+
+// Multi-voice TTS conversation — synthesizes an ordered list of {voice, text}
+// lines, optionally humanizes each through its speaker profile, and stitches
+// them into a single WAV (per-line silence pads for pacing). Runs through the
+// normal Discord queue as a single playback entry. Same role / playback-lock
+// gates as /api/tts/speak; cooldown counts the whole conversation as one play.
+app.post('/api/tts/conversation', requireAuth, async (req, res) => {
+    const role = req.session.user.role;
+    if (role === 'guest') return res.status(403).json({ error: 'Guests cannot use conversation mode.' });
+    const body = req.body || {};
+    const lines = Array.isArray(body.lines) ? body.lines : null;
+    if (!lines || !lines.length) return res.status(400).json({ error: 'Lines required' });
+    if (lines.length > 12) return res.status(400).json({ error: 'Max 12 lines per conversation' });
+
+    const volume = typeof body.volume === 'number' ? Math.max(0, Math.min(2, body.volume)) : 1;
+
+    if (!TTS_API_URL) return res.status(503).json({ error: 'TTS service not configured' });
+    if (!getTtsEnabled()) return res.status(403).json({ error: 'TTS is disabled' });
+
+    const maxLen = getTtsMaxTextLength(role);
+    if (maxLen <= 0) return res.status(403).json({ error: 'TTS is not available for your role.' });
+
+    // Validate + normalize each line before touching the TTS server.
+    const disabled = getTtsDisabledVoices();
+    const parsedLines = [];
+    for (let i = 0; i < lines.length; i++) {
+        const l = lines[i] || {};
+        const voiceId = typeof l.voiceId === 'string' ? l.voiceId : '';
+        const text = typeof l.text === 'string' ? l.text.trim() : '';
+        if (!voiceId) return res.status(400).json({ error: `Line ${i+1}: voiceId required` });
+        if (!text) return res.status(400).json({ error: `Line ${i+1}: text empty` });
+        if (text.length > maxLen) return res.status(400).json({ error: `Line ${i+1}: too long (${text.length}>${maxLen} chars)` });
+        if (disabled.includes(voiceId)) return res.status(403).json({ error: `Line ${i+1}: voice ${voiceId} is disabled` });
+        // First line has no pause by default; subsequent default to 400ms.
+        const rawPause = Number(l.pauseMs);
+        const pauseMs = Number.isFinite(rawPause)
+            ? Math.max(0, Math.min(5000, Math.round(rawPause)))
+            : (i === 0 ? 0 : 400);
+        const wantsHumanize = !!l.humanize;
+        const voiceName = typeof l.voiceName === 'string' ? l.voiceName.slice(0, 80) : '';
+        parsedLines.push({ voiceId, text, pauseMs, wantsHumanize, voiceName });
+    }
+
+    // Cooldown — one conversation = one TTS play.
+    const cooldownSec = getTtsCooldownSec(role);
+    if (role === 'user') {
+        const un = req.session.user.username;
+        const last = ttsLastPlayByUsername.get(un);
+        if (last != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - last) / 1000;
+            if (elapsed < cooldownSec) return res.status(429).json({ error: `Wait ${Math.ceil(cooldownSec - elapsed)} seconds before using TTS again.`, cooldownRemaining: Math.ceil(cooldownSec - elapsed) });
+        }
+    }
+
+    // Voice channel + playback lock (mirrors /api/tts/speak).
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first' });
+    const meta = loadSoundsMeta();
+    if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
+    if (getPlaybackLocked(meta)) {
+        const lockedBy = getPlaybackLockedBy(meta);
+        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
+    }
+    const conn = getVoiceConnection(activeGuildId);
+    if (conn && conn.state && conn.state.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15000); }
+        catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
+    }
+
+    if (ttsQueue.length >= getTtsMaxQueueSize()) {
+        return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()}). Wait for current clips to finish.` });
+    }
+
+    const rvcOverrides = getTtsVoiceRvcOverrides();
+    const wavs = [];
+    try {
+        for (let i = 0; i < parsedLines.length; i++) {
+            const line = parsedLines[i];
+            let lineText = line.text;
+
+            if (line.wantsHumanize) {
+                try {
+                    const humanize = require('./lib/tts-humanize-llm');
+                    if (humanize.isAvailable()) {
+                        // Derive engine hint from the voice id prefix so the
+                        // humanize LLM knows which inline-tag vocabulary to use.
+                        const engine = line.voiceId.startsWith('fish_') ? 'fish'
+                                     : line.voiceId.startsWith('cb_') ? 'chatterbox'
+                                     : line.voiceId.startsWith('gsv_') ? 'gptsovits'
+                                     : line.voiceId.startsWith('rvc_') ? 'rvc'
+                                     : '';
+                        // Use client-supplied voice name (matches the main flow)
+                        // or fall back to the id stem if the client didn't send one.
+                        const nameHint = line.voiceName || line.voiceId.replace(/^(cb|fish|gsv|rvc)_/, '').replace(/_/g, ' ');
+                        lineText = await humanize.humanize(line.text, nameHint, engine);
+                    }
+                } catch (e) {
+                    console.warn('[TTS Conv] humanize line %d failed, using raw text: %s', i+1, e && e.message);
+                }
+            }
+
+            const synthPayload = {
+                text: lineText,
+                voice_id: line.voiceId,
+                use_rvc: rvcOverrides[line.voiceId] ?? true,
+            };
+            // Chatterbox expression preprocessor — Fish/GSV ignore this field.
+            if (line.voiceId.startsWith('cb_')) {
+                try {
+                    const { segmentText } = require('./lib/tts-expression');
+                    const segments = segmentText(lineText, {});
+                    if (segments && (segments.length > 1 || (segments.length === 1 && segments[0].emotion !== 'neutral'))) {
+                        synthPayload.segments = segments;
+                    }
+                } catch {}
+            }
+
+            const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(synthPayload), timeout: 120000,
+            }));
+            if (!ttsRes || !ttsRes.ok) {
+                const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
+                return res.status(502).json({ error: `Line ${i+1} synthesis failed: ${String(detail).slice(0, 200)}` });
+            }
+            const ab = await ttsRes.arrayBuffer();
+            wavs.push({ buffer: Buffer.from(ab), pauseMs: line.pauseMs });
+            console.log('[TTS Conv] line %d/%d synth ok voice=%s chars=%d pauseBefore=%dms', i+1, parsedLines.length, line.voiceId, lineText.length, line.pauseMs);
+        }
+    } catch (e) {
+        console.error('[TTS Conv] synth loop error:', e);
+        return res.status(502).json({ error: 'TTS conversation failed: ' + (e && e.message || 'unknown') });
+    }
+
+    let stitched;
+    try {
+        stitched = await stitchConversationWavs(wavs);
+    } catch (e) {
+        console.error('[TTS Conv] stitch error:', e);
+        return res.status(502).json({ error: 'Stitching failed: ' + (e && e.message || 'unknown') });
+    }
+
+    const uniqueVoices = [...new Set(parsedLines.map(l => l.voiceId))];
+    const previewText = parsedLines.map(l => l.text).join(' | ');
+    const ttsDisplayName = `TTS Conv: ${parsedLines.length} lines, ${uniqueVoices.length} voice${uniqueVoices.length === 1 ? '' : 's'}`;
+    const localWavId = ttsWavCacheStash(stitched);
+
+    // Persist as a single recent with a multi-line transcript body.
+    let recentId = null;
+    try {
+        const username = req.session.user.username;
+        const ts = Date.now();
+        const fname = `${username.replace(/[^a-zA-Z0-9_-]/g, '_')}_${ts}_conv.wav`;
+        const wavPath = path.join(TTS_RECENTS_DIR, fname);
+        fs.writeFileSync(wavPath, stitched);
+        const transcript = parsedLines.map(l => `[${l.voiceName || l.voiceId}]: ${l.text}`).join('\n');
+        recentId = statsDb.insertTtsRecent({
+            owner: username,
+            text: transcript,
+            voiceId: 'conversation',
+            voiceLabel: null,
+            displayName: ttsDisplayName,
+            wavPath: fname,
+        });
+        const toEvict = statsDb.listTtsRecentsBeyond(username, TTS_RECENTS_PER_USER);
+        for (const old of toEvict) {
+            try {
+                const p = path.join(TTS_RECENTS_DIR, path.basename(old.wav_path));
+                if (p.startsWith(TTS_RECENTS_DIR) && fs.existsSync(p)) fs.unlinkSync(p);
+            } catch (e) { console.warn('[TTS Conv recents] evict unlink failed:', e.message); }
+            statsDb.deleteTtsRecent(old.id);
+        }
+    } catch (e) {
+        console.warn('[TTS Conv recents] persist failed:', e.message);
+    }
+
+    const startedBy = { username: req.session.user.username, role };
+    const queueItem = {
+        id: ++ttsQueueIdCounter,
+        wavBuffer: stitched,
+        text: previewText,
+        voiceId: 'conversation',
+        ttsVolume: volume,
+        displayName: ttsDisplayName,
+        startedBy,
+        username: req.session.user.username,
+        recentId,
+    };
+    ttsQueue.push(queueItem);
+    const queuePosition = ttsQueue.length;
+    console.log('[TTS Conv] enqueued #%d, pos=%d, lines=%d, voices=%d', queueItem.id, queuePosition, parsedLines.length, uniqueVoices.length);
+
+    if (role === 'user') ttsLastPlayByUsername.set(req.session.user.username, Date.now());
+
+    processTtsQueue();
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: role,
+        action: 'tts.conversation',
+        target: null,
+        details: {
+            lines: parsedLines.length,
+            voices: uniqueVoices,
+            totalChars: parsedLines.reduce((a, l) => a + l.text.length, 0),
+            humanizedLines: parsedLines.filter(l => l.wantsHumanize).length,
+        },
+    });
+    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
+});
+
 app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot synthesize tests.' });
