@@ -5,7 +5,7 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-04-22 — pending
+## 2026-04-22 — d60e066
 - **Removed 🔀 3 takes picker** — Fish (the only engine in active use) is deterministic, so N takes always returned N identical WAVs. Removed button, panel, client JS, and the `/api/tts/takes` + `/api/tts/takes/commit` endpoints. Revisit if a stochastic engine comes back.
 - **What's New modal now always fetches fresh** — previously the client cached the changelog in memory on load, so if a deploy landed while the page was open you'd see stale notes until a hard refresh. Tiny file, no reason to cache.
 - **First-visit "New" badge logic fixed** — the top release entry now flags as NEW on your first-ever open instead of silently blending in.
