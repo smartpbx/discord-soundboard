@@ -5,7 +5,7 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-04-22 — pending
+## 2026-04-22 — 7b6fd87
 - **Version stamp in the header menu** + **What's New modal** — footer of the hamburger menu shows the running `vX · shortSha`; click to open the changelog. Unseen entries highlight with a "New" badge.
 - **Update banner** — page polls `/api/version` every 60s; when the deployed build changes, a purple banner prompts to reload so you're not stuck on stale JS/CSS.
 - **Design-pass fixes** — tag chips back to the neon-green palette (clearer), bottom controls get more breathing room, Speak/Again restyled as pill buttons to match the mode switch + AI cluster, Volume slider lives next to Speak so conversation mode doesn't leave the button orphaned.
