@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-22 — pending
+- **User-overrides modal shows on top** — bumped its overlay z-index above the superadmin panel. Previously it opened behind the superadmin card and looked frozen.
+- **Superadmin design pass** — Access & Limits, Moderation, and Activity tabs redone in the same visual language as the TTS card redesign: uppercase micro-labels above every input, border-top dividers between sections, custom toggle switches replacing bare checkboxes (Guest access, Uploads, Multi-play, Auto-normalize, TTS enable, Suno enable, URL-streaming role toggles), consistent `btn-sm` buttons. Section headers now carry meta content like the Suno credits display and refresh button inline on the right.
+
 ## 2026-04-22 — c35c884
 - **Per-user permission overrides** — every role-level limit can now be overridden per username. Superadmin → Users → "Overrides" on any user opens a modal with: TTS enabled + max chars + cooldown, Suno daily limit, URL streaming enabled + max duration, playback max duration + cooldown, upload enabled + max duration + max size. Leaving a field blank (or set to "— role default —" for bools) falls back to the role default. Stored in `guest.json.userOverrides`; works for env-configured users too. Endpoints: `GET /api/superadmin/user-overrides`, `PUT /api/superadmin/user-overrides/:username`, `DELETE /api/superadmin/user-overrides/:username`.
 

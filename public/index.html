@@ -135,7 +135,7 @@
         .update-banner button:hover { background: rgba(255,255,255,0.25); }
 
         /* What's New modal — reuses the shortcuts-overlay pattern. */
-        .whats-new-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .whats-new-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1100; display: flex; align-items: center; justify-content: center; padding: 1rem; }
         .whats-new-overlay.hidden { display: none !important; }
         .whats-new-modal {
             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -178,8 +178,54 @@
         .superadmin-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
         .superadmin-panel { display: none; }
         .superadmin-panel.active { display: block; }
-        .superadmin-section { margin-bottom: 1.5rem; }
-        .superadmin-section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .superadmin-section {
+            padding: 1rem 0;
+            border-top: 1px solid var(--border);
+            margin: 0;
+        }
+        .superadmin-section:first-of-type { border-top: 0; padding-top: 0; }
+        .superadmin-section:last-of-type { padding-bottom: 0; }
+        .superadmin-section-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted); margin-bottom: 0.7rem; display: flex; align-items: center; gap: 0.5rem; }
+        .superadmin-section-title .sa-title-meta { margin-left: auto; font-weight: 400; color: var(--text-muted); }
+
+        /* Reusable superadmin field patterns — mirror the TTS card aesthetic
+           (uppercase micro-label above input, square radius, breathable gap). */
+        .sa-field-row { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end; }
+        .sa-field-row + .sa-field-row { margin-top: 0.6rem; }
+        .sa-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .sa-field-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted); }
+        .sa-field input[type="number"], .sa-field input[type="text"], .sa-field input[type="date"], .sa-field select {
+            padding: 0.42rem 0.55rem; background: var(--surface-hover); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 0.85rem;
+        }
+        .sa-field input[type="number"]:focus, .sa-field input[type="text"]:focus, .sa-field input[type="date"]:focus, .sa-field select:focus { outline: none; border-color: var(--accent); }
+        .sa-field.is-narrow input[type="number"] { width: 6rem; }
+        .sa-field.is-narrow { flex: 0 0 auto; }
+        .sa-field.is-grow { flex: 1 1 200px; min-width: 180px; }
+        .sa-field-help { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem; line-height: 1.45; font-style: italic; }
+
+        /* Toggle switch: replaces bare checkboxes inside superadmin. Keeps the
+           underlying <input type="checkbox"> for form compatibility so existing
+           JS that reads .checked continues to work unchanged. */
+        .sa-toggle { display: inline-flex; align-items: center; gap: 0.55rem; cursor: pointer; user-select: none; font-size: 0.85rem; color: var(--text); line-height: 1.35; }
+        .sa-toggle input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+        .sa-toggle-track {
+            position: relative; width: 34px; height: 18px; flex-shrink: 0;
+            background: var(--surface-hover); border: 1px solid var(--border);
+            border-radius: 999px; transition: background 0.15s, border-color 0.15s;
+        }
+        .sa-toggle-track::after {
+            content: ''; position: absolute; top: 1px; left: 1px;
+            width: 14px; height: 14px; border-radius: 50%;
+            background: var(--text-muted); transition: transform 0.15s, background 0.15s;
+        }
+        .sa-toggle input:checked + .sa-toggle-track { background: var(--accent); border-color: var(--accent); }
+        .sa-toggle input:checked + .sa-toggle-track::after { transform: translateX(16px); background: #fff; }
+        .sa-toggle input:focus-visible + .sa-toggle-track { outline: 2px solid var(--accent); outline-offset: 1px; }
+        .sa-toggle .sa-toggle-label-text { color: var(--text); }
+        .sa-toggle .sa-toggle-hint { color: var(--text-muted); font-size: 0.78rem; font-weight: 400; }
+
+        .sa-toggle-group { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
         .activity-heatmap { display: inline-grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 2px; }
         .activity-heatmap .hm-cell { width: 12px; height: 12px; border-radius: 2px; background: var(--surface-hover); }
         .activity-heatmap .hm-cell[data-count="0"] { background: var(--surface-hover); }
@@ -1318,176 +1364,184 @@
             <div id="superadminPanelAccess" class="superadmin-panel active">
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Guest Access</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <label class="sa-toggle">
                         <input type="checkbox" id="guestEnabledToggle" onchange="setGuestEnabled(this.checked)">
-                        <span>Allow guest access (no login)</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Allow guest access <span class="sa-toggle-hint">(no login required)</span></span>
                     </label>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Guest Playback</div>
-                    <div class="row" style="gap: 1rem;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max duration (s):</span>
-                            <input type="number" id="guestMaxDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxDuration(this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Cooldown (s):</span>
-                            <input type="number" id="guestCooldownInput" min="0" max="300" value="10" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestCooldown(this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max duration (s)</span>
+                            <input type="number" id="guestMaxDurationInput" min="1" max="60" value="7" onchange="setGuestMaxDuration(this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Cooldown (s)</span>
+                            <input type="number" id="guestCooldownInput" min="0" max="300" value="10" onchange="setGuestCooldown(this.value)">
+                        </div>
                     </div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Guest Uploads</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                    <label class="sa-toggle" style="margin-bottom: 0.7rem;">
                         <input type="checkbox" id="guestUploadEnabledToggle" onchange="setGuestUploadEnabled(this.checked)">
-                        <span>Allow guests to upload</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Allow guests to upload</span>
                     </label>
-                    <div class="row" style="gap: 1rem;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max duration (s):</span>
-                            <input type="number" id="guestMaxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxUploadDuration(this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max size (KB):</span>
-                            <input type="number" id="guestMaxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setGuestMaxUploadBytes(this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max duration (s)</span>
+                            <input type="number" id="guestMaxUploadDurationInput" min="1" max="60" value="7" onchange="setGuestMaxUploadDuration(this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max size (KB)</span>
+                            <input type="number" id="guestMaxUploadBytesInput" min="100" max="10240" value="2048" onchange="setGuestMaxUploadBytes(this.value)">
+                        </div>
                     </div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">User Playback</div>
-                    <div class="row" style="gap: 1rem;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max duration (s):</span>
-                            <input type="number" id="userMaxDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxDuration(this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Cooldown (s):</span>
-                            <input type="number" id="userCooldownInput" min="0" max="300" value="0" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserCooldown(this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max duration (s)</span>
+                            <input type="number" id="userMaxDurationInput" min="1" max="3600" value="7" onchange="setUserMaxDuration(this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Cooldown (s)</span>
+                            <input type="number" id="userCooldownInput" min="0" max="300" value="0" onchange="setUserCooldown(this.value)">
+                        </div>
                     </div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">User Uploads</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                    <label class="sa-toggle" style="margin-bottom: 0.7rem;">
                         <input type="checkbox" id="userUploadEnabledToggle" onchange="setUserUploadEnabled(this.checked)">
-                        <span>Allow users to upload</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Allow users to upload</span>
                     </label>
-                    <div class="row" style="gap: 1rem;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max duration (s):</span>
-                            <input type="number" id="userMaxUploadDurationInput" min="1" max="60" value="7" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxUploadDuration(this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max size (KB):</span>
-                            <input type="number" id="userMaxUploadBytesInput" min="100" max="10240" value="2048" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUserMaxUploadBytes(this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max duration (s)</span>
+                            <input type="number" id="userMaxUploadDurationInput" min="1" max="3600" value="7" onchange="setUserMaxUploadDuration(this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max size (KB)</span>
+                            <input type="number" id="userMaxUploadBytesInput" min="100" max="102400" value="2048" onchange="setUserMaxUploadBytes(this.value)">
+                        </div>
                     </div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Playback</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <label class="sa-toggle">
                         <input type="checkbox" id="multiPlayToggle" onchange="setMultiPlay(this.checked)">
-                        <span>Allow multiple sounds to play at once</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Allow multiple sounds at once</span>
                     </label>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">When enabled, playing a new sound won't stop the current one. Use per-sound "Stop others" in the edit panel to override.</p>
+                    <div class="sa-field-help">When enabled, playing a new sound won't stop the current one. Use per-sound "Stop others" in the edit panel to override.</div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Upload Processing</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <label class="sa-toggle">
                         <input type="checkbox" id="autoNormalizeUploadsToggle" onchange="setAutoNormalizeUploads(this.checked)">
-                        <span>Auto-normalize new uploads (peak to -1 dB)</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Auto-normalize new uploads <span class="sa-toggle-hint">(peak to -1 dB)</span></span>
                     </label>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 1.6rem;">Runs after upload so volume is consistent across sounds. Users can opt out per-upload with a checkbox. Does not affect existing sounds.</p>
+                    <div class="sa-field-help">Runs after upload so volume is consistent across sounds. Users can opt out per-upload with a checkbox. Does not affect existing sounds.</div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Text-to-Speech</div>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                    <label class="sa-toggle" style="margin-bottom: 0.7rem;">
                         <input type="checkbox" id="ttsEnabledToggle" onchange="setTtsEnabledSetting(this.checked)">
-                        <span>Enable TTS</span>
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Enable TTS</span>
                     </label>
-                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>User max chars:</span>
-                            <input type="number" id="ttsMaxTextLengthUserInput" min="0" max="5000" value="200" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxTextLengthSetting('user', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Admin max chars:</span>
-                            <input type="number" id="ttsMaxTextLengthAdminInput" min="0" max="5000" value="500" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxTextLengthSetting('admin', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>User cooldown (s):</span>
-                            <input type="number" id="ttsCooldownSecUserInput" min="0" max="300" value="15" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsCooldownSecSetting('user', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Admin cooldown (s):</span>
-                            <input type="number" id="ttsCooldownSecAdminInput" min="0" max="300" value="5" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsCooldownSecSetting('admin', this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">User max chars</span>
+                            <input type="number" id="ttsMaxTextLengthUserInput" min="0" max="5000" value="200" onchange="setTtsMaxTextLengthSetting('user', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Admin max chars</span>
+                            <input type="number" id="ttsMaxTextLengthAdminInput" min="0" max="5000" value="500" onchange="setTtsMaxTextLengthSetting('admin', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">User cooldown (s)</span>
+                            <input type="number" id="ttsCooldownSecUserInput" min="0" max="300" value="15" onchange="setTtsCooldownSecSetting('user', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Admin cooldown (s)</span>
+                            <input type="number" id="ttsCooldownSecAdminInput" min="0" max="300" value="5" onchange="setTtsCooldownSecSetting('admin', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Max queue size</span>
+                            <input type="number" id="ttsMaxQueueSizeInput" min="1" max="50" value="10" onchange="setTtsMaxQueueSizeSetting(this.value)">
+                        </div>
                     </div>
-                    <div class="row" style="gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Max queue size:</span>
-                            <input type="number" id="ttsMaxQueueSizeInput" min="1" max="50" value="10" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setTtsMaxQueueSizeSetting(this.value)">
-                        </label>
-                    </div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</p>
+                    <div class="sa-field-help">Set max chars to 0 to disable TTS for that role. Superadmin always has 2000 chars / 0 cooldown.</div>
                 </div>
                 <div class="superadmin-section">
-                    <div class="superadmin-section-title">Suno Song Generation</div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Generate full songs (with lyrics + cover art) via the Suno API. Each generation costs ~12 credits (~$0.06) against your sunoapi.org pool. Credits visible below.</p>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
-                        <input type="checkbox" id="sunoEnabledToggle" onchange="setSunoEnabledSetting(this.checked)">
-                        <span>Enable Song generation</span>
-                    </label>
-                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>User daily:</span>
-                            <input type="number" id="sunoDailyLimitUserInput" min="0" max="999" value="0" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('user', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Admin daily:</span>
-                            <input type="number" id="sunoDailyLimitAdminInput" min="0" max="999" value="5" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('admin', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Superadmin daily:</span>
-                            <input type="number" id="sunoDailyLimitSuperadminInput" min="0" max="999" value="50" style="width: 4rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setSunoDailyLimitSetting('superadmin', this.value)">
-                        </label>
-                        <span style="font-size:0.85rem;color:var(--text-muted);" id="sunoCreditsDisplay">Credits: —</span>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshSunoCreditsDisplay()" title="Refresh">↻</button>
+                    <div class="superadmin-section-title">
+                        Suno Song Generation
+                        <span class="sa-title-meta" id="sunoCreditsDisplay">Credits: —</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshSunoCreditsDisplay()" title="Refresh credits" style="margin-left:0.35rem;">↻</button>
                     </div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set daily limit to 0 to disable for that role. Guests never have access. Requires <code>SUNO_API_KEY</code> in server env.</p>
+                    <label class="sa-toggle" style="margin-bottom: 0.7rem;">
+                        <input type="checkbox" id="sunoEnabledToggle" onchange="setSunoEnabledSetting(this.checked)">
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Enable Song generation</span>
+                    </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">User daily</span>
+                            <input type="number" id="sunoDailyLimitUserInput" min="0" max="999" value="0" onchange="setSunoDailyLimitSetting('user', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Admin daily</span>
+                            <input type="number" id="sunoDailyLimitAdminInput" min="0" max="999" value="5" onchange="setSunoDailyLimitSetting('admin', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Superadmin daily</span>
+                            <input type="number" id="sunoDailyLimitSuperadminInput" min="0" max="999" value="50" onchange="setSunoDailyLimitSetting('superadmin', this.value)">
+                        </div>
+                    </div>
+                    <div class="sa-field-help">Generate full songs (with lyrics + cover art) via the Suno API. Each generation costs ~12 credits (~$0.06) against your sunoapi.org pool. Set a daily limit to 0 to disable for that role. Guests never have access. Requires <code>SUNO_API_KEY</code> in server env.</div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">URL Streaming (YouTube / TikTok / etc.)</div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">When enabled for a role, users in that role can paste a video URL and stream its audio into Discord. yt-dlp-supported sites only; Instagram / TikTok may be brittle.</p>
-                    <div class="row" style="gap: 1rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
-                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                    <div class="sa-toggle-group" style="margin-bottom: 0.8rem;">
+                        <label class="sa-toggle">
                             <input type="checkbox" id="urlStreamEnabledUser" onchange="setUrlStreamEnabledSetting('user', this.checked)">
-                            <span>Allow users</span>
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow users</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                        <label class="sa-toggle">
                             <input type="checkbox" id="urlStreamEnabledAdmin" onchange="setUrlStreamEnabledSetting('admin', this.checked)">
-                            <span>Allow admins</span>
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow admins</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;">
+                        <label class="sa-toggle">
                             <input type="checkbox" id="urlStreamEnabledSuperadmin" onchange="setUrlStreamEnabledSetting('superadmin', this.checked)">
-                            <span>Allow superadmin</span>
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow superadmin</span>
                         </label>
                     </div>
-                    <div class="row" style="gap: 1rem; flex-wrap: wrap;">
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>User max duration (s):</span>
-                            <input type="number" id="urlStreamMaxDurUser" min="0" max="86400" value="60" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('user', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Admin max duration (s):</span>
-                            <input type="number" id="urlStreamMaxDurAdmin" min="0" max="86400" value="300" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('admin', this.value)">
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                            <span>Superadmin max duration (s):</span>
-                            <input type="number" id="urlStreamMaxDurSuperadmin" min="0" max="86400" value="1800" style="width: 5rem; padding: 0.35rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);" onchange="setUrlStreamMaxDurSetting('superadmin', this.value)">
-                        </label>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">User max (s)</span>
+                            <input type="number" id="urlStreamMaxDurUser" min="0" max="86400" value="60" onchange="setUrlStreamMaxDurSetting('user', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Admin max (s)</span>
+                            <input type="number" id="urlStreamMaxDurAdmin" min="0" max="86400" value="300" onchange="setUrlStreamMaxDurSetting('admin', this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Superadmin max (s)</span>
+                            <input type="number" id="urlStreamMaxDurSuperadmin" min="0" max="86400" value="1800" onchange="setUrlStreamMaxDurSetting('superadmin', this.value)">
+                        </div>
                     </div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0 0;">Set max duration to 0 to disable the length cap for that role.</p>
+                    <div class="sa-field-help">When enabled for a role, users in that role can paste a video URL and stream its audio into Discord. yt-dlp-supported sites only; Instagram / TikTok may be brittle. Set a max duration to 0 to disable the length cap for that role.</div>
                 </div>
             </div>
 
@@ -1574,15 +1628,15 @@
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Moderation Queue</div>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">User and guest uploads await approval.</p>
-                    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem; font-size:0.85rem; align-items:center;">
-                        <input type="text" id="modUploaderFilter" placeholder="Uploader" style="padding:0.3rem; width:9rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
-                        <input type="date" id="modFromFilter" title="From" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" onchange="applyModerationFilters()">
-                        <input type="date" id="modToFilter" title="To" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" onchange="applyModerationFilters()">
-                        <input type="number" id="modMinSizeKB" min="0" placeholder="Min KB" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
-                        <input type="number" id="modMaxSizeKB" min="0" placeholder="Max KB" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
-                        <input type="number" id="modMinDurationSec" min="0" step="0.1" placeholder="Min sec" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
-                        <input type="number" id="modMaxDurationSec" min="0" step="0.1" placeholder="Max sec" style="padding:0.3rem; width:5rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="applyModerationFilters()">
-                        <button type="button" class="btn btn-ghost block-btn" onclick="clearModerationFilters()">Clear</button>
+                    <div class="sa-field-row" style="margin-bottom: 0.6rem;">
+                        <div class="sa-field"><span class="sa-field-label">Uploader</span><input type="text" id="modUploaderFilter" placeholder="username…" oninput="applyModerationFilters()" style="width:10rem;"></div>
+                        <div class="sa-field"><span class="sa-field-label">From</span><input type="date" id="modFromFilter" onchange="applyModerationFilters()"></div>
+                        <div class="sa-field"><span class="sa-field-label">To</span><input type="date" id="modToFilter" onchange="applyModerationFilters()"></div>
+                        <div class="sa-field is-narrow"><span class="sa-field-label">Min KB</span><input type="number" id="modMinSizeKB" min="0" oninput="applyModerationFilters()"></div>
+                        <div class="sa-field is-narrow"><span class="sa-field-label">Max KB</span><input type="number" id="modMaxSizeKB" min="0" oninput="applyModerationFilters()"></div>
+                        <div class="sa-field is-narrow"><span class="sa-field-label">Min sec</span><input type="number" id="modMinDurationSec" min="0" step="0.1" oninput="applyModerationFilters()"></div>
+                        <div class="sa-field is-narrow"><span class="sa-field-label">Max sec</span><input type="number" id="modMaxDurationSec" min="0" step="0.1" oninput="applyModerationFilters()"></div>
+                        <div class="sa-field is-narrow" style="justify-content:flex-end;"><button type="button" class="btn btn-ghost btn-sm" onclick="clearModerationFilters()" style="margin-top:auto;">Clear</button></div>
                     </div>
                     <div class="pending-uploads-wrap" style="max-height: 280px; overflow-y: auto;">
                         <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
@@ -1602,20 +1656,22 @@
                     <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;">Each cell = one day. Hover for count.</div>
                 </div>
                 <div class="superadmin-section">
-                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
-                        <span>Play Audit Log</span>
-                        <span>
-                            <button type="button" class="btn btn-ghost block-btn" onclick="downloadPlaysCsv()" title="Export current filter as CSV">CSV</button>
-                            <button type="button" class="btn btn-ghost block-btn" onclick="fetchPlayAudit()" title="Reload">↻</button>
+                    <div class="superadmin-section-title">
+                        Play Audit Log
+                        <span class="sa-title-meta">
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="downloadPlaysCsv()" title="Export current filter as CSV">CSV</button>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="fetchPlayAudit()" title="Reload" style="margin-left:0.25rem;">↻</button>
                         </span>
                     </div>
-                    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem; font-size:0.85rem;">
-                        <input type="text" id="auditUserFilter" placeholder="User" style="padding:0.3rem; width:8rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
-                        <input type="text" id="auditSoundFilter" placeholder="Sound filename" style="padding:0.3rem; width:12rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
-                        <input type="date" id="auditFromFilter" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
-                        <input type="date" id="auditToFilter" style="padding:0.3rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
-                        <button type="button" class="btn btn-primary block-btn" onclick="fetchPlayAudit()">Apply</button>
-                        <button type="button" class="btn btn-ghost block-btn" onclick="clearAuditFilters()">Clear</button>
+                    <div class="sa-field-row" style="margin-bottom: 0.6rem;">
+                        <div class="sa-field"><span class="sa-field-label">User</span><input type="text" id="auditUserFilter" placeholder="username…" style="width:9rem;"></div>
+                        <div class="sa-field is-grow"><span class="sa-field-label">Sound filename</span><input type="text" id="auditSoundFilter" placeholder="e.g. trump_mumble.mp3"></div>
+                        <div class="sa-field"><span class="sa-field-label">From</span><input type="date" id="auditFromFilter"></div>
+                        <div class="sa-field"><span class="sa-field-label">To</span><input type="date" id="auditToFilter"></div>
+                        <div class="sa-field is-narrow" style="flex-direction:row; gap:0.35rem; align-items:flex-end;">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="fetchPlayAudit()" style="margin-top:auto;">Apply</button>
+                            <button type="button" class="btn btn-ghost btn-sm" onclick="clearAuditFilters()" style="margin-top:auto;">Clear</button>
+                        </div>
                     </div>
                     <div style="max-height:320px; overflow-y:auto;">
                         <table class="guest-history-table" style="width:100%; font-size:0.85rem; border-collapse:collapse;">
@@ -1633,9 +1689,9 @@
                     <div id="playAuditMeta" style="font-size:0.75rem; color:var(--text-muted); margin-top:0.35rem;"></div>
                 </div>
                 <div class="superadmin-section">
-                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
-                        <span>Admin Action Log</span>
-                        <button type="button" class="btn btn-ghost block-btn" onclick="fetchAdminActions()" title="Reload">↻</button>
+                    <div class="superadmin-section-title">
+                        Admin Action Log
+                        <span class="sa-title-meta"><button type="button" class="btn btn-ghost btn-sm" onclick="fetchAdminActions()" title="Reload">↻</button></span>
                     </div>
                     <div style="max-height:280px; overflow-y:auto;">
                         <table class="guest-history-table" style="width:100%; font-size:0.85rem; border-collapse:collapse;">
