@@ -1,0 +1,41 @@
+# Changelog
+
+User-facing changes, newest first. The web UI surfaces this through a
+"What's New" modal and reads the running short-SHA as the version stamp.
+Every commit that ships a user-visible change should add an entry here —
+see `CLAUDE.md` for conventions.
+
+## 2026-04-22 — pending
+- **Version stamp in the header menu** + **What's New modal** — footer of the hamburger menu shows the running `vX · shortSha`; click to open the changelog. Unseen entries highlight with a "New" badge.
+- **Update banner** — page polls `/api/version` every 60s; when the deployed build changes, a purple banner prompts to reload so you're not stuck on stale JS/CSS.
+- **Design-pass fixes** — tag chips back to the neon-green palette (clearer), bottom controls get more breathing room, Speak/Again restyled as pill buttons to match the mode switch + AI cluster, Volume slider lives next to Speak so conversation mode doesn't leave the button orphaned.
+
+## 2026-04-22 — 3bb5c33
+- **TTS card redesign** — cleaner hierarchy, categorized collapsible Fish tag tray, stacked conversation bubbles with alternating accent colors, labeled control rows, segmented Single/Conversation switch.
+- **Shared tag tray in conversation mode** — click any `[laughing]`/`[sigh]`/… chip and it inserts into whichever TTS input was last focused (main textarea or a conversation row).
+- ✨ Rewrite button disables itself when the textarea is empty — it rewrites existing text, it doesn't generate.
+
+## 2026-04-22 — 1148866
+- **Multi-voice conversation mode** — toggle 💬 Conversation in the TTS card to compose an exchange. Each line picks its own voice, has its own pause-before slider, humanize toggle, and ✨ rewrite button. Server stitches all lines into one playback with ffmpeg silence padding. Up to 12 lines.
+- **Enter to speak** — plain Enter in the TTS textarea sends now (Shift+Enter for newline), matching Discord-send convention.
+
+## 2026-04-22 — e6bef93
+- **Click-to-insert tag chips** — the Fish/Chatterbox tag pills under the TTS textarea are now clickable buttons. Clicking inserts the tag at the cursor position in the TTS textarea (auto-pads with whitespace).
+
+## 2026-04-21 — fc8563d
+- **Rewrite uses inline Fish tags more actively** — the ✨ Rewrite LLM now actively inserts `[laughing]`/`[sigh]`/`[shouting]`/`[pause]` etc. when the voice runs through Fish, instead of just preserving pre-existing tags.
+
+## 2026-04-21 — 2e75ea8
+- **✨ Rewrite button** — new button in the top-right of the TTS textarea that rewrites your message in the selected voice's actual style (Trump → rally riff, Herzog → philosophical narration). Unlike Humanize, it reshapes phrasing / vocabulary / length — not just disfluencies.
+- Humanize length caps loosened — the LLM now uses as many palette phrases as a sentence can carry naturally instead of obeying a hard 1.3× ratio.
+
+## 2026-04-21 — 78f5947
+- **Per-voice humanize style profiles** — 37 voices get tailored disfluency and cadence rules (Trump skips "uhh"s, Peterson/Von/Morty lean heavier, Herzog stays philosophical). Fish voices get explicit permission to insert inline `[tags]` where emotion is obvious.
+- Reference-audio time selectors in voice-creation modals now accept `m:ss` format instead of raw seconds.
+
+## 2026-04-21 — 27ac8c1
+- Humanize LLM uses a smaller context window (4K tokens) so it coexists with Fish-Speech on the 3090 instead of OOM-ing it at startup.
+
+## Earlier
+- Humanize fixes for dropped-tag false positives + Ollama native-chat reliability + Qwen3 `think:false` support.
+- Fish per-emotion reference clips reach parity with Chatterbox (#72).

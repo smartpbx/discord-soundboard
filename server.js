@@ -787,6 +787,61 @@ if (fs.existsSync(LEGACY_PENDING) && !fs.existsSync(PENDING_META_PATH)) {
 
 const app = express();
 const upload = multer({ dest: 'sounds/', limits: { fileSize: 10 * 1024 * 1024 } });
+
+// Running-build identity for the web UI's version stamp + What's New.
+// Read at startup; the process restarts on every `scripts/update.sh`, so a
+// polled SHA mismatch tells the client it's stale and should hard-refresh.
+const VERSION_INFO = (function() {
+    let sha = '';
+    try {
+        const r = require('child_process').spawnSync('git', ['rev-parse', 'HEAD'], { cwd: __dirname, timeout: 2000 });
+        if (r.status === 0) sha = r.stdout.toString().trim();
+    } catch {}
+    // Fallback: read .git/HEAD directly (handles detached HEAD + missing git
+    // binary). Only used when `git rev-parse` isn't available.
+    if (!sha) {
+        try {
+            const head = fs.readFileSync(path.join(__dirname, '.git', 'HEAD'), 'utf8').trim();
+            if (head.startsWith('ref: ')) {
+                const refPath = path.join(__dirname, '.git', head.slice(5).trim());
+                sha = fs.readFileSync(refPath, 'utf8').trim();
+            } else {
+                sha = head;
+            }
+        } catch {}
+    }
+    let packageVersion = '0.0.0';
+    try { packageVersion = require('./package.json').version || '0.0.0'; } catch {}
+    return {
+        sha,
+        shortSha: sha.slice(0, 7),
+        packageVersion,
+        startedAt: Date.now(),
+    };
+})();
+console.log('[VERSION] %s (%s) startedAt=%d', VERSION_INFO.packageVersion, VERSION_INFO.shortSha || 'unknown', VERSION_INFO.startedAt);
+
+// Unauthenticated on purpose so the login screen can render a version
+// badge + compare SHAs across tabs without a session. Response is tiny and
+// contains no sensitive info.
+app.get('/api/version', (req, res) => {
+    res.json(VERSION_INFO);
+});
+
+// Raw CHANGELOG.md so the frontend can parse + render the "What's New"
+// modal. Kept unauthenticated for the same reason as /api/version.
+app.get('/api/changelog', (req, res) => {
+    try {
+        const p = path.join(__dirname, 'CHANGELOG.md');
+        const txt = fs.readFileSync(p, 'utf8');
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(txt);
+    } catch (e) {
+        res.status(404).type('text/plain').send('# Changelog\n\nNot available.\n');
+    }
+});
+
 app.use(express.static('public'));
 app.use(express.json());
 app.use(require('cookie-parser')());

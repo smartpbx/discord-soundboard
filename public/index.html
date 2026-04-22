@@ -116,6 +116,49 @@
         .header-menu-item { display: block; width: 100%; padding: 0.5rem 0.6rem; text-align: left; font-size: 0.85rem; background: none; border: none; border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
         .header-menu-item:hover { background: var(--surface-hover); }
         .header-menu-item .pending-badge { margin-left: 0.35rem; padding: 0.1rem 0.35rem; font-size: 0.7rem; background: var(--danger); color: white; border-radius: 10px; }
+        .header-menu-version { width: 100%; margin-top: 0.35rem; padding: 0.3rem 0.6rem 0.1rem; font-size: 0.7rem; font-family: 'SF Mono', Menlo, monospace; color: var(--text-muted); background: none; border: none; border-top: 1px solid var(--border); text-align: left; cursor: pointer; }
+        .header-menu-version:hover { color: var(--accent); }
+
+        /* Stale-version banner — appears when the polled /api/version SHA
+           differs from the one the page loaded with. Reload to pick up the
+           new build. */
+        .update-banner {
+            position: sticky; top: 0; z-index: 150;
+            background: var(--accent); color: #fff; padding: 0.5rem 1rem;
+            font-size: 0.85rem; display: flex; align-items: center; gap: 0.6rem;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        .update-banner button {
+            padding: 0.25rem 0.75rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.6);
+            background: rgba(255,255,255,0.12); color: #fff; cursor: pointer; font: inherit; font-size: 0.8rem;
+        }
+        .update-banner button:hover { background: rgba(255,255,255,0.25); }
+
+        /* What's New modal — reuses the shortcuts-overlay pattern. */
+        .whats-new-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .whats-new-overlay.hidden { display: none !important; }
+        .whats-new-modal {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 1.5rem; max-width: 620px; width: 100%;
+            max-height: calc(100vh - 4rem); overflow-y: auto;
+            box-shadow: var(--shadow);
+        }
+        .whats-new-modal h3 {
+            margin: 0 0 0.25rem; font-size: 1.05rem;
+            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+        }
+        .whats-new-meta { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1rem; font-family: 'SF Mono', Menlo, monospace; }
+        .whats-new-entry { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+        .whats-new-entry:last-child { border-bottom: none; }
+        .whats-new-entry.is-new { position: relative; padding-left: 0.6rem; border-left: 2px solid var(--accent); background: linear-gradient(90deg, rgba(124, 77, 255, 0.07), transparent 40%); margin-left: -0.6rem; padding-left: 0.8rem; }
+        .whats-new-entry-head { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.35rem; }
+        .whats-new-date { font-size: 0.8rem; color: var(--text); font-weight: 500; }
+        .whats-new-sha { font-size: 0.72rem; color: var(--text-muted); font-family: 'SF Mono', Menlo, monospace; }
+        .whats-new-new-badge { font-size: 0.65rem; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent); color: #fff; text-transform: uppercase; letter-spacing: 0.05em; }
+        .whats-new-entry ul { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; color: var(--text-muted); line-height: 1.55; }
+        .whats-new-entry ul li { margin-bottom: 0.2rem; }
+        .whats-new-entry ul li strong { color: var(--text); }
+        .whats-new-entry code { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; padding: 0 0.15rem; color: var(--text); }
         .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; z-index: 1; }
         .superadmin-close-btn:hover { border-color: var(--accent); color: var(--accent); }
         /* Superadmin modal overlay: sits on top of the sounds view, dimmed
@@ -652,13 +695,14 @@
         .tts-tag-tray-hint code { background: transparent; color: var(--text); padding: 0 0.15rem; }
         .tts-tag-chip {
             display: inline-flex; align-items: center; padding: 2px 7px;
-            font-family: 'SF Mono', Menlo, monospace; font-size: 0.74rem;
-            color: var(--text); background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 4px; cursor: pointer; line-height: 1.35;
-            transition: color 0.1s, border-color 0.1s, background 0.1s, transform 0.05s;
+            font-family: 'SF Mono', Menlo, monospace; font-size: 0.78rem;
+            color: #7ce0a4;
+            background: rgba(124, 224, 164, 0.08);
+            border: 1px solid rgba(124, 224, 164, 0.28);
+            border-radius: 4px; cursor: pointer; line-height: 1.4;
+            transition: background 0.1s, border-color 0.1s, transform 0.05s;
         }
-        .tts-tag-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--surface-hover); }
+        .tts-tag-chip:hover { background: rgba(124, 224, 164, 0.22); border-color: rgba(124, 224, 164, 0.55); }
         .tts-tag-chip:active { transform: translateY(1px); }
 
         /* Chatterbox cue hint — smaller inline help line. */
@@ -722,23 +766,46 @@
         }
 
         /* Labeled control rows: split into a "setup" row (voice + knobs) and an
-           "act" row (Speak/Again). Every input gets a small uppercase label so
-           the "200%" / "0.70" readouts are unambiguous. */
-        .tts-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.55rem; }
-        .tts-ctrl-row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; }
-        .tts-ctrl-row.tts-ctrl-act { justify-content: flex-end; gap: 0.4rem; align-items: center; }
-        .tts-ctrl-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-        .tts-ctrl-field.is-grow { flex: 1 1 200px; min-width: 180px; }
-        .tts-ctrl-field.is-slider { flex: 0 0 165px; }
-        .tts-ctrl-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
-        .tts-ctrl-slider-row { display: flex; align-items: center; gap: 0.4rem; }
+           "act" row (Volume + Speak/Again). Every input gets a small uppercase
+           label so the "200%" / "0.70" readouts are unambiguous. In conv mode
+           the setup row hides and Volume lives alongside the Speak button so
+           the act row isn't lopsided. */
+        .tts-controls { display: flex; flex-direction: column; gap: 0.85rem; margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+        .tts-ctrl-row { display: flex; gap: 0.85rem; align-items: flex-end; flex-wrap: wrap; }
+        .tts-ctrl-row.tts-ctrl-act { gap: 0.6rem; align-items: center; }
+        .tts-ctrl-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .tts-ctrl-field.is-grow { flex: 1 1 220px; min-width: 200px; }
+        .tts-ctrl-field.is-slider { flex: 0 0 190px; }
+        .tts-ctrl-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted); }
+        .tts-ctrl-slider-row { display: flex; align-items: center; gap: 0.5rem; }
         .tts-ctrl-slider-row input[type="range"] { flex: 1; accent-color: var(--accent); height: 5px; }
         .tts-ctrl-slider-row .tts-ctrl-val { font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--text); min-width: 3rem; text-align: right; }
         .tts-ctrl-row select {
-            padding: 0.42rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
+            padding: 0.5rem 0.55rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
             color: var(--text); font: inherit; font-size: 0.85rem;
         }
         .tts-ctrl-row select:focus { outline: none; border-color: var(--accent); }
+        .tts-act-spacer { flex: 1; }
+
+        /* Pill-styled primary actions to match the mode switch + AI cluster
+           aesthetic. Previously the Speak/Again buttons used the generic
+           square .btn style which clashed with the rest of the redesigned
+           card. */
+        .tts-pill-btn {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.5rem 1rem; border-radius: 999px;
+            border: 1px solid var(--border); background: var(--surface-hover);
+            color: var(--text); font: inherit; font-size: 0.85rem; line-height: 1.2;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s, color 0.12s, filter 0.12s;
+        }
+        .tts-pill-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .tts-pill-btn.is-primary {
+            background: var(--accent); border-color: var(--accent); color: #fff;
+            box-shadow: 0 1px 0 rgba(0,0,0,0.25);
+        }
+        .tts-pill-btn.is-primary:hover:not(:disabled) { filter: brightness(1.1); color: #fff; border-color: var(--accent); }
+        .tts-pill-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .tts-char-count { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
         .tts-char-count.over-limit { color: var(--danger); }
@@ -752,6 +819,11 @@
     <script>
         (function(){try{var p=localStorage.getItem('soundboard-prefs');var t=p?JSON.parse(p).theme:null;document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){}})();
     </script>
+    <div class="update-banner hidden" id="updateBanner">
+        <span>✨ A new version has been deployed. Reload to pick it up.</span>
+        <button type="button" onclick="openWhatsNew()">What's new</button>
+        <button type="button" onclick="location.reload(true)">Reload</button>
+    </div>
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
@@ -800,8 +872,10 @@
                     <button type="button" class="header-menu-item user-only hidden" id="headerMenuChangePassword" onclick="openChangePasswordModal(); closeHeaderMenu();">Change password</button>
                     <button type="button" class="header-menu-item hidden" id="headerMenuEntranceExit" onclick="openEntranceExitModal(); closeHeaderMenu();">Entrance / exit sounds</button>
                     <button type="button" class="header-menu-item" onclick="openShortcuts(); closeHeaderMenu();">Keyboard shortcuts</button>
+                    <button type="button" class="header-menu-item" onclick="openWhatsNew(); closeHeaderMenu();">What's new<span class="pending-badge hidden" id="whatsNewBadge">•</span></button>
                     <button type="button" class="header-menu-item" onclick="logout(); closeHeaderMenu();">Log out</button>
                     <button type="button" class="header-menu-item superadmin-only hidden" id="headerMenuSuperadmin" onclick="switchMainTab('superadmin'); closeHeaderMenu();">Superadmin<span class="pending-badge hidden" id="pendingBadge">0</span></button>
+                    <button type="button" class="header-menu-version" id="headerMenuVersion" onclick="openWhatsNew(); closeHeaderMenu();" title="Click to see What's New">v… · …</button>
                 </div>
             </div>
         </div>
@@ -961,13 +1035,6 @@
                         <span class="tts-ctrl-label">Voice</span>
                         <select id="ttsVoiceSelect"><option value="">Loading voices…</option></select>
                     </div>
-                    <div class="tts-ctrl-field is-slider">
-                        <span class="tts-ctrl-label">🔊 Volume</span>
-                        <div class="tts-ctrl-slider-row">
-                            <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume">
-                            <span class="tts-ctrl-val" id="ttsVolumeLabel">100%</span>
-                        </div>
-                    </div>
                     <div class="tts-ctrl-field is-slider hidden" id="ttsExpressionWrap" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
                         <span class="tts-ctrl-label">🎭 Expression</span>
                         <div class="tts-ctrl-slider-row">
@@ -990,8 +1057,16 @@
                     </div>
                 </div>
                 <div class="tts-ctrl-row tts-ctrl-act">
-                    <button type="button" class="btn btn-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
-                    <button type="button" class="btn btn-ghost hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different.">🔄 Again</button>
+                    <div class="tts-ctrl-field is-slider">
+                        <span class="tts-ctrl-label">🔊 Volume</span>
+                        <div class="tts-ctrl-slider-row">
+                            <input type="range" id="ttsVolumeSlider" min="0" max="2" step="0.05" value="1" title="TTS volume">
+                            <span class="tts-ctrl-val" id="ttsVolumeLabel">100%</span>
+                        </div>
+                    </div>
+                    <div class="tts-act-spacer"></div>
+                    <button type="button" class="tts-pill-btn is-primary" id="ttsSpeakBtn" onclick="ttsSpeak()">🗣 Speak</button>
+                    <button type="button" class="tts-pill-btn hidden" id="ttsAgainBtn" onclick="ttsSpeakAgain()" title="Re-synthesize the same text with a fresh sample. Chatterbox is stochastic — each take comes out a little different.">🔄 Again</button>
                 </div>
             </div>
             <div class="tts-status hidden" id="ttsStatus"></div>
@@ -2121,6 +2196,172 @@
             const el = document.getElementById('shortcutsOverlay');
             if (el) el.classList.add('hidden');
         }
+
+        // ---- Version stamp + What's New ---------------------------------
+        // Strategy: fetch /api/version once at load so we know which build the
+        // page was served by. Poll every 60s; if the running SHA changes,
+        // render the stale-version banner. Lazy-fetch /api/changelog when the
+        // user opens the modal. Entries with SHAs newer than localStorage's
+        // `lastSeenChangelogSha` get a "NEW" badge + accent border; opening
+        // the modal marks them seen.
+        let _ttsLoadedVersion = null;  // what the page was served with
+        let _changelogText = null;     // cached raw markdown
+
+        async function _fetchVersion() {
+            try {
+                const r = await fetch('/api/version', { cache: 'no-store' });
+                if (!r.ok) return null;
+                return await r.json();
+            } catch { return null; }
+        }
+        async function _fetchChangelog() {
+            if (_changelogText) return _changelogText;
+            try {
+                const r = await fetch('/api/changelog', { cache: 'no-store' });
+                if (!r.ok) return '# Changelog\n\nNot available.\n';
+                _changelogText = await r.text();
+                return _changelogText;
+            } catch { return '# Changelog\n\nFetch failed.\n'; }
+        }
+
+        // Parse CHANGELOG.md — only needs to understand:
+        //   ## YYYY-MM-DD — shortSha      (entry header)
+        //   ## Earlier                    (catch-all, no sha)
+        //   - bullet text                 (entry body)
+        // Everything before the first `## ` is treated as the changelog
+        // intro and skipped in the modal.
+        function _parseChangelog(md) {
+            const lines = md.split(/\r?\n/);
+            const entries = [];
+            let current = null;
+            for (const raw of lines) {
+                const line = raw;
+                const hm = line.match(/^##\s+(.+?)\s*$/);
+                if (hm) {
+                    if (current) entries.push(current);
+                    const title = hm[1];
+                    // Try "YYYY-MM-DD — shortSha" shape; otherwise treat as
+                    // an unnumbered section (like "## Earlier").
+                    const m = title.match(/^(\d{4}-\d{2}-\d{2})\s*[—–-]\s*([0-9a-f]{6,40})$/i);
+                    if (m) current = { date: m[1], sha: m[2], title: null, bullets: [] };
+                    else current = { date: null, sha: null, title, bullets: [] };
+                    continue;
+                }
+                if (!current) continue;
+                const bm = line.match(/^[-*]\s+(.+?)\s*$/);
+                if (bm) current.bullets.push(bm[1]);
+            }
+            if (current) entries.push(current);
+            return entries;
+        }
+
+        // Render one changelog entry's bullet list with minimal markdown —
+        // just **bold** and `code` spans. We escape everything else.
+        function _renderChangelogBullets(bullets) {
+            const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return '<ul>' + bullets.map(raw => {
+                let html = esc(raw);
+                html = html.replace(/`([^`]+)`/g, (_, t) => '<code>' + t + '</code>');
+                html = html.replace(/\*\*([^*]+)\*\*/g, (_, t) => '<strong>' + t + '</strong>');
+                return '<li>' + html + '</li>';
+            }).join('') + '</ul>';
+        }
+
+        function _renderWhatsNewModal(entries) {
+            const body = document.getElementById('whatsNewBody');
+            const meta = document.getElementById('whatsNewMeta');
+            if (!body) return;
+            if (!entries.length) {
+                body.innerHTML = '<p style="color:var(--text-muted)">No entries yet.</p>';
+                return;
+            }
+            const lastSeen = localStorage.getItem('lastSeenChangelogSha') || '';
+            // Anything above the lastSeen entry is "new" — once we hit it,
+            // everything below is already seen.
+            let hitLastSeen = !lastSeen;
+            const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const html = entries.map(e => {
+                const isNew = !hitLastSeen;
+                if (!hitLastSeen && e.sha && e.sha.startsWith(lastSeen)) hitLastSeen = true;
+                const head = e.sha
+                    ? '<span class="whats-new-date">' + esc(e.date) + '</span><span class="whats-new-sha">' + esc(e.sha) + '</span>'
+                    : '<span class="whats-new-date">' + esc(e.title || '—') + '</span>';
+                const badge = isNew && e.sha ? '<span class="whats-new-new-badge">New</span>' : '';
+                return '<div class="whats-new-entry' + (isNew ? ' is-new' : '') + '">'
+                    + '<div class="whats-new-entry-head">' + head + badge + '</div>'
+                    + _renderChangelogBullets(e.bullets)
+                    + '</div>';
+            }).join('');
+            body.innerHTML = html;
+            if (meta && _ttsLoadedVersion) {
+                meta.textContent = 'Running v' + _ttsLoadedVersion.packageVersion + ' · ' + (_ttsLoadedVersion.shortSha || '—');
+            }
+        }
+
+        function _updateVersionBadge() {
+            const el = document.getElementById('headerMenuVersion');
+            if (!el || !_ttsLoadedVersion) return;
+            el.textContent = 'v' + _ttsLoadedVersion.packageVersion + ' · ' + (_ttsLoadedVersion.shortSha || '—');
+        }
+
+        function _hasUnseenChangelog(entries) {
+            const lastSeen = localStorage.getItem('lastSeenChangelogSha') || '';
+            if (!lastSeen) return entries.some(e => !!e.sha);
+            // If the top entry's SHA doesn't match the last-seen one, there's
+            // something new above it.
+            const top = entries.find(e => !!e.sha);
+            return !!(top && !top.sha.startsWith(lastSeen));
+        }
+
+        async function openWhatsNew() {
+            const overlay = document.getElementById('whatsNewOverlay');
+            if (!overlay) return;
+            overlay.classList.remove('hidden');
+            const md = await _fetchChangelog();
+            const entries = _parseChangelog(md);
+            _renderWhatsNewModal(entries);
+            // Mark the current top entry as seen.
+            const top = entries.find(e => !!e.sha);
+            if (top) localStorage.setItem('lastSeenChangelogSha', top.sha);
+            const badge = document.getElementById('whatsNewBadge');
+            if (badge) badge.classList.add('hidden');
+        }
+        function closeWhatsNew() {
+            const el = document.getElementById('whatsNewOverlay');
+            if (el) el.classList.add('hidden');
+        }
+
+        // Poll /api/version every 60s — if the running SHA diverges from the
+        // one the page loaded with, show the banner. Stop polling once the
+        // banner is visible (user has been notified).
+        function _startVersionPolling() {
+            let shown = false;
+            const check = async () => {
+                if (shown) return;
+                const v = await _fetchVersion();
+                if (!v || !_ttsLoadedVersion) return;
+                if (v.sha && _ttsLoadedVersion.sha && v.sha !== _ttsLoadedVersion.sha) {
+                    const banner = document.getElementById('updateBanner');
+                    if (banner) banner.classList.remove('hidden');
+                    shown = true;
+                }
+            };
+            setInterval(check, 60 * 1000);
+        }
+
+        (async function initVersion() {
+            _ttsLoadedVersion = await _fetchVersion();
+            _updateVersionBadge();
+            // Peek at the changelog once on load to flip the "new" dot next
+            // to the menu item. Cheap — endpoint caches in memory server-side.
+            try {
+                const md = await _fetchChangelog();
+                const entries = _parseChangelog(md);
+                const badge = document.getElementById('whatsNewBadge');
+                if (badge) badge.classList.toggle('hidden', !_hasUnseenChangelog(entries));
+            } catch {}
+            _startVersionPolling();
+        })();
         let multiPlayActive = false;
         let activePlayingFilenames = new Set();
         let compactMode = false;
@@ -6368,11 +6609,10 @@
         function ttsConvSetMode(enabled) {
             const single = document.getElementById('ttsSingleBlock');
             const conv = document.getElementById('ttsConvBlock');
-            // Single-mode-only control fields. We hide the whole labeled field
-            // wrapper so the "Voice" / "Emotion" labels don't float alone.
-            const voiceField = document.getElementById('ttsCtrlVoiceField');
-            const emotionField = document.getElementById('ttsCtrlEmotionField');
-            const exprWrap = document.getElementById('ttsExpressionWrap');
+            // Setup row carries Voice + Expression + Emotion — all redundant
+            // in conversation mode (each row carries its own voice + styling).
+            // Hide the whole row so the bottom of the card doesn't leave a gap.
+            const setupRow = document.getElementById('ttsCtrlSetupRow');
             const againBtn = document.getElementById('ttsAgainBtn');
             const singleBtn = document.getElementById('ttsModeSingleBtn');
             const convBtn = document.getElementById('ttsModeConvBtn');
@@ -6381,9 +6621,7 @@
             const setHidden = (el, hide) => { if (!el) return; el.classList.toggle('hidden', !!hide); if (hide) el.style.display = 'none'; else el.style.removeProperty('display'); };
             setHidden(single, enabled);
             setHidden(conv, !enabled);
-            setHidden(voiceField, enabled);
-            setHidden(emotionField, enabled);
-            setHidden(exprWrap, enabled);
+            setHidden(setupRow, enabled);
             setHidden(againBtn, enabled);
 
             // Segmented-control visuals.
@@ -8816,6 +9054,14 @@
             <div class="shortcut-row"><span>Focus filter</span><span class="shortcut-keys"><kbd class="kbd">/</kbd></span></div>
             <div class="shortcut-row"><span>Close panel / unfocus</span><span class="shortcut-keys"><kbd class="kbd">Esc</kbd></span></div>
             <div class="shortcut-row"><span>Show this reference</span><span class="shortcut-keys"><kbd class="kbd">?</kbd></span></div>
+        </div>
+    </div>
+
+    <div class="whats-new-overlay hidden" id="whatsNewOverlay" onclick="if(event.target===this)closeWhatsNew()">
+        <div class="whats-new-modal">
+            <h3>What's New <button type="button" class="shortcuts-close" onclick="closeWhatsNew()" title="Close">✕</button></h3>
+            <div class="whats-new-meta" id="whatsNewMeta">Loading…</div>
+            <div id="whatsNewBody">Loading changelog…</div>
         </div>
     </div>
 </body>
