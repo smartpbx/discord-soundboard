@@ -5,7 +5,7 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-04-22 — pending
+## 2026-04-22 — 2df4135
 - **Squared-off TTS card buttons** — Single/Conversation mode switch, Speak/Again, and update-banner buttons no longer use pill-round corners; they now match the flat square style of the sound filter chips and TTS/URL/Song/Upload row elsewhere in the UI.
 
 ## 2026-04-22 — 95773db
