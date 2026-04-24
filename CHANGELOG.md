@@ -5,7 +5,7 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-04-23 — pending
+## 2026-04-23 — d8cf0f1
 - **Multi-file upload** — the upload card's file picker and drag-and-drop now accept multiple audio files at once. Each file is uploaded sequentially (respecting your role's size limit per file), and a single toast summarizes how many succeeded, were sent for moderation, or failed.
 
 ## 2026-04-22 — 20e84aa
