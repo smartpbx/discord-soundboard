@@ -5,7 +5,7 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-04-24 — pending
+## 2026-04-24 — 04235c7
 - **Sort-row layout fix** — sort dropdown is now sized to its content instead of stretching full-width, the "0 plays only" toggle sits next to it, and the tag-row "more / less" expander moved up onto the same row instead of floating on top of the tags and hiding them when expanded.
 
 ## 2026-04-23 — 1d46410
