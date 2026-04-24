@@ -1708,6 +1708,8 @@ app.get('/api/sounds', requireAuth, (req, res) => {
         const list = sorted.map(filename => {
             const m = meta[filename];
             const suno = (m && typeof m === 'object' && m.suno && typeof m.suno === 'object') ? m.suno : null;
+            let mtime = null;
+            try { mtime = fs.statSync(path.join(SOUNDS_DIR, filename)).mtimeMs; } catch {}
             return {
                 filename,
                 displayName: getDisplayName(meta, filename),
@@ -1719,6 +1721,7 @@ app.get('/api/sounds', requireAuth, (req, res) => {
                 endTime: getSoundEndTime(meta, filename),
                 stopOthers: getSoundStopOthers(meta, filename),
                 tts: getSoundTts(meta, filename),
+                mtime,
                 suno: suno ? {
                     model: suno.model || null,
                     style: suno.style || null,

@@ -579,6 +579,12 @@
         .tags-suggestions .tag-suggestion { padding: 0.4rem 0.6rem; cursor: pointer; font-size: 0.9rem; }
         .tags-suggestions .tag-suggestion:hover, .tags-suggestions .tag-suggestion.selected { background: var(--surface-hover); }
         .sounds-filter-row { position: relative; margin-bottom: 0.4rem; }
+        .sounds-sort-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; flex-wrap: wrap; font-size: 0.8rem; color: var(--text-muted); }
+        .sounds-sort-row select { background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; padding: 0.25rem 0.4rem; font-family: inherit; }
+        .sounds-sort-row select:focus { outline: none; border-color: var(--accent); }
+        .sounds-sort-row label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; user-select: none; }
+        .sounds-sort-row input[type="checkbox"] { margin: 0; cursor: pointer; }
+        .sounds-sort-row .sort-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; }
         .sound-filter-input { width: 100%; box-sizing: border-box; padding: 0.45rem 2rem 0.45rem 0.65rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; }
         .sound-filter-input::placeholder { color: var(--text-muted); }
         .sound-filter-input:focus { outline: none; border-color: var(--accent); }
@@ -1250,6 +1256,18 @@
             <div class="sounds-filter-row">
                 <input type="text" id="soundFilterInput" placeholder="Filter by name or tag..." class="sound-filter-input" autocomplete="off">
                 <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
+            </div>
+            <div class="sounds-sort-row">
+                <span class="sort-label">Sort</span>
+                <select id="soundSortSelect" title="Sort order" onchange="setSoundSort(this.value)">
+                    <option value="default">Custom order</option>
+                    <option value="recent">Recently added</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="name">Name (A–Z)</option>
+                    <option value="plays-desc">Most played</option>
+                    <option value="plays-asc">Least played</option>
+                </select>
+                <label title="Only show sounds nobody has played yet"><input type="checkbox" id="filterZeroPlays" onchange="setZeroPlaysFilter(this.checked)"> 0 plays only</label>
             </div>
             <div class="sounds-tag-row-wrap">
                 <div class="sounds-tag-row" id="soundsTagRow">
@@ -2216,6 +2234,8 @@
         let userMaxUploadBytes = 2097152;
         let autoNormalizeUploads = true;
         let heatmapMode = false;
+        let soundSort = 'default';
+        let zeroPlaysOnly = false;
         let playCountsMap = {};
         let pausedAt = 0;
         let waveformData = null;
@@ -2473,9 +2493,35 @@
             heatmapMode = prefs.heatmap === true;
             const heatmapBtn = document.getElementById('heatmapBtn');
             if (heatmapBtn) heatmapBtn.classList.toggle('active', heatmapMode);
-            if (heatmapMode) refreshPlayCounts().then(() => renderSoundsGrid());
+            soundSort = typeof prefs.soundSort === 'string' ? prefs.soundSort : 'default';
+            zeroPlaysOnly = prefs.zeroPlaysOnly === true;
+            const sortSel = document.getElementById('soundSortSelect');
+            if (sortSel) sortSel.value = soundSort;
+            const zeroCb = document.getElementById('filterZeroPlays');
+            if (zeroCb) zeroCb.checked = zeroPlaysOnly;
+            if (heatmapMode || needsPlayCountsForFiltering()) refreshPlayCounts().then(() => renderSoundsGrid());
             applyVolumeExpanded();
             applyRecentPlayerExpanded();
+        }
+
+        function needsPlayCountsForFiltering() {
+            return zeroPlaysOnly || soundSort === 'plays-desc' || soundSort === 'plays-asc';
+        }
+
+        async function setSoundSort(mode) {
+            const valid = ['default', 'recent', 'oldest', 'name', 'plays-desc', 'plays-asc'];
+            soundSort = valid.includes(mode) ? mode : 'default';
+            savePrefs({ soundSort });
+            if (soundSort !== 'default' && reorderMode) toggleReorder();
+            if (needsPlayCountsForFiltering() && !heatmapMode) await refreshPlayCounts();
+            renderSoundsGrid();
+        }
+
+        function setZeroPlaysFilter(on) {
+            zeroPlaysOnly = !!on;
+            savePrefs({ zeroPlaysOnly });
+            if (zeroPlaysOnly && !heatmapMode) refreshPlayCounts().then(() => renderSoundsGrid());
+            else renderSoundsGrid();
         }
         function toggleCompact() {
             compactMode = !compactMode;
@@ -2492,7 +2538,7 @@
             if (btn) btn.classList.toggle('active', heatmapMode);
             if (heatmapMode) {
                 await refreshPlayCounts();
-            } else {
+            } else if (!needsPlayCountsForFiltering()) {
                 playCountsMap = {};
             }
             savePrefs({ heatmap: heatmapMode });
@@ -2511,7 +2557,7 @@
             if (_playCountsRefreshTimer) return;
             _playCountsRefreshTimer = setTimeout(async () => {
                 _playCountsRefreshTimer = null;
-                if (!heatmapMode) return;
+                if (!heatmapMode && !needsPlayCountsForFiltering()) return;
                 await refreshPlayCounts();
                 renderSoundsGrid();
             }, 600);
@@ -2875,6 +2921,19 @@
                     const tags = (s.tags || []).map(t => t.toLowerCase());
                     return terms.every(term => name.includes(term) || tags.some(t => t.includes(term)));
                 });
+            }
+            if (zeroPlaysOnly) {
+                filtered = filtered.filter(s => !(playCountsMap[s.filename] > 0));
+            }
+            if (soundSort && soundSort !== 'default') {
+                const arr = filtered.slice();
+                const nameOf = s => (s.displayName || s.filename || '').toLowerCase();
+                if (soundSort === 'recent') arr.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+                else if (soundSort === 'oldest') arr.sort((a, b) => (a.mtime || 0) - (b.mtime || 0));
+                else if (soundSort === 'name') arr.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+                else if (soundSort === 'plays-desc') arr.sort((a, b) => (playCountsMap[b.filename] || 0) - (playCountsMap[a.filename] || 0) || nameOf(a).localeCompare(nameOf(b)));
+                else if (soundSort === 'plays-asc') arr.sort((a, b) => (playCountsMap[a.filename] || 0) - (playCountsMap[b.filename] || 0) || nameOf(a).localeCompare(nameOf(b)));
+                filtered = arr;
             }
             return filtered;
         }
@@ -4593,6 +4652,7 @@
 
         function toggleReorder() {
             if (selectedTag != null) { showToast('Switch to "All" to reorder sounds.', 'info'); return; }
+            if (!reorderMode && soundSort !== 'default') { showToast('Switch sort to "Custom order" to reorder sounds.', 'info'); return; }
             reorderMode = !reorderMode;
             const btn = document.getElementById('reorderBtn');
             const grid = document.getElementById('soundsList');

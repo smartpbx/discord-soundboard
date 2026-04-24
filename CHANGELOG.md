@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-23 — pending
+- **Sort & filter the sound grid** — new row under the search box with a sort dropdown (Custom order / Recently added / Oldest first / Name A–Z / Most played / Least played) and a "0 plays only" toggle for surfacing sounds nobody has played yet. Both persist per-user. Non-default sort temporarily disables reorder mode so drag positions can't collide with a sort order.
+- **Batch display-name cleanup** — 78 sounds with messy names (raw filenames, leftover `.mp3` / YouTube-ripper junk, slugified contractions like `don-t`) got cleaned display names. Files on disk and every other meta field (tags, color, volume, trim points, duration, etc.) are untouched — only the label users see changed.
+
 ## 2026-04-23 — d8cf0f1
 - **Multi-file upload** — the upload card's file picker and drag-and-drop now accept multiple audio files at once. Each file is uploaded sequentially (respecting your role's size limit per file), and a single toast summarizes how many succeeded, were sent for moderation, or failed.
 
