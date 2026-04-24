@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-23 — pending
+- **Multi-file upload** — the upload card's file picker and drag-and-drop now accept multiple audio files at once. Each file is uploaded sequentially (respecting your role's size limit per file), and a single toast summarizes how many succeeded, were sent for moderation, or failed.
+
 ## 2026-04-22 — 20e84aa
 - **User-overrides modal shows on top** — bumped its overlay z-index above the superadmin panel. Previously it opened behind the superadmin card and looked frozen.
 - **Superadmin design pass** — Access & Limits, Moderation, and Activity tabs redone in the same visual language as the TTS card redesign: uppercase micro-labels above every input, border-top dividers between sections, custom toggle switches replacing bare checkboxes (Guest access, Uploads, Multi-play, Auto-normalize, TTS enable, Suno enable, URL-streaming role toggles), consistent `btn-sm` buttons. Section headers now carry meta content like the Suno credits display and refresh button inline on the right.

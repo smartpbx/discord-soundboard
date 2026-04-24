@@ -1029,8 +1029,8 @@
                 <button type="button" class="btn btn-ghost upload-close-btn" onclick="hideUploadSection()" title="Close">✕</button>
             </div>
             <div class="upload-zone" id="uploadZone">
-                <label for="fileInput"><span class="browse">Browse</span> or drag a file — MP3, WAV, OGG</label>
-                <input type="file" id="fileInput" accept="audio/*">
+                <label for="fileInput"><span class="browse">Browse</span> or drag files — MP3, WAV, OGG</label>
+                <input type="file" id="fileInput" accept="audio/*" multiple>
             </div>
             <label id="uploadSkipNormalizeRow" class="hidden" style="display:flex; align-items:center; gap:0.4rem; margin-top:0.5rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer;">
                 <input type="checkbox" id="uploadSkipNormalize">
@@ -9314,39 +9314,65 @@
             refreshSunoRecent();
         }
 
-        async function uploadSound(file) {
+        async function uploadSound(filesArg) {
             const fileInput = document.getElementById('fileInput');
-            const f = file || (fileInput && fileInput.files && fileInput.files[0]);
-            if (!f) return;
+            let files;
+            if (filesArg) {
+                files = filesArg.length != null && typeof filesArg !== 'string'
+                    ? Array.from(filesArg)
+                    : [filesArg];
+            } else if (fileInput && fileInput.files && fileInput.files.length) {
+                files = Array.from(fileInput.files);
+            } else {
+                return;
+            }
+            if (!files.length) return;
+
             const role = user && user.role;
             const isGuest = role === 'guest';
             const isPrivileged = role === 'admin' || role === 'superadmin';
-            if (!isPrivileged) {
-                const limit = isGuest ? (guestMaxUploadBytes || 0) : (userMaxUploadBytes || 0);
+            const limit = !isPrivileged ? (isGuest ? (guestMaxUploadBytes || 0) : (userMaxUploadBytes || 0)) : 0;
+            const skipEl = document.getElementById('uploadSkipNormalize');
+            const skipNormalize = !!(skipEl && skipEl.checked);
+
+            let uploaded = 0, pending = 0, failed = 0;
+            const errors = [];
+
+            for (const f of files) {
                 if (limit > 0 && f.size > limit) {
                     const limitKB = Math.round(limit / 1024);
                     const fileKB = Math.round(f.size / 1024);
-                    showToast('File is ' + fileKB + 'KB — over the ' + limitKB + 'KB limit for your role.', 'error');
-                    if (fileInput) fileInput.value = '';
-                    return;
+                    errors.push(f.name + ': ' + fileKB + 'KB over ' + limitKB + 'KB limit');
+                    failed++;
+                    continue;
+                }
+                const formData = new FormData();
+                formData.append('soundFile', f);
+                if (skipNormalize) formData.append('skipNormalize', '1');
+                const res = await api('/api/upload', { method: 'POST', body: formData });
+                if (!res) { failed++; continue; }
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) {
+                    if (data.pending) pending++; else uploaded++;
+                } else {
+                    errors.push(f.name + ': ' + (data.error || 'upload failed'));
+                    failed++;
                 }
             }
-            const formData = new FormData();
-            formData.append('soundFile', f);
-            const skipEl = document.getElementById('uploadSkipNormalize');
-            if (skipEl && skipEl.checked) formData.append('skipNormalize', '1');
-            const res = await api('/api/upload', { method: 'POST', body: formData });
-            if (!res) return;
-            const data = await res.json().catch(() => ({}));
-            if (res.ok) {
-                fileInput.value = '';
-                if (skipEl) skipEl.checked = false;
-                fetchSounds();
-                hideUploadSection();
-                if (data.pending) showToast(data.message || 'Upload sent for moderation.', 'info');
-                else if (data.normalized) showToast('Uploaded and normalized.', 'success');
-            } else {
-                showToast(data.error || 'Upload failed', 'error');
+
+            if (fileInput) fileInput.value = '';
+            if (skipEl) skipEl.checked = false;
+            fetchSounds();
+            if (uploaded + pending > 0) hideUploadSection();
+
+            const parts = [];
+            if (uploaded) parts.push(uploaded + ' uploaded');
+            if (pending) parts.push(pending + ' sent for moderation');
+            if (failed) parts.push(failed + ' failed');
+            if (parts.length) {
+                const type = failed > 0 ? (uploaded + pending > 0 ? 'info' : 'error') : 'success';
+                const msg = parts.join(' · ') + (errors.length ? ' — ' + errors[0] : '');
+                showToast(msg, type);
             }
         }
 
@@ -9370,8 +9396,8 @@
                 e.preventDefault();
                 e.stopPropagation();
                 zone.classList.remove('drag-over');
-                const f = e.dataTransfer.files && e.dataTransfer.files[0];
-                if (f) uploadSound(f);
+                const files = e.dataTransfer.files;
+                if (files && files.length) uploadSound(files);
             });
         })();
 
