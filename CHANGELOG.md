@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-04-28
+- **Delete sounds permission** — Superadmin → Access & Limits can allow users and/or admins to permanently delete library sounds (same archive behavior as before). Superadmin → Users → Overrides adds a per-account “Delete sounds” override. The edit-panel Delete button follows the same rules; guests still cannot delete.
+
 ## 2026-04-24 — 04235c7
 - **Sort-row layout fix** — sort dropdown is now sized to its content instead of stretching full-width, the "0 plays only" toggle sits next to it, and the tag-row "more / less" expander moved up onto the same row instead of floating on top of the tags and hiding them when expanded.
 

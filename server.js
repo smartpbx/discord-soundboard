@@ -60,7 +60,7 @@ const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
 // Per-user permission overrides
 //
 // Every role-level limit (TTS cap, playback cooldown, Suno quota, upload
-// size, etc.) can be overridden per username. Storage lives inside
+// size, sound delete permission, etc.) can be overridden per username. Storage lives inside
 // guest.json under `userOverrides: { <lowercased username>: { field: value,
 // ... } }`. Each getter below consults the override map first and falls
 // back to the existing role default when no override exists, so passing
@@ -78,8 +78,9 @@ const USER_OVERRIDE_FIELDS = [
     'ttsEnabled',
     'urlStreamEnabled',
     'userUploadEnabled',
+    'soundDeleteEnabled',
 ];
-const USER_OVERRIDE_BOOLEAN_FIELDS = new Set(['ttsEnabled', 'urlStreamEnabled', 'userUploadEnabled']);
+const USER_OVERRIDE_BOOLEAN_FIELDS = new Set(['ttsEnabled', 'urlStreamEnabled', 'userUploadEnabled', 'soundDeleteEnabled']);
 
 function _normalizeUsername(u) {
     return String(u || '').trim().toLowerCase();
@@ -361,6 +362,28 @@ function setUserCooldownSec(sec) {
     const d = loadGuestData();
     d.userCooldownSec = Number(sec) >= 0 ? Number(sec) : 0;
     saveGuestData(d);
+}
+
+function getSoundDeleteRoleDefault(role) {
+    if (role === 'superadmin') return true;
+    if (role !== 'admin' && role !== 'user') return false;
+    const d = loadGuestData();
+    const key = role === 'admin' ? 'soundDeleteEnabled_admin' : 'soundDeleteEnabled_user';
+    return d[key] === true;
+}
+function setSoundDeleteRoleDefault(role, enabled) {
+    if (role !== 'admin' && role !== 'user') return;
+    const d = loadGuestData();
+    const key = role === 'admin' ? 'soundDeleteEnabled_admin' : 'soundDeleteEnabled_user';
+    d[key] = enabled === true;
+    saveGuestData(d);
+}
+function getSoundDeleteEnabled(role, username) {
+    if (role === 'superadmin') return true;
+    if (role !== 'admin' && role !== 'user') return false;
+    const ov = getUserOverride(username, 'soundDeleteEnabled');
+    if (typeof ov === 'boolean') return ov;
+    return getSoundDeleteRoleDefault(role);
 }
 
 function getAutoNormalizeUploads() {
@@ -1812,7 +1835,10 @@ function archiveSoundFile(filePath, safeFilename) {
     return dest;
 }
 
-app.delete('/api/sounds/:filename', requireSuperadmin, (req, res) => {
+app.delete('/api/sounds/:filename', requireAuth, (req, res) => {
+    const role = req.session.user.role;
+    const un = req.session.user.username;
+    if (!getSoundDeleteEnabled(role, un)) return res.status(403).json({ error: 'Sound delete is not enabled for your account' });
     const raw = req.params.filename;
     const safeFilename = path.basename(raw);
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
@@ -2041,6 +2067,10 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.userMaxUploadBytes = getUserMaxUploadBytes();
         out.userMaxDuration = getUserMaxDuration();
         out.userCooldownSec = getUserCooldownSec();
+        out.soundDeleteEnabled = {
+            user: getSoundDeleteRoleDefault('user'),
+            admin: getSoundDeleteRoleDefault('admin'),
+        };
         out.autoNormalizeUploads = getAutoNormalizeUploads();
         const pending = (loadPendingMeta().uploads || []).filter(u => fs.existsSync(path.join(PENDING_DIR, u.filename)));
         out.pendingCount = pending.length;
@@ -2085,6 +2115,9 @@ app.get('/api/settings', requireAuth, (req, res) => {
     }
     out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
     out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
+    if (role === 'admin' || role === 'user' || role === 'superadmin') {
+        out.soundDeleteEnabled_self = getSoundDeleteEnabled(role, username);
+    }
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
@@ -2201,6 +2234,23 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
                 if (typeof urlStreamMaxDurationSec[r] === 'number' && urlStreamMaxDurationSec[r] >= 0) setUrlStreamMaxDurationSec(r, urlStreamMaxDurationSec[r]);
             }
             out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
+        }
+        const { soundDeleteEnabled } = req.body;
+        if (soundDeleteEnabled && typeof soundDeleteEnabled === 'object') {
+            for (const r of ['user', 'admin']) {
+                if (typeof soundDeleteEnabled[r] === 'boolean') setSoundDeleteRoleDefault(r, soundDeleteEnabled[r]);
+            }
+            out.soundDeleteEnabled = {
+                user: getSoundDeleteRoleDefault('user'),
+                admin: getSoundDeleteRoleDefault('admin'),
+            };
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.soundDeleteEnabled',
+                target: null,
+                details: out.soundDeleteEnabled,
+            });
         }
     }
     res.json(Object.keys(out).length ? out : { ok: true });

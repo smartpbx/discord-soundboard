@@ -62,7 +62,7 @@ For LXC install (recommended for production), see `proxmox/README.md`. For Docke
 | Play sounds | ✓ | ✓ | ✓ (≤7s default) | ✓ (≤7s default) |
 | Upload sounds | ✓ (no limit) | ✓ (no limit) | ✓ (limited, optional moderation) | ✓ (limited, optional moderation) |
 | Edit metadata | ✓ | ✓ | — | — |
-| Delete sounds | ✓ | — | — | — |
+| Delete sounds | ✓ | optional (Access & Limits + per-user overrides) | optional (same) | — |
 | Pause/stop own playback | ✓ | ✓ | ✓ | ✓ |
 | Pause/stop others' playback | ✓ (anyone) | ✓ (users + guests; not other admins) | — | — |
 | Lock playback | ✓ (everyone-only mode too) | ✓ (admins-and-up only) | — | — |

@@ -1355,7 +1355,7 @@
                     <button type="button" class="btn btn-ghost btn-sm admin-only hidden" id="soundPanelNormalizeBtn" onclick="normalizeSoundPanel()" title="Normalize volume using loudnorm (modifies the file)">Normalize</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="soundPanelDownloadBtn" onclick="downloadSoundPanel()" title="Download sound file">Download</button>
                     <button type="button" class="btn btn-ghost btn-sm hidden" id="soundPanelRegenSunoBtn" onclick="regenerateSunoSound()" title="Re-generate this Suno song with tweaked lyrics/style">🎵 Regenerate</button>
-                    <button type="button" class="btn btn-danger btn-sm superadmin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
+                    <button type="button" class="btn btn-danger btn-sm admin-only hidden" id="soundPanelDeleteBtn" onclick="deleteSoundPanel()" title="Delete sound permanently">Delete</button>
                 </div>
             </div>
             </div>
@@ -1450,6 +1450,20 @@
                             <input type="number" id="userMaxUploadBytesInput" min="100" max="102400" value="2048" onchange="setUserMaxUploadBytes(this.value)">
                         </div>
                     </div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Delete sounds</div>
+                    <div class="sa-field-help" style="margin-bottom: 0.65rem;">Who may permanently remove sounds from the library (edit panel). Superadmin always can. Use Users → Overrides to grant or revoke per account.</div>
+                    <label class="sa-toggle" style="margin-bottom: 0.55rem;">
+                        <input type="checkbox" id="soundDeleteEnabledUserToggle" onchange="patchSoundDeleteEnabled('user', this.checked)">
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Users can delete sounds</span>
+                    </label>
+                    <label class="sa-toggle">
+                        <input type="checkbox" id="soundDeleteEnabledAdminToggle" onchange="patchSoundDeleteEnabled('admin', this.checked)">
+                        <span class="sa-toggle-track"></span>
+                        <span class="sa-toggle-label-text">Admins can delete sounds</span>
+                    </label>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">Playback</div>
@@ -2231,6 +2245,7 @@
         let guestLastPlayTime = 0;
         let guestEnabled = false;
         let userUploadEnabled = false;
+        let soundDeleteEnabledSelf = false;
         let userMaxUploadDuration = 7;
         let userMaxUploadBytes = 2097152;
         let autoNormalizeUploads = true;
@@ -3479,6 +3494,8 @@
             playbackLockedBy = d.playbackLockedBy || null;
             playbackSuperadminOnly = d.playbackSuperadminOnly === true;
             if (d.userUploadEnabled !== undefined) userUploadEnabled = d.userUploadEnabled;
+            if (d.soundDeleteEnabled_self !== undefined) soundDeleteEnabledSelf = d.soundDeleteEnabled_self === true;
+            else soundDeleteEnabledSelf = false;
             if (d.guestUploadEnabled !== undefined) guestUploadEnabled = d.guestUploadEnabled;
             if (d.userMaxUploadDuration !== undefined) userMaxUploadDuration = d.userMaxUploadDuration;
             if (d.userMaxUploadBytes !== undefined) userMaxUploadBytes = d.userMaxUploadBytes;
@@ -3515,6 +3532,12 @@
                 if (d.userUploadEnabled !== undefined) { const g = document.getElementById('userUploadEnabledToggle'); if (g) g.checked = d.userUploadEnabled; }
                 if (d.userMaxUploadDuration !== undefined) { const g = document.getElementById('userMaxUploadDurationInput'); if (g) g.value = d.userMaxUploadDuration; }
                 if (d.userMaxUploadBytes !== undefined) { const g = document.getElementById('userMaxUploadBytesInput'); if (g) g.value = Math.round(d.userMaxUploadBytes / 1024); }
+                if (d.soundDeleteEnabled) {
+                    const su = document.getElementById('soundDeleteEnabledUserToggle');
+                    const sa = document.getElementById('soundDeleteEnabledAdminToggle');
+                    if (su && d.soundDeleteEnabled.user !== undefined) su.checked = d.soundDeleteEnabled.user === true;
+                    if (sa && d.soundDeleteEnabled.admin !== undefined) sa.checked = d.soundDeleteEnabled.admin === true;
+                }
                 // TTS superadmin inputs
                 if (d.ttsEnabled !== undefined) { const g = document.getElementById('ttsEnabledToggle'); if (g) g.checked = d.ttsEnabled; }
                 if (d.ttsMaxTextLength) {
@@ -3564,6 +3587,15 @@
             }
             updateUploadCardVisibility();
             updateTtsSettings(d);
+            updateSoundPanelDeleteVisibility();
+        }
+
+        function updateSoundPanelDeleteVisibility() {
+            const del = document.getElementById('soundPanelDeleteBtn');
+            if (!del) return;
+            const r = user && user.role;
+            const show = r === 'superadmin' || ((r === 'admin' || r === 'user') && soundDeleteEnabledSelf);
+            del.classList.toggle('hidden', !show);
         }
 
         function updateUploadCardVisibility() {
@@ -3636,6 +3668,14 @@
             userUploadEnabled = enabled;
             await fetchSettings();
             updateUploadCardVisibility();
+        }
+
+        async function patchSoundDeleteEnabled(role, enabled) {
+            const body = { soundDeleteEnabled: {} };
+            body.soundDeleteEnabled[role] = enabled;
+            const res = await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!res || !res.ok) return;
+            await fetchSettings();
         }
 
         async function setGuestUploadEnabled(enabled) {
@@ -4501,6 +4541,7 @@
             { key: 'userUploadEnabled',       type: 'bool', label: 'Upload enabled',           hint: 'Allow uploads (goes to pending queue).' },
             { key: 'userMaxUploadDuration',   type: 'num',  label: 'Upload max duration (s)',  hint: 'Longest upload accepted.' },
             { key: 'userMaxUploadBytes',      type: 'num',  label: 'Upload max size (bytes)',  hint: 'Biggest upload accepted.' },
+            { key: 'soundDeleteEnabled',      type: 'bool', label: 'Delete sounds',            hint: 'Permanently delete library sounds (edit panel). Role default is set under Access & Limits.' },
         ];
         // Ephemeral state while the modal is open. Populated by openUserOverrides.
         let _userOverridesCtx = null; // { username, role, current, roleDefaults }
@@ -4540,6 +4581,7 @@
                 userUploadEnabled: settings.userUploadEnabled,
                 userMaxUploadDuration: settings.userMaxUploadDuration,
                 userMaxUploadBytes: settings.userMaxUploadBytes,
+                soundDeleteEnabled: (settings.soundDeleteEnabled || {})[role],
             };
 
             _userOverridesCtx = { username: username.toLowerCase(), role, current, roleDefaults };
