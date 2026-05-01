@@ -159,6 +159,16 @@
         .whats-new-entry ul li { margin-bottom: 0.2rem; }
         .whats-new-entry ul li strong { color: var(--text); }
         .whats-new-entry code { font-family: 'SF Mono', Menlo, monospace; font-size: 0.82em; padding: 0 0.15rem; color: var(--text); }
+        .absurd-captcha-body { display: flex; flex-direction: column; gap: 0.85rem; }
+        .absurd-captcha-story { color: var(--text-muted); font-size: 0.88rem; margin: 0; }
+        .absurd-captcha-task { padding: 0.75rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        .absurd-captcha-task label { display: block; color: var(--text); font-size: 0.86rem; font-weight: 500; margin-bottom: 0.45rem; }
+        .absurd-captcha-task input[type="text"] { width: 100%; padding: 0.55rem 0.65rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; }
+        .absurd-captcha-task input[type="range"] { width: 100%; accent-color: var(--accent); }
+        .absurd-captcha-click { display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; font: inherit; }
+        .absurd-captcha-click:hover { border-color: var(--accent); color: var(--accent); }
+        .absurd-captcha-value { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+        .absurd-captcha-error { min-height: 1.1rem; color: var(--danger); font-size: 0.82rem; }
         .superadmin-close-btn { position: absolute; top: 0.5rem; right: 0.5rem; width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; z-index: 1; }
         .superadmin-close-btn:hover { border-color: var(--accent); color: var(--accent); }
         /* Superadmin modal overlay: sits on top of the sounds view, dimmed
@@ -4542,6 +4552,7 @@
             { key: 'userMaxUploadDuration',   type: 'num',  label: 'Upload max duration (s)',  hint: 'Longest upload accepted.' },
             { key: 'userMaxUploadBytes',      type: 'num',  label: 'Upload max size (bytes)',  hint: 'Biggest upload accepted.' },
             { key: 'soundDeleteEnabled',      type: 'bool', label: 'Delete sounds',            hint: 'Permanently delete library sounds (edit panel). Role default is set under Access & Limits.' },
+            { key: 'absurdCaptchaEnabled',    type: 'bool', label: 'Absurd captcha',           hint: 'Require a random nonsense captcha before this user can play each sound.' },
         ];
         // Ephemeral state while the modal is open. Populated by openUserOverrides.
         let _userOverridesCtx = null; // { username, role, current, roleDefaults }
@@ -4582,6 +4593,7 @@
                 userMaxUploadDuration: settings.userMaxUploadDuration,
                 userMaxUploadBytes: settings.userMaxUploadBytes,
                 soundDeleteEnabled: (settings.soundDeleteEnabled || {})[role],
+                absurdCaptchaEnabled: false,
             };
 
             _userOverridesCtx = { username: username.toLowerCase(), role, current, roleDefaults };
@@ -5784,7 +5796,121 @@
             if (res && res.ok) fetchChannels();
         }
 
+        let _absurdCaptchaCtx = null; // { challenge, resolve }
+
+        function _absurdCaptchaEsc(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        async function requestAbsurdCaptchaToken() {
+            if (_absurdCaptchaCtx) return null;
+            const res = await api('/api/absurd-captcha/challenge', { method: 'POST' });
+            if (!res || !res.ok) {
+                showToast('Could not load captcha.', 'error');
+                return null;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (!data.required) return '';
+            const challenge = data.challenge || {};
+            return new Promise((resolve) => {
+                _absurdCaptchaCtx = { challenge, resolve };
+                renderAbsurdCaptcha(challenge);
+                const overlay = document.getElementById('absurdCaptchaOverlay');
+                if (overlay) overlay.classList.remove('hidden');
+                setTimeout(() => {
+                    const first = document.querySelector('#absurdCaptchaBody input, #absurdCaptchaBody button');
+                    if (first) first.focus();
+                }, 0);
+            });
+        }
+
+        function renderAbsurdCaptcha(challenge) {
+            const title = document.getElementById('absurdCaptchaTitle');
+            const body = document.getElementById('absurdCaptchaBody');
+            const err = document.getElementById('absurdCaptchaError');
+            if (title) title.textContent = challenge.title || 'Absurd captcha';
+            if (err) err.textContent = '';
+            if (!body) return;
+            const tasks = Array.isArray(challenge.tasks) ? challenge.tasks : [];
+            body.innerHTML = '<p class="absurd-captcha-story">' + _absurdCaptchaEsc(challenge.story || 'Complete the nonsense verification.') + '</p>'
+                + tasks.map((task, idx) => {
+                    const label = _absurdCaptchaEsc(task.label || '');
+                    if (task.type === 'clicks') {
+                        return '<div class="absurd-captcha-task" data-task-type="clicks">'
+                            + '<label>' + label + '</label>'
+                            + '<button type="button" class="absurd-captcha-click" id="absurdCaptchaClickBtn" data-count="0" onclick="absurdCaptchaBumpClick()">'
+                            + _absurdCaptchaEsc(task.buttonLabel || 'Click') + ' <span><span id="absurdCaptchaClickCount" class="absurd-captcha-value">0</span> / ' + _absurdCaptchaEsc(task.target) + '</span></button>'
+                            + '</div>';
+                    }
+                    if (task.type === 'slider') {
+                        const min = Number.isFinite(Number(task.min)) ? Number(task.min) : 0;
+                        const max = Number.isFinite(Number(task.max)) ? Number(task.max) : 100;
+                        return '<div class="absurd-captcha-task" data-task-type="slider">'
+                            + '<label for="absurdCaptchaSlider">' + label + ' <span id="absurdCaptchaSliderValue" class="absurd-captcha-value">' + min + '</span></label>'
+                            + '<input type="range" id="absurdCaptchaSlider" min="' + min + '" max="' + max + '" step="1" value="' + min + '" oninput="absurdCaptchaUpdateSlider(this.value)">'
+                            + '</div>';
+                    }
+                    if (task.type === 'text') {
+                        return '<div class="absurd-captcha-task" data-task-type="text">'
+                            + '<label for="absurdCaptchaText">' + label + '</label>'
+                            + '<input type="text" id="absurdCaptchaText" autocomplete="off" placeholder="' + _absurdCaptchaEsc(task.placeholder || '') + '" onkeydown="if(event.key===\'Enter\')submitAbsurdCaptcha()">'
+                            + '</div>';
+                    }
+                    return '';
+                }).join('');
+        }
+
+        function absurdCaptchaBumpClick() {
+            const btn = document.getElementById('absurdCaptchaClickBtn');
+            const countEl = document.getElementById('absurdCaptchaClickCount');
+            if (!btn || !countEl) return;
+            const next = (Number(btn.dataset.count) || 0) + 1;
+            btn.dataset.count = String(next);
+            countEl.textContent = String(next);
+        }
+
+        function absurdCaptchaUpdateSlider(value) {
+            const el = document.getElementById('absurdCaptchaSliderValue');
+            if (el) el.textContent = String(value);
+        }
+
+        function closeAbsurdCaptchaWith(token) {
+            const overlay = document.getElementById('absurdCaptchaOverlay');
+            if (overlay) overlay.classList.add('hidden');
+            const ctx = _absurdCaptchaCtx;
+            _absurdCaptchaCtx = null;
+            if (ctx && typeof ctx.resolve === 'function') ctx.resolve(token || null);
+        }
+
+        function cancelAbsurdCaptcha() {
+            closeAbsurdCaptchaWith(null);
+        }
+
+        async function submitAbsurdCaptcha() {
+            const ctx = _absurdCaptchaCtx;
+            if (!ctx || !ctx.challenge) return;
+            const err = document.getElementById('absurdCaptchaError');
+            if (err) err.textContent = '';
+            const answer = {
+                clicks: Number(document.getElementById('absurdCaptchaClickBtn')?.dataset.count || 0),
+                slider: Number(document.getElementById('absurdCaptchaSlider')?.value || 0),
+                text: document.getElementById('absurdCaptchaText')?.value || '',
+            };
+            const res = await api('/api/absurd-captcha/solve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: ctx.challenge.id, answer }),
+            });
+            const data = res ? await res.json().catch(() => ({})) : {};
+            if (!res || !res.ok) {
+                if (err) err.textContent = data.error || 'The nonsense committee rejected this attempt.';
+                return;
+            }
+            closeAbsurdCaptchaWith(data.token || '');
+        }
+
         async function playSound(filename, startTime, opts) {
+            opts = opts || {};
             const isScrub = !!(opts && opts.isScrub) && filename === playback.filename;
             // For scrubs, preserve the sound's configured trim window for display;
             // the server reports only the remaining slice after the seek.
@@ -5792,10 +5918,16 @@
             const prevDisplayTotal = playback.duration;
             const body = { filename };
             if (typeof startTime === 'number' && startTime > 0) body.startTime = startTime;
+            if (opts.absurdCaptchaToken) body.absurdCaptchaToken = opts.absurdCaptchaToken;
             const res = await api('/api/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
             if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                if (data.captchaRequired && !opts.absurdCaptchaToken) {
+                    const token = await requestAbsurdCaptchaToken();
+                    if (token) return playSound(filename, startTime, { ...opts, absurdCaptchaToken: token });
+                    return;
+                }
                 const msg = data.error || data.message || 'Failed to play';
                 if (res.status === 429 && data.cooldownRemaining) {
                     if ((user && user.role) === 'guest') {
@@ -9606,6 +9738,18 @@
                 <button type="button" class="tts-pill-btn" onclick="clearAllUserOverridesConfirm()" title="Remove every override for this user — they revert entirely to role defaults.">Clear all</button>
                 <button type="button" class="tts-pill-btn" onclick="closeUserOverrides()">Cancel</button>
                 <button type="button" class="tts-pill-btn is-primary" onclick="saveUserOverrides()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="whats-new-overlay hidden" id="absurdCaptchaOverlay">
+        <div class="whats-new-modal" style="max-width: 520px;">
+            <h3><span id="absurdCaptchaTitle">Absurd captcha</span> <button type="button" class="shortcuts-close" onclick="cancelAbsurdCaptcha()" title="Cancel">✕</button></h3>
+            <div id="absurdCaptchaBody" class="absurd-captcha-body"></div>
+            <div id="absurdCaptchaError" class="absurd-captcha-error"></div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem; border-top:1px solid var(--border); padding-top:0.8rem;">
+                <button type="button" class="tts-pill-btn" onclick="cancelAbsurdCaptcha()">Cancel</button>
+                <button type="button" class="tts-pill-btn is-primary" onclick="submitAbsurdCaptcha()">Submit paperwork</button>
             </div>
         </div>
     </div>

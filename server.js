@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Client-initiated socket aborts (clicking Stop on a long TTS synth, closing
 // the tab during a download, etc.) raise EPIPE/ECONNRESET/ECONNABORTED when we
@@ -79,8 +80,9 @@ const USER_OVERRIDE_FIELDS = [
     'urlStreamEnabled',
     'userUploadEnabled',
     'soundDeleteEnabled',
+    'absurdCaptchaEnabled',
 ];
-const USER_OVERRIDE_BOOLEAN_FIELDS = new Set(['ttsEnabled', 'urlStreamEnabled', 'userUploadEnabled', 'soundDeleteEnabled']);
+const USER_OVERRIDE_BOOLEAN_FIELDS = new Set(['ttsEnabled', 'urlStreamEnabled', 'userUploadEnabled', 'soundDeleteEnabled', 'absurdCaptchaEnabled']);
 
 function _normalizeUsername(u) {
     return String(u || '').trim().toLowerCase();
@@ -139,6 +141,10 @@ function clearAllUserOverrides(username) {
     delete d.userOverrides[un];
     saveGuestData(d);
     return true;
+}
+
+function getAbsurdCaptchaEnabled(username) {
+    return getUserOverride(username, 'absurdCaptchaEnabled') === true;
 }
 
 function getGuestCooldownSec(ip) {
@@ -2118,6 +2124,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
     if (role === 'admin' || role === 'user' || role === 'superadmin') {
         out.soundDeleteEnabled_self = getSoundDeleteEnabled(role, username);
     }
+    out.absurdCaptchaEnabled_self = role !== 'guest' && getAbsurdCaptchaEnabled(username);
     if (req.session.user.role === 'user' || req.session.user.role === 'guest') {
         if (req.session.user.role === 'guest') {
             out.guestMaxDuration = getGuestMaxDuration();
@@ -2492,6 +2499,146 @@ app.delete('/api/superadmin/user-overrides/:username', requireSuperadmin, (req, 
         target: un,
     });
     res.json({ ok: true });
+});
+
+// --- Absurd per-user captcha gate -----------------------------------------
+// Enabled only through the per-user override map. Solving a challenge issues a
+// one-time token that /api/play consumes immediately before starting playback.
+const ABSURD_CAPTCHA_CHALLENGE_TTL_MS = 2 * 60 * 1000;
+const ABSURD_CAPTCHA_TOKEN_TTL_MS = 75 * 1000;
+
+function _absurdCaptchaRequiredForSession(req) {
+    const u = req.session && req.session.user;
+    if (!u || u.role === 'guest') return false;
+    return getAbsurdCaptchaEnabled(u.username);
+}
+
+function _randInt(min, maxInclusive) {
+    return crypto.randomInt(min, maxInclusive + 1);
+}
+
+function _pick(list) {
+    return list[_randInt(0, list.length - 1)];
+}
+
+function _reverseText(s) {
+    return String(s || '').split('').reverse().join('');
+}
+
+function _buildAbsurdCaptchaChallenge() {
+    const id = crypto.randomBytes(12).toString('hex');
+    const variants = [
+        () => {
+            const word = _pick(['MODEM', 'LASAGNA', 'SPREADSHEET', 'CRANKSHAFT', 'PUDDING', 'FAX']);
+            const clicks = _randInt(4, 9);
+            const slider = _randInt(17, 83);
+            return {
+                id,
+                title: 'Printer Oracle Checkpoint',
+                story: `The printer says "${word}" is suspiciously normal. Prove you are authorized for nonsense.`,
+                tasks: [
+                    { type: 'clicks', key: 'clicks', label: `Stamp the imaginary form exactly ${clicks} times.`, target: clicks, buttonLabel: 'Stamp form' },
+                    { type: 'slider', key: 'slider', label: `Set the compliance dial to ${slider}.`, min: 0, max: 100, target: slider },
+                    { type: 'text', key: 'text', label: `Type ${word} backwards.`, placeholder: _reverseText(word) },
+                ],
+                answer: { clicks, slider, text: _reverseText(word).toLowerCase() },
+            };
+        },
+        () => {
+            const a = _randInt(3, 12);
+            const b = _randInt(2, 9);
+            const c = _randInt(5, 18);
+            const clicks = _randInt(3, 8);
+            const slider = (a * b + c) % 101;
+            return {
+                id,
+                title: 'Hold Music Arithmetic',
+                story: 'The hold music has escalated to basic accounting. Balance the noise invoice.',
+                tasks: [
+                    { type: 'clicks', key: 'clicks', label: `Approve ${clicks} fake invoices.`, target: clicks, buttonLabel: 'Approve invoice' },
+                    { type: 'slider', key: 'slider', label: `Set the dial to (${a} x ${b}) + ${c}.`, min: 0, max: 100, target: slider },
+                    { type: 'text', key: 'text', label: 'Type the ceremonial phrase: let me play the sound', placeholder: 'let me play the sound' },
+                ],
+                answer: { clicks, slider, text: 'let me play the sound' },
+            };
+        },
+        () => {
+            const code = _pick(['BLUE WAFFLE IRON', 'TAXABLE CONFETTI', 'NOISE PERMIT', 'WINDOWLESS BANJO']);
+            const clicks = _randInt(5, 11);
+            const slider = _randInt(10, 90);
+            return {
+                id,
+                title: 'Department Of Mild Inconvenience',
+                story: 'A very official laminated badge is demanding unnecessary ceremony.',
+                tasks: [
+                    { type: 'clicks', key: 'clicks', label: `Press the tiny approval button ${clicks} times, no more and no less.`, target: clicks, buttonLabel: 'Tiny approval' },
+                    { type: 'slider', key: 'slider', label: `Rotate the nonsense dial to ${slider}.`, min: 0, max: 100, target: slider },
+                    { type: 'text', key: 'text', label: `Type this permit code in lowercase: ${code}`, placeholder: code.toLowerCase() },
+                ],
+                answer: { clicks, slider, text: code.toLowerCase() },
+            };
+        },
+    ];
+    return _pick(variants)();
+}
+
+function _publicAbsurdCaptcha(challenge) {
+    return {
+        id: challenge.id,
+        title: challenge.title,
+        story: challenge.story,
+        tasks: challenge.tasks,
+        expiresInMs: ABSURD_CAPTCHA_CHALLENGE_TTL_MS,
+    };
+}
+
+function _consumeAbsurdCaptchaToken(req) {
+    if (!_absurdCaptchaRequiredForSession(req)) return { ok: true };
+    const token = String(req.body?.absurdCaptchaToken || '');
+    const record = req.session.absurdCaptchaToken;
+    if (!record || !record.token || record.expiresAt < Date.now()) {
+        delete req.session.absurdCaptchaToken;
+        return { ok: false, status: 428, body: { error: 'Absurd captcha required.', captchaRequired: true } };
+    }
+    if (!token || token !== record.token) {
+        return { ok: false, status: 428, body: { error: 'Finish the absurd captcha first.', captchaRequired: true } };
+    }
+    delete req.session.absurdCaptchaToken;
+    return { ok: true };
+}
+
+app.post('/api/absurd-captcha/challenge', requireAuth, (req, res) => {
+    if (!_absurdCaptchaRequiredForSession(req)) return res.json({ required: false });
+    const challenge = _buildAbsurdCaptchaChallenge();
+    req.session.absurdCaptchaChallenge = {
+        id: challenge.id,
+        answer: challenge.answer,
+        expiresAt: Date.now() + ABSURD_CAPTCHA_CHALLENGE_TTL_MS,
+    };
+    res.json({ required: true, challenge: _publicAbsurdCaptcha(challenge) });
+});
+
+app.post('/api/absurd-captcha/solve', requireAuth, (req, res) => {
+    if (!_absurdCaptchaRequiredForSession(req)) return res.json({ ok: true, required: false, token: null });
+    const record = req.session.absurdCaptchaChallenge;
+    const body = req.body || {};
+    if (!record || record.expiresAt < Date.now()) {
+        delete req.session.absurdCaptchaChallenge;
+        return res.status(400).json({ error: 'That captcha expired. Generate a new one.' });
+    }
+    if (String(body.id || '') !== record.id) return res.status(400).json({ error: 'Captcha mismatch. Generate a new one.' });
+    const submitted = body.answer && typeof body.answer === 'object' ? body.answer : {};
+    const expected = record.answer || {};
+    const gotClicks = Number(submitted.clicks);
+    const gotSlider = Number(submitted.slider);
+    const gotText = String(submitted.text || '').trim().toLowerCase();
+    if (Number.isFinite(expected.clicks) && gotClicks !== expected.clicks) return res.status(400).json({ error: 'The imaginary paperwork count is wrong.' });
+    if (Number.isFinite(expected.slider) && gotSlider !== expected.slider) return res.status(400).json({ error: 'The nonsense dial is not in the blessed position.' });
+    if (typeof expected.text === 'string' && gotText !== expected.text) return res.status(400).json({ error: 'The ceremonial text is incorrect.' });
+    const token = crypto.randomBytes(18).toString('hex');
+    req.session.absurdCaptchaToken = { token, expiresAt: Date.now() + ABSURD_CAPTCHA_TOKEN_TTL_MS };
+    delete req.session.absurdCaptchaChallenge;
+    res.json({ ok: true, token, expiresInMs: ABSURD_CAPTCHA_TOKEN_TTL_MS });
 });
 
 app.delete('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
@@ -3122,6 +3269,9 @@ app.post('/api/play', requireAuth, async (req, res) => {
             return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
         }
     }
+
+    const captchaCheck = _consumeAbsurdCaptchaToken(req);
+    if (!captchaCheck.ok) return res.status(captchaCheck.status).json(captchaCheck.body);
 
     const metaVolume = getSoundVolume(meta, safeFilename);
     const soundStopOthers = getSoundStopOthers(meta, safeFilename);
