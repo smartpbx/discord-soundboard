@@ -163,8 +163,10 @@
         .absurd-captcha-story { color: var(--text-muted); font-size: 0.88rem; margin: 0; }
         .absurd-captcha-task { padding: 0.75rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); }
         .absurd-captcha-task label { display: block; color: var(--text); font-size: 0.86rem; font-weight: 500; margin-bottom: 0.45rem; }
-        .absurd-captcha-task input[type="text"] { width: 100%; padding: 0.55rem 0.65rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; }
+        .absurd-captcha-task input[type="text"], .absurd-captcha-task select { width: 100%; padding: 0.55rem 0.65rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; }
         .absurd-captcha-task input[type="range"] { width: 100%; accent-color: var(--accent); }
+        .absurd-captcha-task input[type="checkbox"] { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+        .absurd-captcha-checkbox { display: flex; align-items: center; gap: 0.55rem; color: var(--text); font-size: 0.86rem; font-weight: 500; }
         .absurd-captcha-click { display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); cursor: pointer; font: inherit; }
         .absurd-captcha-click:hover { border-color: var(--accent); color: var(--accent); }
         .absurd-captcha-value { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -882,9 +884,9 @@
         (function(){try{var p=localStorage.getItem('soundboard-prefs');var t=p?JSON.parse(p).theme:null;document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){}})();
     </script>
     <div class="update-banner hidden" id="updateBanner">
-        <span>✨ A new version has been deployed. Reload to pick it up.</span>
+        <span id="updateBannerText">✨ A new version has been deployed. Reloading in 5 seconds.</span>
         <button type="button" onclick="openWhatsNew()">What's new</button>
-        <button type="button" onclick="location.reload(true)">Reload</button>
+        <button type="button" onclick="location.reload()">Reload</button>
     </div>
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
@@ -2451,6 +2453,28 @@
         // Poll /api/version every 60s — if the running SHA diverges from the
         // one the page loaded with, show the banner. Stop polling once the
         // banner is visible (user has been notified).
+        let _updateReloadTimer = null;
+        function _showUpdateBannerAndAutoReload() {
+            const banner = document.getElementById('updateBanner');
+            if (banner) banner.classList.remove('hidden');
+            if (_updateReloadTimer) return;
+            let remaining = 5;
+            const text = document.getElementById('updateBannerText');
+            const render = () => {
+                if (text) text.textContent = '✨ A new version has been deployed. Reloading in ' + remaining + ' second' + (remaining === 1 ? '' : 's') + '.';
+            };
+            render();
+            _updateReloadTimer = setInterval(() => {
+                remaining -= 1;
+                if (remaining <= 0) {
+                    clearInterval(_updateReloadTimer);
+                    location.reload();
+                    return;
+                }
+                render();
+            }, 1000);
+        }
+
         function _startVersionPolling() {
             let shown = false;
             const check = async () => {
@@ -2458,8 +2482,7 @@
                 const v = await _fetchVersion();
                 if (!v || !_ttsLoadedVersion) return;
                 if (v.sha && _ttsLoadedVersion.sha && v.sha !== _ttsLoadedVersion.sha) {
-                    const banner = document.getElementById('updateBanner');
-                    if (banner) banner.classList.remove('hidden');
+                    _showUpdateBannerAndAutoReload();
                     shown = true;
                 }
             };
@@ -5802,9 +5825,17 @@
             return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        async function requestAbsurdCaptchaToken() {
+        function _absurdCaptchaDomKey(key) {
+            return String(key || 'task').replace(/[^a-zA-Z0-9_-]/g, '_');
+        }
+
+        async function requestAbsurdCaptchaToken(filename) {
             if (_absurdCaptchaCtx) return null;
-            const res = await api('/api/absurd-captcha/challenge', { method: 'POST' });
+            const res = await api('/api/absurd-captcha/challenge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename }),
+            });
             if (!res || !res.ok) {
                 showToast('Could not load captcha.', 'error');
                 return null;
@@ -5835,43 +5866,58 @@
             body.innerHTML = '<p class="absurd-captcha-story">' + _absurdCaptchaEsc(challenge.story || 'Complete the nonsense verification.') + '</p>'
                 + tasks.map((task, idx) => {
                     const label = _absurdCaptchaEsc(task.label || '');
+                    const key = _absurdCaptchaDomKey(task.key || ('task_' + idx));
+                    const fieldId = 'absurdCaptcha_' + key;
                     if (task.type === 'clicks') {
                         return '<div class="absurd-captcha-task" data-task-type="clicks">'
                             + '<label>' + label + '</label>'
-                            + '<button type="button" class="absurd-captcha-click" id="absurdCaptchaClickBtn" data-count="0" onclick="absurdCaptchaBumpClick()">'
-                            + _absurdCaptchaEsc(task.buttonLabel || 'Click') + ' <span><span id="absurdCaptchaClickCount" class="absurd-captcha-value">0</span> / ' + _absurdCaptchaEsc(task.target) + '</span></button>'
+                            + '<button type="button" class="absurd-captcha-click" id="' + fieldId + '" data-count="0" onclick="absurdCaptchaBumpClick(this)">'
+                            + _absurdCaptchaEsc(task.buttonLabel || 'Click') + ' <span><span class="absurd-captcha-value">0</span> / ' + _absurdCaptchaEsc(task.target) + '</span></button>'
                             + '</div>';
                     }
                     if (task.type === 'slider') {
                         const min = Number.isFinite(Number(task.min)) ? Number(task.min) : 0;
                         const max = Number.isFinite(Number(task.max)) ? Number(task.max) : 100;
                         return '<div class="absurd-captcha-task" data-task-type="slider">'
-                            + '<label for="absurdCaptchaSlider">' + label + ' <span id="absurdCaptchaSliderValue" class="absurd-captcha-value">' + min + '</span></label>'
-                            + '<input type="range" id="absurdCaptchaSlider" min="' + min + '" max="' + max + '" step="1" value="' + min + '" oninput="absurdCaptchaUpdateSlider(this.value)">'
+                            + '<label for="' + fieldId + '">' + label + ' <span class="absurd-captcha-value" id="' + fieldId + '_value">' + min + '</span></label>'
+                            + '<input type="range" id="' + fieldId + '" min="' + min + '" max="' + max + '" step="1" value="' + min + '" oninput="absurdCaptchaUpdateSlider(this)">'
                             + '</div>';
                     }
                     if (task.type === 'text') {
                         return '<div class="absurd-captcha-task" data-task-type="text">'
-                            + '<label for="absurdCaptchaText">' + label + '</label>'
-                            + '<input type="text" id="absurdCaptchaText" autocomplete="off" placeholder="' + _absurdCaptchaEsc(task.placeholder || '') + '" onkeydown="if(event.key===\'Enter\')submitAbsurdCaptcha()">'
+                            + '<label for="' + fieldId + '">' + label + '</label>'
+                            + '<input type="text" id="' + fieldId + '" autocomplete="off" placeholder="' + _absurdCaptchaEsc(task.placeholder || '') + '" onkeydown="if(event.key===\'Enter\')submitAbsurdCaptcha()">'
+                            + '</div>';
+                    }
+                    if (task.type === 'select') {
+                        const options = Array.isArray(task.options) ? task.options : [];
+                        return '<div class="absurd-captcha-task" data-task-type="select">'
+                            + '<label for="' + fieldId + '">' + label + '</label>'
+                            + '<select id="' + fieldId + '"><option value="">Choose poorly, but correctly</option>'
+                            + options.map(opt => '<option value="' + _absurdCaptchaEsc(opt) + '">' + _absurdCaptchaEsc(opt) + '</option>').join('')
+                            + '</select>'
+                            + '</div>';
+                    }
+                    if (task.type === 'checkbox') {
+                        return '<div class="absurd-captcha-task" data-task-type="checkbox">'
+                            + '<label class="absurd-captcha-checkbox"><input type="checkbox" id="' + fieldId + '"><span>' + label + '</span></label>'
                             + '</div>';
                     }
                     return '';
                 }).join('');
         }
 
-        function absurdCaptchaBumpClick() {
-            const btn = document.getElementById('absurdCaptchaClickBtn');
-            const countEl = document.getElementById('absurdCaptchaClickCount');
+        function absurdCaptchaBumpClick(btn) {
+            const countEl = btn ? btn.querySelector('.absurd-captcha-value') : null;
             if (!btn || !countEl) return;
             const next = (Number(btn.dataset.count) || 0) + 1;
             btn.dataset.count = String(next);
             countEl.textContent = String(next);
         }
 
-        function absurdCaptchaUpdateSlider(value) {
-            const el = document.getElementById('absurdCaptchaSliderValue');
-            if (el) el.textContent = String(value);
+        function absurdCaptchaUpdateSlider(input) {
+            const el = input ? document.getElementById(input.id + '_value') : null;
+            if (el) el.textContent = String(input.value);
         }
 
         function closeAbsurdCaptchaWith(token) {
@@ -5891,11 +5937,18 @@
             if (!ctx || !ctx.challenge) return;
             const err = document.getElementById('absurdCaptchaError');
             if (err) err.textContent = '';
-            const answer = {
-                clicks: Number(document.getElementById('absurdCaptchaClickBtn')?.dataset.count || 0),
-                slider: Number(document.getElementById('absurdCaptchaSlider')?.value || 0),
-                text: document.getElementById('absurdCaptchaText')?.value || '',
-            };
+            const answer = {};
+            const tasks = Array.isArray(ctx.challenge.tasks) ? ctx.challenge.tasks : [];
+            tasks.forEach((task, idx) => {
+                const key = task.key || ('task_' + idx);
+                const id = 'absurdCaptcha_' + _absurdCaptchaDomKey(key);
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (task.type === 'clicks') answer[key] = Number(el.dataset.count || 0);
+                else if (task.type === 'slider') answer[key] = Number(el.value || 0);
+                else if (task.type === 'checkbox') answer[key] = el.checked === true;
+                else answer[key] = el.value || '';
+            });
             const res = await api('/api/absurd-captcha/solve', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -5924,7 +5977,7 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 if (data.captchaRequired && !opts.absurdCaptchaToken) {
-                    const token = await requestAbsurdCaptchaToken();
+                    const token = await requestAbsurdCaptchaToken(filename);
                     if (token) return playSound(filename, startTime, { ...opts, absurdCaptchaToken: token });
                     return;
                 }

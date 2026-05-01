@@ -1083,6 +1083,32 @@ function setManagedUserDisabled(username, disabled) {
     saveApprovedSignups(approvedSignups);
     return true;
 }
+
+function destroySessionsForUsername(sessionStore, username) {
+    const un = String(username || '').trim().toLowerCase();
+    if (!un || !sessionStore || typeof sessionStore.destroy !== 'function') return;
+    if (sessionStore.sessions && typeof sessionStore.sessions === 'object') {
+        for (const [sid, raw] of Object.entries(sessionStore.sessions)) {
+            let sess = raw;
+            if (typeof raw === 'string') {
+                try { sess = JSON.parse(raw); } catch { sess = null; }
+            }
+            const su = sess && sess.user && String(sess.user.username || '').trim().toLowerCase();
+            if (su === un) sessionStore.destroy(sid, () => {});
+        }
+        return;
+    }
+    if (typeof sessionStore.all !== 'function') return;
+    sessionStore.all((err, sessions) => {
+        if (err || !sessions) return;
+        if (Array.isArray(sessions)) return;
+        Object.entries(sessions).forEach(([sid, sess]) => {
+            const su = sess && sess.user && String(sess.user.username || '').trim().toLowerCase();
+            if (su === un) sessionStore.destroy(sid, () => {});
+        });
+    });
+}
+
 function updateManagedUserRole(username, role) {
     const un = String(username).trim().toLowerCase();
     if (!un || envUsernames.has(un)) return false;
@@ -1261,18 +1287,37 @@ function requireAuth(req, res, next) {
             req.session.destroy(() => {});
             return res.status(401).json({ error: 'Guest access disabled or IP blocked.' });
         }
+    } else {
+        const un = String(req.session.user.username || '').trim().toLowerCase();
+        const entry = USERS.get(un);
+        if (!entry || entry.disabled === true) {
+            req.session.destroy(() => {});
+            return res.status(401).json({ error: 'Account is disabled. Contact an admin.' });
+        }
     }
     next();
 }
 function requireAdmin(req, res, next) {
     if (injectCompanionAuth(req)) return next();
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
+    const un = String(req.session.user.username || '').trim().toLowerCase();
+    const entry = USERS.get(un);
+    if (!entry || entry.disabled === true) {
+        req.session.destroy(() => {});
+        return res.status(401).json({ error: 'Account is disabled. Contact an admin.' });
+    }
     if (req.session.user.role !== 'admin' && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
     next();
 }
 
 function requireSuperadmin(req, res, next) {
     if (!req.session || !req.session.user) return res.status(401).json({ error: 'Not logged in' });
+    const un = String(req.session.user.username || '').trim().toLowerCase();
+    const entry = USERS.get(un);
+    if (!entry || entry.disabled === true) {
+        req.session.destroy(() => {});
+        return res.status(401).json({ error: 'Account is disabled. Contact an admin.' });
+    }
     if (req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin only' });
     next();
 }
@@ -2434,6 +2479,7 @@ app.patch('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
     if (body.disabled !== undefined) {
         if (!setManagedUserDisabled(un, body.disabled === true)) return res.status(400).json({ error: 'User not found or cannot be modified (env-configured)' });
         statsDb.recordAdminAction({ actor, actorRole, action: body.disabled ? 'user.disable' : 'user.enable', target: un });
+        if (body.disabled === true) destroySessionsForUsername(req.sessionStore, un);
     }
     res.json({ ok: true, username: un });
 });
@@ -2506,6 +2552,7 @@ app.delete('/api/superadmin/user-overrides/:username', requireSuperadmin, (req, 
 // one-time token that /api/play consumes immediately before starting playback.
 const ABSURD_CAPTCHA_CHALLENGE_TTL_MS = 2 * 60 * 1000;
 const ABSURD_CAPTCHA_TOKEN_TTL_MS = 75 * 1000;
+const ABSURD_CAPTCHA_MIN_SOLVE_MS = 2500;
 
 function _absurdCaptchaRequiredForSession(req) {
     const u = req.session && req.session.user;
@@ -2525,8 +2572,27 @@ function _reverseText(s) {
     return String(s || '').split('').reverse().join('');
 }
 
+function _shuffle(list) {
+    const arr = list.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = _randInt(0, i);
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
 function _buildAbsurdCaptchaChallenge() {
     const id = crypto.randomBytes(12).toString('hex');
+    const phrase = _pick([
+        'frozen dial tone',
+        'taxable confetti',
+        'authorized lasagna',
+        'printer permission slip',
+        'hold music affidavit',
+        'certified nonsense',
+    ]);
+    const fakeCase = `${_pick(['KBG', 'FAX', 'BEEP', 'VOID'])}-${_randInt(100, 999)}-${_randInt(10, 99)}`;
+    const shuffledMonths = _shuffle(['April', 'July', 'November', 'Smarch']);
     const variants = [
         () => {
             const word = _pick(['MODEM', 'LASAGNA', 'SPREADSHEET', 'CRANKSHAFT', 'PUDDING', 'FAX']);
@@ -2540,8 +2606,9 @@ function _buildAbsurdCaptchaChallenge() {
                     { type: 'clicks', key: 'clicks', label: `Stamp the imaginary form exactly ${clicks} times.`, target: clicks, buttonLabel: 'Stamp form' },
                     { type: 'slider', key: 'slider', label: `Set the compliance dial to ${slider}.`, min: 0, max: 100, target: slider },
                     { type: 'text', key: 'text', label: `Type ${word} backwards.`, placeholder: _reverseText(word) },
+                    { type: 'checkbox', key: 'checkbox', label: 'Certify that the printer has no financial authority.' },
                 ],
-                answer: { clicks, slider, text: _reverseText(word).toLowerCase() },
+                answer: { clicks, slider, text: _reverseText(word).toLowerCase(), checkbox: true },
             };
         },
         () => {
@@ -2558,8 +2625,9 @@ function _buildAbsurdCaptchaChallenge() {
                     { type: 'clicks', key: 'clicks', label: `Approve ${clicks} fake invoices.`, target: clicks, buttonLabel: 'Approve invoice' },
                     { type: 'slider', key: 'slider', label: `Set the dial to (${a} x ${b}) + ${c}.`, min: 0, max: 100, target: slider },
                     { type: 'text', key: 'text', label: 'Type the ceremonial phrase: let me play the sound', placeholder: 'let me play the sound' },
+                    { type: 'select', key: 'select', label: 'Choose the least credible department.', options: _shuffle(['Refund Verification Dungeon', 'Normal Help Desk', 'Billing', 'Support']) },
                 ],
-                answer: { clicks, slider, text: 'let me play the sound' },
+                answer: { clicks, slider, text: 'let me play the sound', select: 'Refund Verification Dungeon'.toLowerCase() },
             };
         },
         () => {
@@ -2578,6 +2646,56 @@ function _buildAbsurdCaptchaChallenge() {
                 answer: { clicks, slider, text: code.toLowerCase() },
             };
         },
+        () => {
+            const clicks = _randInt(2, 7);
+            const lastTwo = Number(fakeCase.slice(-2));
+            const target = (lastTwo + 13) % 101;
+            return {
+                id,
+                title: 'Anti-Scam Sound Authorization',
+                story: `Case ${fakeCase} has been escalated to the imaginary verification floor.`,
+                tasks: [
+                    { type: 'select', key: 'select', label: 'Select the official payment method for this sound.', options: _shuffle(['Gift cards in a shoebox', 'No payment method', 'Loose arcade tokens', 'One heroic coupon']) },
+                    { type: 'clicks', key: 'clicks', label: `Interrupt the hold music exactly ${clicks} times.`, target: clicks, buttonLabel: 'Interrupt' },
+                    { type: 'slider', key: 'slider', label: `Set the case dial to the last two digits of ${fakeCase}, plus 13, wrapping after 100.`, min: 0, max: 100, target },
+                    { type: 'text', key: 'text', label: `Type the case code without dashes: ${fakeCase}`, placeholder: fakeCase.replace(/-/g, '') },
+                ],
+                answer: { select: 'No payment method'.toLowerCase(), clicks, slider: target, text: fakeCase.replace(/-/g, '').toLowerCase() },
+            };
+        },
+        () => {
+            const clicks = _randInt(6, 12);
+            const slider = _randInt(25, 75);
+            const safeWord = _pick(['unplug', 'refund', 'beep', 'receipt']);
+            return {
+                id,
+                title: 'Compliance Clown Car',
+                story: 'A fake manager is demanding three forms and one emotional support checkbox.',
+                tasks: [
+                    { type: 'checkbox', key: 'checkbox', label: 'Confirm you will not read any gift card numbers to the soundboard.' },
+                    { type: 'clicks', key: 'clicks', label: `File ${clicks} duplicate complaints with the Department of Sounds.`, target: clicks, buttonLabel: 'File complaint' },
+                    { type: 'slider', key: 'slider', label: `Set inconvenience intensity to ${slider}.`, min: 0, max: 100, target: slider },
+                    { type: 'text', key: 'text', label: `Type the safe word twice with a space: ${safeWord}`, placeholder: `${safeWord} ${safeWord}` },
+                ],
+                answer: { checkbox: true, clicks, slider, text: `${safeWord} ${safeWord}` },
+            };
+        },
+        () => {
+            const targetMonth = shuffledMonths.indexOf('Smarch') + 1;
+            const clicks = _randInt(3, 10);
+            return {
+                id,
+                title: 'Calendar Fraud Prevention',
+                story: 'The calendar has invented a month and would like you to respect its privacy.',
+                tasks: [
+                    { type: 'select', key: 'select', label: 'Which listed month is definitely fake?', options: shuffledMonths },
+                    { type: 'clicks', key: 'clicks', label: `Notarize the fake calendar ${clicks} times.`, target: clicks, buttonLabel: 'Notarize' },
+                    { type: 'slider', key: 'slider', label: 'Set the month dial to the position of the fake month in the dropdown list.', min: 1, max: 4, target: targetMonth },
+                    { type: 'text', key: 'text', label: `Type "${phrase}" in reverse word order.`, placeholder: phrase.split(/\s+/).reverse().join(' ') },
+                ],
+                answer: { select: 'Smarch'.toLowerCase(), clicks, slider: targetMonth, text: phrase.split(/\s+/).reverse().join(' ').toLowerCase() },
+            };
+        },
     ];
     return _pick(variants)();
 }
@@ -2592,13 +2710,17 @@ function _publicAbsurdCaptcha(challenge) {
     };
 }
 
-function _consumeAbsurdCaptchaToken(req) {
+function _consumeAbsurdCaptchaToken(req, safeFilename) {
     if (!_absurdCaptchaRequiredForSession(req)) return { ok: true };
     const token = String(req.body?.absurdCaptchaToken || '');
     const record = req.session.absurdCaptchaToken;
     if (!record || !record.token || record.expiresAt < Date.now()) {
         delete req.session.absurdCaptchaToken;
         return { ok: false, status: 428, body: { error: 'Absurd captcha required.', captchaRequired: true } };
+    }
+    if (!record.filename || record.filename !== safeFilename) {
+        delete req.session.absurdCaptchaToken;
+        return { ok: false, status: 428, body: { error: 'Finish the absurd captcha for this sound first.', captchaRequired: true } };
     }
     if (!token || token !== record.token) {
         return { ok: false, status: 428, body: { error: 'Finish the absurd captcha first.', captchaRequired: true } };
@@ -2609,10 +2731,17 @@ function _consumeAbsurdCaptchaToken(req) {
 
 app.post('/api/absurd-captcha/challenge', requireAuth, (req, res) => {
     if (!_absurdCaptchaRequiredForSession(req)) return res.json({ required: false });
+    const safeFilename = path.basename(String(req.body?.filename || ''));
+    if (!safeFilename) return res.status(400).json({ error: 'Filename required' });
+    const filePath = path.join(SOUNDS_DIR, safeFilename);
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Sound not found' });
     const challenge = _buildAbsurdCaptchaChallenge();
     req.session.absurdCaptchaChallenge = {
         id: challenge.id,
+        filename: safeFilename,
         answer: challenge.answer,
+        createdAt: Date.now(),
         expiresAt: Date.now() + ABSURD_CAPTCHA_CHALLENGE_TTL_MS,
     };
     res.json({ required: true, challenge: _publicAbsurdCaptcha(challenge) });
@@ -2626,17 +2755,24 @@ app.post('/api/absurd-captcha/solve', requireAuth, (req, res) => {
         delete req.session.absurdCaptchaChallenge;
         return res.status(400).json({ error: 'That captcha expired. Generate a new one.' });
     }
+    if (Date.now() - Number(record.createdAt || 0) < ABSURD_CAPTCHA_MIN_SOLVE_MS) {
+        return res.status(429).json({ error: 'That was suspiciously fast. Let the paperwork breathe for a second.' });
+    }
     if (String(body.id || '') !== record.id) return res.status(400).json({ error: 'Captcha mismatch. Generate a new one.' });
     const submitted = body.answer && typeof body.answer === 'object' ? body.answer : {};
     const expected = record.answer || {};
-    const gotClicks = Number(submitted.clicks);
-    const gotSlider = Number(submitted.slider);
-    const gotText = String(submitted.text || '').trim().toLowerCase();
-    if (Number.isFinite(expected.clicks) && gotClicks !== expected.clicks) return res.status(400).json({ error: 'The imaginary paperwork count is wrong.' });
-    if (Number.isFinite(expected.slider) && gotSlider !== expected.slider) return res.status(400).json({ error: 'The nonsense dial is not in the blessed position.' });
-    if (typeof expected.text === 'string' && gotText !== expected.text) return res.status(400).json({ error: 'The ceremonial text is incorrect.' });
+    for (const [key, expectedValue] of Object.entries(expected)) {
+        const got = submitted[key];
+        if (typeof expectedValue === 'number') {
+            if (Number(got) !== expectedValue) return res.status(400).json({ error: 'One of the numeric rituals is wrong.' });
+        } else if (typeof expectedValue === 'boolean') {
+            if ((got === true || got === 'true') !== expectedValue) return res.status(400).json({ error: 'The required certification is missing.' });
+        } else if (String(got || '').trim().toLowerCase() !== String(expectedValue).trim().toLowerCase()) {
+            return res.status(400).json({ error: 'The ceremonial text or selection is incorrect.' });
+        }
+    }
     const token = crypto.randomBytes(18).toString('hex');
-    req.session.absurdCaptchaToken = { token, expiresAt: Date.now() + ABSURD_CAPTCHA_TOKEN_TTL_MS };
+    req.session.absurdCaptchaToken = { token, filename: record.filename, expiresAt: Date.now() + ABSURD_CAPTCHA_TOKEN_TTL_MS };
     delete req.session.absurdCaptchaChallenge;
     res.json({ ok: true, token, expiresInMs: ABSURD_CAPTCHA_TOKEN_TTL_MS });
 });
@@ -3270,7 +3406,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
         }
     }
 
-    const captchaCheck = _consumeAbsurdCaptchaToken(req);
+    const captchaCheck = _consumeAbsurdCaptchaToken(req, safeFilename);
     if (!captchaCheck.ok) return res.status(captchaCheck.status).json(captchaCheck.body);
 
     const metaVolume = getSoundVolume(meta, safeFilename);
