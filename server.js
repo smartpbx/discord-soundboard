@@ -1514,6 +1514,15 @@ const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, d
 const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
 let voiceTriggerGlobalLastFired = 0;     // ms timestamp of last fire across all triggers
 let voiceTriggerGrammarPhrases = []; // array of strings; vosk wraps OOV speech in [unk]
+const VOICE_TRIGGER_LOG_MAX = 50;
+const voiceTriggerLog = []; // newest last; capped at VOICE_TRIGGER_LOG_MAX
+
+function recordVoiceTriggerEvent(entry) {
+    voiceTriggerLog.push({ when: Date.now(), ...entry });
+    if (voiceTriggerLog.length > VOICE_TRIGGER_LOG_MAX) {
+        voiceTriggerLog.splice(0, voiceTriggerLog.length - VOICE_TRIGGER_LOG_MAX);
+    }
+}
 
 // Decimate 48k stereo s16le → 16k mono s16le (3:1 group, simple average).
 // Quality is fine for keyword spotting; we skip anti-alias filtering because
@@ -1644,16 +1653,31 @@ function handleSpeechResult(userId, text) {
     const list = loadVoiceTriggers();
     const now = Date.now();
     const globalCooldownMs = getVoiceTriggersGlobalCooldownSec() * 1000;
-    if (globalCooldownMs && now - voiceTriggerGlobalLastFired < globalCooldownMs) return;
+    const globalSkipping = globalCooldownMs && now - voiceTriggerGlobalLastFired < globalCooldownMs;
     for (const trigger of list) {
         if (!trigger.enabled) continue;
         if (trigger.speakerUserId && trigger.speakerUserId !== String(userId)) continue;
         if (!normalized.includes(trigger.phrase)) continue;
+        const baseEvent = {
+            speakerUserId: String(userId),
+            triggerId: trigger.id,
+            phrase: trigger.phrase,
+            transcript: text,
+            soundFilename: trigger.soundFilename,
+        };
+        if (globalSkipping) {
+            recordVoiceTriggerEvent({ ...baseEvent, status: 'global-cooldown-skipped' });
+            continue;
+        }
         const last = voiceTriggerLastFired.get(trigger.id) || 0;
         const cooldownMs = (trigger.cooldownSec || 0) * 1000;
-        if (now - last < cooldownMs) continue;
+        if (now - last < cooldownMs) {
+            recordVoiceTriggerEvent({ ...baseEvent, status: 'cooldown-skipped' });
+            continue;
+        }
         voiceTriggerLastFired.set(trigger.id, now);
         voiceTriggerGlobalLastFired = now;
+        recordVoiceTriggerEvent({ ...baseEvent, status: 'fired' });
         console.log(`[voice-triggers] fired '${trigger.phrase}' for ${userId} (heard "${text}")`);
         playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'superadmin' })
             .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
@@ -3225,6 +3249,30 @@ app.patch('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) =>
         details: patch,
     });
     res.json({ ok: true, trigger: list[idx] });
+});
+
+app.get('/api/superadmin/voice-triggers/log', requireSuperadmin, (req, res) => {
+    // Decorate each event with current display info (sound display name + speaker
+    // display name when the speaker is currently in a guild voice channel the
+    // bot can see). The raw IDs are still returned so the UI can fall back.
+    const meta = loadSoundsMeta();
+    const memberNameById = new Map();
+    try {
+        if (activeGuildId) {
+            const guild = client.guilds.cache.get(activeGuildId);
+            if (guild) {
+                for (const [, vs] of guild.voiceStates.cache) {
+                    if (vs.member) memberNameById.set(vs.id, vs.member.displayName || vs.member.user?.username || vs.id);
+                }
+            }
+        }
+    } catch {}
+    const events = voiceTriggerLog.slice().reverse().map(ev => ({
+        ...ev,
+        soundDisplayName: ev.soundFilename ? getDisplayName(meta, ev.soundFilename) : null,
+        speakerDisplayName: memberNameById.get(ev.speakerUserId) || null,
+    }));
+    res.json({ events, max: VOICE_TRIGGER_LOG_MAX });
 });
 
 app.delete('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) => {

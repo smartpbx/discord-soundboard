@@ -948,15 +948,33 @@
         <div class="sidebar">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-            <div class="top-bar-toggles-stack">
-                <label class="top-bar-toggle admin-only" title="When on, only admins can play sounds; users and guests are blocked">
-                    <span class="top-bar-toggle-label">Only admins can play</span>
-                    <span class="toggle-switch"><input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)"><span class="toggle-slider"></span></span>
-                </label>
-                <label class="top-bar-toggle superadmin-only hidden" title="When on, only superadmin can play; admins, users and guests are blocked">
-                    <span class="top-bar-toggle-label">Only superadmin can play</span>
-                    <span class="toggle-switch"><input type="checkbox" id="playbackSuperadminOnlyTop" onchange="setPlaybackSuperadminOnly(this.checked)"><span class="toggle-slider"></span></span>
-                </label>
+            <div class="controls-menu-wrap admin-only" style="position:relative">
+                <button type="button" class="volume-btn" id="controlsBtn" onclick="toggleControlsMenu()" title="Playback controls">
+                    <span class="volume-btn-icon">⚙</span>
+                    <span class="volume-btn-pct">Controls</span>
+                </button>
+                <div class="volume-menu hidden" id="controlsMenu" style="min-width: 240px;">
+                    <div class="volume-menu-header">
+                        <span>Controls</span>
+                        <button type="button" class="volume-menu-close" onclick="closeControlsMenu()" title="Close">✕</button>
+                    </div>
+                    <label class="top-bar-toggle admin-only" title="When on, only admins can play sounds; users and guests are blocked" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding: 0.3rem 0; cursor:pointer;">
+                        <span class="top-bar-toggle-label">Only admins can play</span>
+                        <span class="toggle-switch"><input type="checkbox" id="playbackLockedTop" onchange="setPlaybackLocked(this.checked)"><span class="toggle-slider"></span></span>
+                    </label>
+                    <label class="top-bar-toggle superadmin-only hidden" title="When on, only superadmin can play; admins, users and guests are blocked" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding: 0.3rem 0; cursor:pointer;">
+                        <span class="top-bar-toggle-label">Only superadmin can play</span>
+                        <span class="toggle-switch"><input type="checkbox" id="playbackSuperadminOnlyTop" onchange="setPlaybackSuperadminOnly(this.checked)"><span class="toggle-slider"></span></span>
+                    </label>
+                    <label class="top-bar-toggle admin-only" title="When on, multiple sounds can play simultaneously instead of stopping each other" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding: 0.3rem 0; cursor:pointer;">
+                        <span class="top-bar-toggle-label">Multi-play</span>
+                        <span class="toggle-switch"><input type="checkbox" id="multiPlayMenuToggle" onchange="setMultiPlay(this.checked)"><span class="toggle-slider"></span></span>
+                    </label>
+                    <label class="top-bar-toggle superadmin-only hidden" title="Listen to channel speech and play sounds on configured phrases" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding: 0.3rem 0; cursor:pointer;">
+                        <span class="top-bar-toggle-label">Voice activation</span>
+                        <span class="toggle-switch"><input type="checkbox" id="voiceTriggersMenuToggle" onchange="setVoiceTriggersGlobal(this.checked)"><span class="toggle-slider"></span></span>
+                    </label>
+                </div>
             </div>
             <div class="top-bar-voice admin-only hidden" id="voiceConnectedBar">
                 <span class="voice-channel-info" id="voiceChannelInfo" title="">📢 <span id="voiceChannelName">—</span></span>
@@ -1909,6 +1927,35 @@
                         </table>
                     </div>
                     <div id="voiceTriggersEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No triggers yet</div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Recent activity</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchVoiceTriggerLog()">Refresh</button>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Last 50 matched-phrase events. Includes fires and cooldown-skipped attempts so you can tune timing and spot false positives.</p>
+                    <div style="overflow-x:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse; table-layout: fixed;">
+                            <colgroup>
+                                <col style="width: 9rem">
+                                <col style="width: 10rem">
+                                <col style="width: 10rem">
+                                <col style="width: auto">
+                                <col style="width: 10rem">
+                                <col style="width: 9rem">
+                            </colgroup>
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">When</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Speaker</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Phrase</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Transcript</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Sound</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Status</th>
+                            </tr></thead>
+                            <tbody id="voiceTriggerLogBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="voiceTriggerLogEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No activity yet</div>
                 </div>
             </div>
         </div>
@@ -3177,7 +3224,7 @@
             if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
             if (panelId === 'guests') { fetchCooldownOverrides(); }
             if (panelId === 'entranceExit') fetchEntranceExitAdmin();
-            if (panelId === 'voiceTriggers') fetchVoiceTriggers();
+            if (panelId === 'voiceTriggers') { fetchVoiceTriggers(); fetchVoiceTriggerLog(); }
         }
 
         function clearAuditFilters() {
@@ -3827,6 +3874,10 @@
             if (res && res.ok) {
                 multiPlayActive = enabled;
                 showToast(enabled ? 'Multi-play enabled' : 'Multi-play disabled', 'success');
+                const mp1 = document.getElementById('multiPlayToggle');
+                const mp2 = document.getElementById('multiPlayMenuToggle');
+                if (mp1) mp1.checked = enabled;
+                if (mp2) mp2.checked = enabled;
             }
         }
 
@@ -6647,6 +6698,52 @@
             }
         }
 
+        async function toggleControlsMenu() {
+            const menu = document.getElementById('controlsMenu');
+            if (!menu) return;
+            const isHidden = menu.classList.contains('hidden');
+            if (isHidden) await _syncControlsMenu();
+            menu.classList.toggle('hidden', !isHidden);
+            if (isHidden) {
+                setTimeout(function() { document.addEventListener('click', closeControlsMenuOnce); }, 0);
+            } else {
+                document.removeEventListener('click', closeControlsMenuOnce);
+            }
+        }
+        function closeControlsMenu() {
+            const menu = document.getElementById('controlsMenu');
+            if (menu) menu.classList.add('hidden');
+            document.removeEventListener('click', closeControlsMenuOnce);
+        }
+        function closeControlsMenuOnce(e) {
+            const wrap = document.querySelector('.controls-menu-wrap');
+            if (wrap && !wrap.contains(e.target)) {
+                closeControlsMenu();
+                document.removeEventListener('click', closeControlsMenuOnce);
+            }
+        }
+        async function _syncControlsMenu() {
+            // Local-state-driven toggles (already kept in sync by other handlers)
+            const mp = document.getElementById('multiPlayMenuToggle');
+            const mpExisting = document.getElementById('multiPlayToggle');
+            if (mp) mp.checked = !!(typeof multiPlayActive !== 'undefined' ? multiPlayActive : (mpExisting && mpExisting.checked));
+            // Voice activation lives only in guest.json; fetch fresh in case the
+            // Voice Triggers tab hasn't been opened this session.
+            if (user && user.role === 'superadmin') {
+                try {
+                    const res = await api('/api/superadmin/voice-triggers');
+                    if (res && res.ok) {
+                        const cfg = await res.json();
+                        const vt = document.getElementById('voiceTriggersMenuToggle');
+                        if (vt) vt.checked = cfg.enabled === true;
+                        // Mirror into the Voice Triggers tab if it's been rendered
+                        const tab = document.getElementById('voiceTriggersGlobalToggle');
+                        if (tab) tab.checked = cfg.enabled === true;
+                    }
+                } catch {}
+            }
+        }
+
         var vs = document.getElementById('volumeSlider');
         var vsc = document.getElementById('volumeSliderCard');
         if (vs) vs.addEventListener('input', function(e) { setVolume(e.target.value); });
@@ -7950,7 +8047,64 @@
             if (!res || !res.ok) {
                 alert('Failed to update global toggle');
                 fetchVoiceTriggers();
+                return;
             }
+            // Mirror state across both UI surfaces (menu + Voice Triggers tab).
+            const t1 = document.getElementById('voiceTriggersGlobalToggle');
+            const t2 = document.getElementById('voiceTriggersMenuToggle');
+            if (t1) t1.checked = !!enabled;
+            if (t2) t2.checked = !!enabled;
+        }
+
+        async function fetchVoiceTriggerLog() {
+            const res = await api('/api/superadmin/voice-triggers/log');
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            _renderVoiceTriggerLog(Array.isArray(data.events) ? data.events : []);
+        }
+
+        function _renderVoiceTriggerLog(events) {
+            const tbody = document.getElementById('voiceTriggerLogBody');
+            const empty = document.getElementById('voiceTriggerLogEmpty');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (!events.length) {
+                tbody.innerHTML = '';
+                if (empty) empty.style.display = '';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            const STATUS_LABEL = {
+                'fired': { text: 'Fired', color: 'var(--success, #2ea043)' },
+                'cooldown-skipped': { text: 'Cooldown', color: 'var(--text-muted)' },
+                'global-cooldown-skipped': { text: 'Global cooldown', color: 'var(--text-muted)' },
+            };
+            const fmtTime = (ms) => {
+                const d = new Date(ms);
+                const today = new Date();
+                const same = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+                const hh = String(d.getHours()).padStart(2, '0');
+                const mm = String(d.getMinutes()).padStart(2, '0');
+                const ss = String(d.getSeconds()).padStart(2, '0');
+                if (same) return hh + ':' + mm + ':' + ss;
+                const mo = String(d.getMonth() + 1).padStart(2, '0');
+                const da = String(d.getDate()).padStart(2, '0');
+                return mo + '/' + da + ' ' + hh + ':' + mm;
+            };
+            tbody.innerHTML = events.map(ev => {
+                const speakerCached = _discordMembersCache.find(m => m.id === ev.speakerUserId);
+                const speakerLabel = ev.speakerDisplayName || speakerCached?.displayName || speakerCached?.username || ev.speakerUserId || '—';
+                const soundLabel = ev.soundDisplayName || ev.soundFilename || '—';
+                const status = STATUS_LABEL[ev.status] || { text: ev.status || '—', color: 'var(--text-muted)' };
+                return '<tr>'
+                    + '<td style="padding: 0.35rem 0.5rem; color: var(--text-muted); font-family: monospace; font-size: 0.78rem;">' + esc(fmtTime(ev.when)) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(speakerLabel) + '">' + esc(speakerLabel) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(ev.phrase || '') + '">' + esc(ev.phrase || '') + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(ev.transcript || '') + '">' + esc(ev.transcript || '') + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(soundLabel) + '">' + esc(soundLabel) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;"><span style="display:inline-block; padding: 0.1rem 0.45rem; border-radius: 10px; font-size: 0.72rem; color: ' + status.color + '; border: 1px solid ' + status.color + ';">' + esc(status.text) + '</span></td>'
+                    + '</tr>';
+            }).join('');
         }
 
         async function setVoiceTriggersGlobalCooldown(sec) {
