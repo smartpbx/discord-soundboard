@@ -1409,6 +1409,7 @@
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
                 <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Entrance / Exit</button>
                 <button type="button" class="superadmin-tab" data-panel="voiceTriggers" onclick="switchSuperadminTab('voiceTriggers')">Voice Triggers</button>
+                <button type="button" class="superadmin-tab" data-panel="voting" onclick="switchSuperadminTab('voting')">Voting</button>
             </div>
 
             <div id="superadminPanelAccess" class="superadmin-panel active">
@@ -1956,6 +1957,68 @@
                         </table>
                     </div>
                     <div id="voiceTriggerLogEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No activity yet</div>
+                </div>
+            </div>
+
+            <div id="superadminPanelVoting" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Slash commands</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="votingEnabled" onchange="patchVotingConfig({ enabled: this.checked })">
+                        <span>Enable <code>/votekick</code> and <code>/votetimeout</code></span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">Members in the bot's current voice channel can call a vote. The bot's Discord role needs <strong>Move Members</strong> (for kick) and <strong>Moderate Members</strong> (for timeout) in your guild's role settings — otherwise the action will fail even if the vote passes.</p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Rules</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.75rem;">
+                        <div class="field" style="margin:0;"><label for="votingThreshold">Threshold (% Yes)</label><input type="number" id="votingThreshold" min="1" max="100" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0;"><label for="votingWindow">Vote window (s)</label><input type="number" id="votingWindow" min="5" max="300" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0;"><label for="votingMinVoters">Min eligible voters</label><input type="number" id="votingMinVoters" min="1" max="50" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0;"><label for="votingTargetCooldown">Target cooldown (s)</label><input type="number" id="votingTargetCooldown" min="0" max="86400" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0;"><label for="votingMaxTimeoutMinutes">Max timeout (minutes)</label><input type="number" id="votingMaxTimeoutMinutes" min="1" max="40320" style="width:100%; box-sizing:border-box;"></div>
+                    </div>
+                    <div style="margin-top: 0.75rem; display:flex; gap:0.5rem;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="saveVotingRules()">Save rules</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchVotingConfig()">Reload</button>
+                    </div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Immune roles</div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Members with any of these guild roles cannot be voted on. Pick from the dropdown; the bot must be currently connected to a guild for roles to populate.</p>
+                    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                        <select id="votingImmuneRolePicker" style="min-width: 12rem; padding: 0.3rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);"><option value="">— pick role —</option></select>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="addVotingImmuneRole()">Add</button>
+                    </div>
+                    <div id="votingImmuneRoleList" style="margin-top: 0.5rem; display:flex; flex-wrap:wrap; gap:0.3rem;"></div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Recent votes</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchVotingLog()">Refresh</button>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse; table-layout: fixed;">
+                            <colgroup>
+                                <col style="width: 9rem">
+                                <col style="width: 5rem">
+                                <col style="width: 11rem">
+                                <col style="width: 11rem">
+                                <col style="width: 7rem">
+                                <col style="width: auto">
+                            </colgroup>
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">When</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Type</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Target</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Initiator</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Tally</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Outcome</th>
+                            </tr></thead>
+                            <tbody id="votingLogBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="votingLogEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No votes yet</div>
                 </div>
             </div>
         </div>
@@ -3225,6 +3288,7 @@
             if (panelId === 'guests') { fetchCooldownOverrides(); }
             if (panelId === 'entranceExit') fetchEntranceExitAdmin();
             if (panelId === 'voiceTriggers') { fetchVoiceTriggers(); fetchVoiceTriggerLog(); }
+            if (panelId === 'voting') { fetchVotingConfig(); fetchVotingLog(); }
         }
 
         function clearAuditFilters() {
@@ -8103,6 +8167,136 @@
                     + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(ev.transcript || '') + '">' + esc(ev.transcript || '') + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="' + esc(soundLabel) + '">' + esc(soundLabel) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem;"><span style="display:inline-block; padding: 0.1rem 0.45rem; border-radius: 10px; font-size: 0.72rem; color: ' + status.color + '; border: 1px solid ' + status.color + ';">' + esc(status.text) + '</span></td>'
+                    + '</tr>';
+            }).join('');
+        }
+
+        // ---------------- Voting (superadmin) ----------------
+        let _votingCfg = null;
+        let _votingRoles = [];
+        async function fetchVotingConfig() {
+            const res = await api('/api/superadmin/voting');
+            if (!res || !res.ok) return;
+            const cfg = await res.json();
+            _votingCfg = cfg;
+            _votingRoles = Array.isArray(cfg.roles) ? cfg.roles : [];
+            const setVal = (id, val) => { const el = document.getElementById(id); if (el != null) el.value = val; };
+            const setCheck = (id, val) => { const el = document.getElementById(id); if (el != null) el.checked = !!val; };
+            setCheck('votingEnabled', cfg.enabled);
+            setVal('votingThreshold', cfg.thresholdPct);
+            setVal('votingWindow', cfg.windowSec);
+            setVal('votingMinVoters', cfg.minVoters);
+            setVal('votingTargetCooldown', cfg.targetCooldownSec);
+            setVal('votingMaxTimeoutMinutes', cfg.maxTimeoutMinutes);
+            _renderVotingImmuneRoles(cfg.immuneRoleIds || []);
+        }
+
+        function _renderVotingImmuneRoles(selectedIds) {
+            const picker = document.getElementById('votingImmuneRolePicker');
+            const list = document.getElementById('votingImmuneRoleList');
+            if (!picker || !list) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const selectedSet = new Set(selectedIds);
+            const available = _votingRoles.filter(r => !selectedSet.has(r.id));
+            picker.innerHTML = '<option value="">— pick role —</option>' + available.map(r => '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>').join('');
+            if (!selectedIds.length) {
+                list.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-muted);">No immune roles set.</span>';
+                return;
+            }
+            list.innerHTML = selectedIds.map(id => {
+                const r = _votingRoles.find(x => x.id === id);
+                const label = r ? r.name : id;
+                return '<span style="display:inline-flex; align-items:center; gap:0.3rem; padding: 0.2rem 0.5rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 999px; font-size: 0.78rem;">'
+                    + esc(label)
+                    + '<button type="button" class="btn-link" data-id="' + esc(id) + '" onclick="removeVotingImmuneRole(this.dataset.id)" style="background:none; border:none; color: var(--text-muted); cursor:pointer; padding:0 0.1rem; font-size: 0.9rem;">✕</button>'
+                    + '</span>';
+            }).join('');
+        }
+
+        async function patchVotingConfig(patch) {
+            const res = await api('/api/superadmin/voting', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!res || !res.ok) {
+                alert('Failed to update voting config');
+                fetchVotingConfig();
+                return;
+            }
+            const cfg = await res.json();
+            _votingCfg = cfg;
+            _renderVotingImmuneRoles(cfg.immuneRoleIds || []);
+        }
+
+        async function saveVotingRules() {
+            const num = (id) => Number(document.getElementById(id)?.value);
+            const patch = {
+                thresholdPct: num('votingThreshold'),
+                windowSec: num('votingWindow'),
+                minVoters: num('votingMinVoters'),
+                targetCooldownSec: num('votingTargetCooldown'),
+                maxTimeoutMinutes: num('votingMaxTimeoutMinutes'),
+            };
+            await patchVotingConfig(patch);
+            showToast('Voting rules saved', 'success');
+        }
+
+        async function addVotingImmuneRole() {
+            const picker = document.getElementById('votingImmuneRolePicker');
+            const id = picker?.value;
+            if (!id) return;
+            const current = Array.isArray(_votingCfg?.immuneRoleIds) ? _votingCfg.immuneRoleIds.slice() : [];
+            if (current.includes(id)) return;
+            current.push(id);
+            await patchVotingConfig({ immuneRoleIds: current });
+        }
+
+        async function removeVotingImmuneRole(id) {
+            const current = Array.isArray(_votingCfg?.immuneRoleIds) ? _votingCfg.immuneRoleIds.filter(x => x !== id) : [];
+            await patchVotingConfig({ immuneRoleIds: current });
+        }
+
+        async function fetchVotingLog() {
+            const res = await api('/api/superadmin/voting/log');
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            _renderVotingLog(Array.isArray(data.events) ? data.events : []);
+        }
+
+        function _renderVotingLog(events) {
+            const tbody = document.getElementById('votingLogBody');
+            const empty = document.getElementById('votingLogEmpty');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (!events.length) {
+                tbody.innerHTML = '';
+                if (empty) empty.style.display = '';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            const fmtTime = (ms) => {
+                const d = new Date(ms);
+                const today = new Date();
+                const same = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+                const hh = String(d.getHours()).padStart(2, '0');
+                const mm = String(d.getMinutes()).padStart(2, '0');
+                if (same) return hh + ':' + mm;
+                const mo = String(d.getMonth() + 1).padStart(2, '0');
+                const da = String(d.getDate()).padStart(2, '0');
+                return mo + '/' + da + ' ' + hh + ':' + mm;
+            };
+            tbody.innerHTML = events.map(ev => {
+                const outcomeLabel = ev.passed
+                    ? (ev.actionOk ? '✅ ' + (ev.type === 'kick' ? 'Disconnected' : 'Timed out ' + ev.timeoutMinutes + 'min') : '⚠️ Passed (action failed: ' + (ev.actionError || '?') + ')')
+                    : '❌ ' + (ev.outcome === 'window-expired' ? 'Window expired' : ev.outcome === 'no-overtake-impossible' ? 'Not enough Yes' : 'Failed');
+                return '<tr>'
+                    + '<td style="padding: 0.35rem 0.5rem; color: var(--text-muted); font-family: monospace; font-size: 0.78rem;">' + esc(fmtTime(ev.when)) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">' + esc(ev.type) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(ev.targetDisplayName || ev.targetUsername || ev.targetUserId) + '">' + esc(ev.targetDisplayName || ev.targetUsername || ev.targetUserId) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(ev.initiatorDisplayName || ev.initiatorUsername || ev.initiatorUserId) + '">' + esc(ev.initiatorDisplayName || ev.initiatorUsername || ev.initiatorUserId) + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; font-family: monospace; font-size: 0.78rem;">' + ev.yes + ' / ' + ev.no + ' / ' + ev.eligible + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">' + esc(outcomeLabel) + (ev.reason ? '<div style="font-size: 0.72rem; color: var(--text-muted);">' + esc(ev.reason) + '</div>' : '') + '</td>'
                     + '</tr>';
             }).join('');
         }

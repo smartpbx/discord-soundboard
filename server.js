@@ -31,7 +31,7 @@ const { Readable } = require('stream');
 const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState, EndBehaviorType } = require('@discordjs/voice');
 const prism = require('prism-media');
 const { Transform } = require('stream');
@@ -579,6 +579,52 @@ function setVoiceTriggersGlobalCooldownSec(sec) {
     const d = loadGuestData();
     d.voiceTriggersGlobalCooldownSec = Math.max(0, Math.min(3600, Number(sec) || 0));
     saveGuestData(d);
+}
+
+// --- Voting (kick/timeout via slash commands) ---
+const VOTE_DEFAULTS = {
+    enabled: false,
+    thresholdPct: 51,         // % of eligible voters needed (Yes / eligible)
+    windowSec: 30,            // how long the vote stays open
+    minVoters: 2,             // minimum eligible voters required for vote to count
+    targetCooldownSec: 300,   // cooldown per target after a successful vote
+    immuneRoleIds: [],        // role IDs the bot will refuse to vote on
+    maxTimeoutMinutes: 60,    // cap on /votetimeout duration
+};
+function getVotingConfig() {
+    const d = loadGuestData();
+    const stored = (d.voting && typeof d.voting === 'object') ? d.voting : {};
+    return {
+        enabled: stored.enabled === true,
+        thresholdPct: Math.max(1, Math.min(100, Number(stored.thresholdPct) || VOTE_DEFAULTS.thresholdPct)),
+        windowSec: Math.max(5, Math.min(300, Number(stored.windowSec) || VOTE_DEFAULTS.windowSec)),
+        minVoters: Math.max(1, Math.min(50, Number(stored.minVoters) || VOTE_DEFAULTS.minVoters)),
+        targetCooldownSec: Math.max(0, Math.min(86400, Number(stored.targetCooldownSec) || VOTE_DEFAULTS.targetCooldownSec)),
+        immuneRoleIds: Array.isArray(stored.immuneRoleIds) ? stored.immuneRoleIds.filter(s => typeof s === 'string' && /^\d{5,32}$/.test(s)) : [],
+        maxTimeoutMinutes: Math.max(1, Math.min(40320, Number(stored.maxTimeoutMinutes) || VOTE_DEFAULTS.maxTimeoutMinutes)),
+    };
+}
+function setVotingConfig(patch) {
+    const d = loadGuestData();
+    const current = getVotingConfig();
+    const next = { ...current, ...patch };
+    // Clamp again in case caller passed raw values
+    next.thresholdPct = Math.max(1, Math.min(100, Number(next.thresholdPct) || VOTE_DEFAULTS.thresholdPct));
+    next.windowSec = Math.max(5, Math.min(300, Number(next.windowSec) || VOTE_DEFAULTS.windowSec));
+    next.minVoters = Math.max(1, Math.min(50, Number(next.minVoters) || VOTE_DEFAULTS.minVoters));
+    next.targetCooldownSec = Math.max(0, Math.min(86400, Number(next.targetCooldownSec) || VOTE_DEFAULTS.targetCooldownSec));
+    next.maxTimeoutMinutes = Math.max(1, Math.min(40320, Number(next.maxTimeoutMinutes) || VOTE_DEFAULTS.maxTimeoutMinutes));
+    next.immuneRoleIds = Array.isArray(next.immuneRoleIds) ? next.immuneRoleIds.filter(s => typeof s === 'string' && /^\d{5,32}$/.test(s)) : [];
+    next.enabled = next.enabled === true;
+    d.voting = next;
+    saveGuestData(d);
+    return next;
+}
+const VOTE_LOG_MAX = 50;
+const voteLog = [];
+function recordVoteEvent(entry) {
+    voteLog.push({ when: Date.now(), ...entry });
+    if (voteLog.length > VOTE_LOG_MAX) voteLog.splice(0, voteLog.length - VOTE_LOG_MAX);
 }
 function loadVoiceTriggers() {
     const arr = loadGuestData().voiceTriggers;
@@ -1502,6 +1548,307 @@ function finalizeAllOpenPlays(stoppedEarly) {
 }
 
 // ---------------------------------------------------------------------------
+// Voting: /votekick (voice disconnect) and /votetimeout (guild timeout).
+// Eligible voters are members in the bot's current voice channel.
+// ---------------------------------------------------------------------------
+const activeVotes = new Map();         // voteId -> vote state object
+const voteTargetCooldown = new Map();  // targetUserId -> ms timestamp when cooldown ends
+
+function makeVoteId() {
+    return crypto.randomBytes(6).toString('hex');
+}
+
+function eligibleVotersInBotChannel(guild, excludeUserId) {
+    if (!guild || !lastChannelId) return [];
+    const channel = guild.channels.cache.get(lastChannelId);
+    if (!channel || !channel.isVoiceBased?.()) return [];
+    const out = [];
+    channel.members.forEach((member) => {
+        if (member.user.bot) return;
+        if (excludeUserId && member.id === excludeUserId) return;
+        out.push(member);
+    });
+    return out;
+}
+
+function memberHasImmuneRole(member, immuneRoleIds) {
+    if (!member || !Array.isArray(immuneRoleIds) || !immuneRoleIds.length) return false;
+    const memberRoles = member.roles?.cache;
+    if (!memberRoles) return false;
+    for (const id of immuneRoleIds) if (memberRoles.has(id)) return true;
+    return false;
+}
+
+function buildVotePanel(vote) {
+    const cfg = getVotingConfig();
+    const remainingMs = Math.max(0, vote.expiresAt - Date.now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    const yesCount = [...vote.voters.values()].filter(v => v === 'yes').length;
+    const noCount = [...vote.voters.values()].filter(v => v === 'no').length;
+    const eligibleCount = vote.eligible.size;
+    const action = vote.type === 'kick'
+        ? `kick <@${vote.targetUserId}> from the voice channel`
+        : `timeout <@${vote.targetUserId}> for ${vote.timeoutMinutes} minute${vote.timeoutMinutes === 1 ? '' : 's'}`;
+    const lines = [
+        `**Vote called by <@${vote.initiatorUserId}>** to ${action}.`,
+        vote.reason ? `_Reason:_ ${vote.reason}` : null,
+        `Threshold: **${vote.threshold} / ${eligibleCount} Yes** required · Closes in **${remainingSec}s**`,
+    ].filter(Boolean);
+    const embed = new EmbedBuilder()
+        .setTitle(vote.type === 'kick' ? 'Vote to kick' : 'Vote to timeout')
+        .setColor(vote.type === 'kick' ? 0xed4245 : 0xfaa61a)
+        .setDescription(lines.join('\n'))
+        .addFields(
+            { name: 'Yes', value: String(yesCount), inline: true },
+            { name: 'No',  value: String(noCount),  inline: true },
+            { name: 'Pending', value: String(eligibleCount - yesCount - noCount), inline: true },
+        );
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`vote:${vote.id}:yes`).setLabel(`Yes (${yesCount})`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`vote:${vote.id}:no`).setLabel(`No (${noCount})`).setStyle(ButtonStyle.Danger),
+    );
+    return { embeds: [embed], components: [row] };
+}
+
+async function refreshVoteMessage(vote) {
+    if (!vote.message) return;
+    try { await vote.message.edit(buildVotePanel(vote)); } catch (err) { console.warn('[voting] edit failed:', err.message); }
+}
+
+async function executeVoteAction(vote) {
+    const guild = client.guilds.cache.get(vote.guildId);
+    if (!guild) return { ok: false, reason: 'guild-missing' };
+    try {
+        const member = await guild.members.fetch(vote.targetUserId);
+        if (vote.type === 'kick') {
+            if (!member.voice?.channelId) return { ok: false, reason: 'not-in-voice' };
+            await member.voice.disconnect(vote.reason || 'Vote-kick');
+            return { ok: true };
+        }
+        if (vote.type === 'timeout') {
+            const ms = Math.min(vote.timeoutMinutes * 60 * 1000, 28 * 24 * 60 * 60 * 1000);
+            await member.timeout(ms, vote.reason || 'Vote-timeout');
+            return { ok: true };
+        }
+        return { ok: false, reason: 'unknown-type' };
+    } catch (err) {
+        return { ok: false, reason: 'discord-error', error: err.message };
+    }
+}
+
+async function finalizeVote(vote, outcome) {
+    if (vote.finalized) return;
+    vote.finalized = true;
+    if (vote.timer) { clearTimeout(vote.timer); vote.timer = null; }
+    activeVotes.delete(vote.id);
+
+    const yesCount = [...vote.voters.values()].filter(v => v === 'yes').length;
+    const noCount = [...vote.voters.values()].filter(v => v === 'no').length;
+    const eligibleCount = vote.eligible.size;
+    const passed = yesCount >= vote.threshold;
+
+    let actionResult = null;
+    if (passed) actionResult = await executeVoteAction(vote);
+    if (passed && actionResult?.ok) {
+        const cooldownMs = getVotingConfig().targetCooldownSec * 1000;
+        if (cooldownMs > 0) voteTargetCooldown.set(vote.targetUserId, Date.now() + cooldownMs);
+    }
+
+    recordVoteEvent({
+        voteId: vote.id,
+        type: vote.type,
+        initiatorUserId: vote.initiatorUserId,
+        initiatorUsername: vote.initiatorUsername,
+        targetUserId: vote.targetUserId,
+        targetUsername: vote.targetUsername,
+        reason: vote.reason || null,
+        yes: yesCount,
+        no: noCount,
+        eligible: eligibleCount,
+        threshold: vote.threshold,
+        outcome,
+        passed,
+        actionOk: actionResult?.ok === true,
+        actionError: actionResult?.ok === false ? (actionResult.error || actionResult.reason || 'unknown') : null,
+        timeoutMinutes: vote.type === 'timeout' ? vote.timeoutMinutes : null,
+    });
+    statsDb.recordAdminAction({
+        actor: vote.initiatorUsername || vote.initiatorUserId,
+        actorRole: 'discord-user',
+        action: 'voting.' + (passed ? (vote.type === 'kick' ? 'kick' : 'timeout') : 'failed'),
+        target: vote.targetUsername || vote.targetUserId,
+        details: { yes: yesCount, no: noCount, eligible: eligibleCount, outcome, actionOk: actionResult?.ok === true },
+    });
+
+    const summaryLines = [
+        passed
+            ? (actionResult?.ok ? '✅ **Vote passed** — action applied.' : `⚠️ **Vote passed** but action failed: ${actionResult?.error || actionResult?.reason}`)
+            : `❌ **Vote failed** — ${outcome === 'no-overtake-impossible' ? 'Yes can no longer reach threshold.' : outcome === 'window-expired' ? 'Window expired.' : 'Insufficient yes votes.'}`,
+        `Final tally: **${yesCount} Yes** / **${noCount} No** / ${eligibleCount - yesCount - noCount} no-vote (threshold ${vote.threshold}).`,
+    ];
+    const embed = new EmbedBuilder()
+        .setTitle(vote.type === 'kick' ? (passed ? 'Vote-kick passed' : 'Vote-kick failed') : (passed ? 'Vote-timeout passed' : 'Vote-timeout failed'))
+        .setColor(passed && actionResult?.ok ? 0x57f287 : 0x99aab5)
+        .setDescription(summaryLines.join('\n'));
+    try { if (vote.message) await vote.message.edit({ embeds: [embed], components: [] }); } catch {}
+}
+
+async function handleVoteStart(interaction, type) {
+    const cfg = getVotingConfig();
+    if (!cfg.enabled) return interaction.reply({ content: 'Voting is disabled.', flags: MessageFlags.Ephemeral });
+    if (!interaction.guild || interaction.guildId !== activeGuildId || !lastChannelId) {
+        return interaction.reply({ content: 'The bot is not currently connected to a voice channel in this server.', flags: MessageFlags.Ephemeral });
+    }
+    const target = interaction.options.getUser('user');
+    if (!target) return interaction.reply({ content: 'You must specify a user.', flags: MessageFlags.Ephemeral });
+    if (target.bot) return interaction.reply({ content: 'Cannot vote on a bot.', flags: MessageFlags.Ephemeral });
+    if (target.id === interaction.user.id) return interaction.reply({ content: 'You cannot vote on yourself.', flags: MessageFlags.Ephemeral });
+
+    const reason = interaction.options.getString('reason') || null;
+    let timeoutMinutes = null;
+    if (type === 'timeout') {
+        timeoutMinutes = Math.max(1, Math.min(cfg.maxTimeoutMinutes, interaction.options.getInteger('minutes') || 0));
+        if (!timeoutMinutes) return interaction.reply({ content: 'Provide a minutes value between 1 and ' + cfg.maxTimeoutMinutes + '.', flags: MessageFlags.Ephemeral });
+    }
+
+    const guild = interaction.guild;
+    const initiatorMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!initiatorMember || initiatorMember.voice?.channelId !== lastChannelId) {
+        return interaction.reply({ content: 'You must be in the bot\'s voice channel to call a vote.', flags: MessageFlags.Ephemeral });
+    }
+    const targetMember = await guild.members.fetch(target.id).catch(() => null);
+    if (!targetMember || targetMember.voice?.channelId !== lastChannelId) {
+        return interaction.reply({ content: 'The target must be in the bot\'s voice channel.', flags: MessageFlags.Ephemeral });
+    }
+    if (memberHasImmuneRole(targetMember, cfg.immuneRoleIds)) {
+        return interaction.reply({ content: 'That user has an immune role and cannot be voted on.', flags: MessageFlags.Ephemeral });
+    }
+    const cooldownEnd = voteTargetCooldown.get(target.id) || 0;
+    if (cooldownEnd > Date.now()) {
+        const sec = Math.ceil((cooldownEnd - Date.now()) / 1000);
+        return interaction.reply({ content: `That user was already voted on recently. Try again in ${sec}s.`, flags: MessageFlags.Ephemeral });
+    }
+    // One in-flight vote per target.
+    for (const v of activeVotes.values()) {
+        if (v.targetUserId === target.id) {
+            return interaction.reply({ content: 'A vote on this user is already in progress.', flags: MessageFlags.Ephemeral });
+        }
+    }
+    const eligibleMembers = eligibleVotersInBotChannel(guild, target.id);
+    if (eligibleMembers.length < cfg.minVoters) {
+        return interaction.reply({ content: `Not enough eligible voters (${eligibleMembers.length} / need ${cfg.minVoters}).`, flags: MessageFlags.Ephemeral });
+    }
+    const eligibleIds = new Set(eligibleMembers.map(m => m.id));
+    if (!eligibleIds.has(interaction.user.id)) {
+        return interaction.reply({ content: 'You are not eligible to vote (must be in the bot\'s voice channel as a non-bot user).', flags: MessageFlags.Ephemeral });
+    }
+
+    const threshold = Math.max(1, Math.ceil(eligibleIds.size * cfg.thresholdPct / 100));
+    const windowMs = cfg.windowSec * 1000;
+    const vote = {
+        id: makeVoteId(),
+        type,
+        targetUserId: target.id,
+        targetUsername: targetMember.user.tag,
+        initiatorUserId: interaction.user.id,
+        initiatorUsername: interaction.user.tag,
+        channelId: interaction.channelId,
+        guildId: interaction.guildId,
+        voters: new Map([[interaction.user.id, 'yes']]),
+        eligible: eligibleIds,
+        threshold,
+        expiresAt: Date.now() + windowMs,
+        reason,
+        timeoutMinutes,
+        message: null,
+        timer: null,
+        finalized: false,
+    };
+    activeVotes.set(vote.id, vote);
+    await interaction.reply(buildVotePanel(vote));
+    vote.message = await interaction.fetchReply().catch(() => null);
+    vote.timer = setTimeout(() => finalizeVote(vote, 'window-expired'), windowMs);
+
+    // Check if the initiator's auto-Yes already decides it.
+    if ([...vote.voters.values()].filter(v => v === 'yes').length >= vote.threshold) {
+        await finalizeVote(vote, 'threshold-reached');
+    }
+}
+
+async function handleVoteButton(interaction, voteId, choice) {
+    const vote = activeVotes.get(voteId);
+    if (!vote || vote.finalized) {
+        return interaction.reply({ content: 'This vote has ended.', flags: MessageFlags.Ephemeral });
+    }
+    if (!vote.eligible.has(interaction.user.id)) {
+        return interaction.reply({ content: 'You are not eligible to vote (must be in the bot\'s voice channel).', flags: MessageFlags.Ephemeral });
+    }
+    if (vote.voters.has(interaction.user.id)) {
+        return interaction.reply({ content: 'You already voted.', flags: MessageFlags.Ephemeral });
+    }
+    vote.voters.set(interaction.user.id, choice);
+    await interaction.reply({ content: `Your **${choice.toUpperCase()}** vote was recorded.`, flags: MessageFlags.Ephemeral });
+
+    const yesCount = [...vote.voters.values()].filter(v => v === 'yes').length;
+    const noCount  = [...vote.voters.values()].filter(v => v === 'no').length;
+    const remaining = vote.eligible.size - yesCount - noCount;
+    if (yesCount >= vote.threshold) {
+        await refreshVoteMessage(vote);
+        return finalizeVote(vote, 'threshold-reached');
+    }
+    if (yesCount + remaining < vote.threshold) {
+        await refreshVoteMessage(vote);
+        return finalizeVote(vote, 'no-overtake-impossible');
+    }
+    await refreshVoteMessage(vote);
+}
+
+async function registerVoteSlashCommands() {
+    const commands = [
+        new SlashCommandBuilder()
+            .setName('votekick')
+            .setDescription("Vote to disconnect a user from the bot's voice channel")
+            .addUserOption(o => o.setName('user').setDescription('User to kick').setRequired(true))
+            .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)),
+        new SlashCommandBuilder()
+            .setName('votetimeout')
+            .setDescription('Vote to timeout a user in the guild')
+            .addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true))
+            .addIntegerOption(o => o.setName('minutes').setDescription('Minutes (1-40320)').setRequired(true).setMinValue(1).setMaxValue(40320))
+            .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)),
+    ].map(c => c.toJSON());
+    for (const [, guild] of client.guilds.cache) {
+        try {
+            await guild.commands.set(commands);
+            console.log(`[voting] slash commands registered in ${guild.name}`);
+        } catch (err) {
+            console.error('[voting] failed to register commands in', guild.id, err.message);
+        }
+    }
+}
+
+client.on('interactionCreate', async (interaction) => {
+    try {
+        if (interaction.isChatInputCommand?.()) {
+            if (interaction.commandName === 'votekick') return handleVoteStart(interaction, 'kick');
+            if (interaction.commandName === 'votetimeout') return handleVoteStart(interaction, 'timeout');
+        } else if (interaction.isButton?.()) {
+            const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
+            if (m) return handleVoteButton(interaction, m[1], m[2]);
+        }
+    } catch (err) {
+        console.error('[voting] interaction error:', err);
+        try {
+            if (interaction.deferred || interaction.replied) {
+                await interaction.followUp({ content: 'Internal error.', flags: MessageFlags.Ephemeral });
+            } else {
+                await interaction.reply({ content: 'Internal error.', flags: MessageFlags.Ephemeral });
+            }
+        } catch {}
+    }
+});
+
+// ---------------------------------------------------------------------------
 // Voice triggers: listen to the active voice channel and fire sounds when
 // configured phrases are spoken. Uses vosk for streaming on-device STT,
 // restricted to the configured phrase grammar so a tiny model is sufficient.
@@ -1689,6 +2036,7 @@ function handleSpeechResult(userId, text) {
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
+    registerVoteSlashCommands().catch(err => console.error('[voting] registration failed:', err.message));
     if (lastChannelId) {
         const channel = client.channels.cache.get(lastChannelId);
         if (channel?.isVoiceBased()) {
@@ -3291,6 +3639,63 @@ app.delete('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) =
         details: { phrase: removed.phrase },
     });
     res.json({ ok: true });
+});
+
+// --- Voting (kick / timeout via slash commands) ---
+app.get('/api/superadmin/voting', requireSuperadmin, (req, res) => {
+    const cfg = getVotingConfig();
+    const roles = [];
+    try {
+        if (activeGuildId) {
+            const guild = client.guilds.cache.get(activeGuildId);
+            if (guild) {
+                guild.roles.cache.forEach(r => {
+                    if (r.id !== guild.id) roles.push({ id: r.id, name: r.name, color: r.color, position: r.position });
+                });
+                roles.sort((a, b) => b.position - a.position);
+            }
+        }
+    } catch {}
+    const activeVotesCount = activeVotes ? activeVotes.size : 0;
+    res.json({ ...cfg, roles, activeVotesCount });
+});
+
+app.patch('/api/superadmin/voting', requireSuperadmin, (req, res) => {
+    const body = req.body || {};
+    const patch = {};
+    for (const key of ['enabled', 'thresholdPct', 'windowSec', 'minVoters', 'targetCooldownSec', 'maxTimeoutMinutes']) {
+        if (key in body) patch[key] = body[key];
+    }
+    if (Array.isArray(body.immuneRoleIds)) patch.immuneRoleIds = body.immuneRoleIds;
+    const next = setVotingConfig(patch);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'voting.config',
+        target: null,
+        details: patch,
+    });
+    res.json({ ok: true, ...next });
+});
+
+app.get('/api/superadmin/voting/log', requireSuperadmin, (req, res) => {
+    const memberNameById = new Map();
+    try {
+        if (activeGuildId) {
+            const guild = client.guilds.cache.get(activeGuildId);
+            if (guild) {
+                for (const [, vs] of guild.voiceStates.cache) {
+                    if (vs.member) memberNameById.set(vs.id, vs.member.displayName || vs.member.user?.username || vs.id);
+                }
+            }
+        }
+    } catch {}
+    const events = voteLog.slice().reverse().map(ev => ({
+        ...ev,
+        targetDisplayName: memberNameById.get(ev.targetUserId) || ev.targetUsername || null,
+        initiatorDisplayName: memberNameById.get(ev.initiatorUserId) || ev.initiatorUsername || null,
+    }));
+    res.json({ events, max: VOTE_LOG_MAX });
 });
 
 app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {
