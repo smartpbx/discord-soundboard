@@ -1660,6 +1660,8 @@ client.once('ready', () => {
                 adapterCreator: channel.guild.voiceAdapterCreator,
                 daveEncryption: true,
                 debug: true,
+                selfDeaf: false,
+                selfMute: false,
             });
             currentConnection.on('error', err => {
                 console.error('Voice connection error:', err.message);
@@ -1926,6 +1928,8 @@ app.post('/api/join', requireAdmin, (req, res) => {
         adapterCreator: channel.guild.voiceAdapterCreator,
         daveEncryption: true,
         debug: true,
+        selfDeaf: false,
+        selfMute: false,
     });
     currentConnection.on('error', err => {
         console.error('Voice connection error:', err.message);

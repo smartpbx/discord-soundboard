@@ -1872,12 +1872,12 @@
                         <button type="button" class="btn btn-ghost btn-sm" onclick="fetchVoiceTriggers()">Refresh</button>
                     </div>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Phrases are matched case-insensitively as substrings of recognized speech. Keep them short — "airhorn", "wow" — and pick a cooldown long enough that the bot doesn't spam.</p>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 6rem 1fr 5rem; gap: 0.4rem; align-items: end;">
-                        <div class="field" style="margin:0;"><label for="vtNewPhrase">Phrase</label><input type="text" id="vtNewPhrase" placeholder="e.g. airhorn" maxlength="64"></div>
-                        <div class="field" style="margin:0;"><label for="vtNewSound">Sound</label><select id="vtNewSound"></select></div>
-                        <div class="field" style="margin:0;"><label for="vtNewCooldown">Cooldown (s)</label><input type="number" id="vtNewCooldown" min="0" max="3600" value="5"></div>
-                        <div class="field" style="margin:0;"><label for="vtNewSpeaker">Speaker (optional)</label><select id="vtNewSpeaker"><option value="">— anyone —</option></select></div>
-                        <button type="button" class="btn btn-primary btn-sm" onclick="addVoiceTrigger()">Add</button>
+                    <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 6rem minmax(0, 1fr) auto; gap: 0.4rem; align-items: end;">
+                        <div class="field" style="margin:0; min-width:0;"><label for="vtNewPhrase">Phrase</label><input type="text" id="vtNewPhrase" placeholder="e.g. airhorn" maxlength="64" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0; min-width:0;"><label for="vtNewSound">Sound</label><select id="vtNewSound" style="width:100%; box-sizing:border-box;"></select></div>
+                        <div class="field" style="margin:0; min-width:0;"><label for="vtNewCooldown">Cooldown (s)</label><input type="number" id="vtNewCooldown" min="0" max="3600" value="5" style="width:100%; box-sizing:border-box;"></div>
+                        <div class="field" style="margin:0; min-width:0;"><label for="vtNewSpeaker">Speaker (optional)</label><select id="vtNewSpeaker" style="width:100%; box-sizing:border-box;"><option value="">— anyone —</option></select></div>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="addVoiceTrigger()" style="height:fit-content; align-self:end;">Add</button>
                     </div>
                 </div>
                 <div class="superadmin-section">
