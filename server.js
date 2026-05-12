@@ -32,7 +32,9 @@ const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState, EndBehaviorType } = require('@discordjs/voice');
+const prism = require('prism-media');
+const { Transform } = require('stream');
 const statsDb = require('./lib/stats-db');
 const ttsVoiceAdmin = require('./lib/tts-voice-admin');
 const voiceTrainer = require('./lib/voice-trainer');
@@ -558,6 +560,31 @@ function setTtsMaxQueueSize(n) {
     const d = loadGuestData();
     d.ttsMaxQueueSize = Math.max(1, Math.min(50, Number(n) || 10));
     saveGuestData(d);
+}
+
+// --- Voice triggers (listen to channel speech, fire sound on keyword match) ---
+function getVoiceTriggersEnabled() {
+    return loadGuestData().voiceTriggersEnabled === true;
+}
+function setVoiceTriggersEnabled(v) {
+    const d = loadGuestData();
+    d.voiceTriggersEnabled = v === true;
+    saveGuestData(d);
+}
+function loadVoiceTriggers() {
+    const arr = loadGuestData().voiceTriggers;
+    return Array.isArray(arr) ? arr : [];
+}
+function saveVoiceTriggers(list) {
+    const d = loadGuestData();
+    d.voiceTriggers = Array.isArray(list) ? list : [];
+    saveGuestData(d);
+}
+function normalizeTriggerPhrase(s) {
+    return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function makeTriggerId() {
+    return 'vt_' + crypto.randomBytes(6).toString('hex');
 }
 
 function loadServerState() {
@@ -1465,6 +1492,162 @@ function finalizeAllOpenPlays(stoppedEarly) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Voice triggers: listen to the active voice channel and fire sounds when
+// configured phrases are spoken. Uses vosk for streaming on-device STT,
+// restricted to the configured phrase grammar so a tiny model is sufficient.
+// ---------------------------------------------------------------------------
+let voskModel = null;
+let voskModelLoadAttempted = false;
+let voskLib = null;
+let voiceTriggerAttachedReceiver = null;
+const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, decoder, downmix }
+const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
+let voiceTriggerGrammarPhrases = []; // array of strings; vosk wraps OOV speech in [unk]
+
+// Decimate 48k stereo s16le → 16k mono s16le (3:1 group, simple average).
+// Quality is fine for keyword spotting; we skip anti-alias filtering because
+// the small vosk model + grammar restriction is robust to the aliasing.
+class PcmStereo48ToMono16 extends Transform {
+    constructor() { super(); this._buf = Buffer.alloc(0); }
+    _transform(chunk, _enc, cb) {
+        const buf = this._buf.length ? Buffer.concat([this._buf, chunk]) : chunk;
+        const groupBytes = 12; // 3 stereo frames × 4 bytes
+        const fullGroups = Math.floor(buf.length / groupBytes);
+        const out = Buffer.alloc(fullGroups * 2);
+        for (let g = 0; g < fullGroups; g++) {
+            const off = g * groupBytes;
+            let sum = 0;
+            for (let i = 0; i < 3; i++) {
+                sum += (buf.readInt16LE(off + i * 4) + buf.readInt16LE(off + i * 4 + 2)) / 2;
+            }
+            const v = Math.max(-32768, Math.min(32767, Math.round(sum / 3)));
+            out.writeInt16LE(v, g * 2);
+        }
+        this._buf = buf.subarray(fullGroups * groupBytes);
+        cb(null, out);
+    }
+}
+
+function ensureVoskModel() {
+    if (voskModel || voskModelLoadAttempted) return voskModel;
+    voskModelLoadAttempted = true;
+    try {
+        const modelPath = path.join(__dirname, 'models', 'vosk-en-us-small');
+        if (!fs.existsSync(path.join(modelPath, 'am', 'final.mdl'))) {
+            console.warn('[voice-triggers] vosk model not found at', modelPath, '— run scripts/update.sh to install');
+            return null;
+        }
+        voskLib = require('vosk-koffi');
+        voskLib.setLogLevel(-1);
+        voskModel = new voskLib.Model(modelPath);
+        console.log('[voice-triggers] vosk model loaded');
+    } catch (err) {
+        console.error('[voice-triggers] failed to load vosk model:', err.message);
+        voskModel = null;
+    }
+    return voskModel;
+}
+
+function voiceTriggerModelReady() {
+    return ensureVoskModel() !== null;
+}
+
+function cleanupSpeakerEntry(entry) {
+    if (!entry) return;
+    try { entry.recognizer?.free?.(); } catch {}
+    try { entry.opusStream?.destroy?.(); } catch {}
+    try { entry.decoder?.destroy?.(); } catch {}
+    try { entry.downmix?.destroy?.(); } catch {}
+}
+
+function rebuildVoiceTriggerGrammar() {
+    const phrases = loadVoiceTriggers().filter(t => t.enabled).map(t => t.phrase);
+    const unique = [...new Set(phrases)];
+    // Vosk grammar: list of allowed phrases plus the "[unk]" sentinel that
+    // catches out-of-vocabulary speech. Empty array short-circuits the
+    // recognizer entirely so we don't burn CPU when nothing is configured.
+    voiceTriggerGrammarPhrases = unique.length ? [...unique, '[unk]'] : [];
+    // Tear down active recognizers so the next utterance picks up new grammar.
+    for (const [userId, entry] of voiceTriggerSpeakers) {
+        cleanupSpeakerEntry(entry);
+        voiceTriggerSpeakers.delete(userId);
+    }
+}
+
+function startVoiceTriggerCapture() {
+    if (!getVoiceTriggersEnabled()) return;
+    if (!currentConnection) return;
+    if (!ensureVoskModel()) return;
+    const receiver = currentConnection.receiver;
+    if (voiceTriggerAttachedReceiver === receiver) return; // already wired
+    voiceTriggerAttachedReceiver = receiver;
+    if (voiceTriggerGrammarPhrases.length === 0) rebuildVoiceTriggerGrammar();
+
+    receiver.speaking.on('start', (userId) => {
+        if (voiceTriggerAttachedReceiver !== receiver) return;
+        if (voiceTriggerSpeakers.has(userId)) return;
+        if (voiceTriggerGrammarPhrases.length === 0) return;
+        try {
+            const recognizer = new voskLib.Recognizer({ model: voskModel, sampleRate: 16000, grammar: voiceTriggerGrammarPhrases });
+            const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
+            const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+            const downmix = new PcmStereo48ToMono16();
+            opusStream.pipe(decoder).pipe(downmix);
+            downmix.on('data', (chunk) => {
+                try {
+                    if (recognizer.acceptWaveform(chunk)) {
+                        const r = recognizer.result();
+                        if (r && r.text) handleSpeechResult(userId, r.text);
+                    }
+                } catch (err) {
+                    console.error('[voice-triggers] recognizer error:', err.message);
+                }
+            });
+            const cleanup = () => {
+                try {
+                    const r = recognizer.finalResult();
+                    if (r && r.text) handleSpeechResult(userId, r.text);
+                } catch {}
+                cleanupSpeakerEntry(voiceTriggerSpeakers.get(userId));
+                voiceTriggerSpeakers.delete(userId);
+            };
+            opusStream.on('end', cleanup);
+            opusStream.on('error', cleanup);
+            voiceTriggerSpeakers.set(userId, { recognizer, opusStream, decoder, downmix });
+        } catch (err) {
+            console.error('[voice-triggers] failed to spin up recognizer:', err.message);
+        }
+    });
+    console.log('[voice-triggers] capture attached to receiver');
+}
+
+function stopVoiceTriggerCapture() {
+    voiceTriggerAttachedReceiver = null;
+    for (const [, entry] of voiceTriggerSpeakers) cleanupSpeakerEntry(entry);
+    voiceTriggerSpeakers.clear();
+}
+
+function handleSpeechResult(userId, text) {
+    const normalized = normalizeTriggerPhrase(text);
+    if (!normalized) return;
+    const list = loadVoiceTriggers();
+    const now = Date.now();
+    for (const trigger of list) {
+        if (!trigger.enabled) continue;
+        if (trigger.speakerUserId && trigger.speakerUserId !== String(userId)) continue;
+        if (!normalized.includes(trigger.phrase)) continue;
+        const last = voiceTriggerLastFired.get(trigger.id) || 0;
+        const cooldownMs = (trigger.cooldownSec || 0) * 1000;
+        if (now - last < cooldownMs) continue;
+        voiceTriggerLastFired.set(trigger.id, now);
+        console.log(`[voice-triggers] fired '${trigger.phrase}' for ${userId} (heard "${text}")`);
+        playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'superadmin' })
+            .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
+            .catch(err => console.error('[voice-triggers] playback error:', err.message));
+    }
+}
+
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
     if (lastChannelId) {
@@ -1491,6 +1674,7 @@ client.once('ready', () => {
             });
             currentConnection.subscribe(player);
             console.log(`🔊 Auto-joined ${channel.name}`);
+            startVoiceTriggerCapture();
         }
     }
 });
@@ -1714,6 +1898,7 @@ function processTtsQueue() {
 
 function leaveVoiceChannel() {
     if (activeGuildId) {
+        stopVoiceTriggerCapture();
         player.stop();
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
@@ -1758,6 +1943,7 @@ app.post('/api/join', requireAdmin, (req, res) => {
     console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
     saveServerState({ lastChannelId });
+    startVoiceTriggerCapture();
     res.send(`Joined ${channel.name}`);
 });
 
@@ -2904,6 +3090,126 @@ app.get('/api/superadmin/discord-members', requireSuperadmin, (req, res) => {
         console.error('[discord-members] error', err);
         res.status(500).json({ members: [], error: err.message });
     }
+});
+
+// --- Voice triggers (keyword → sound) ---
+app.get('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
+    res.json({
+        enabled: getVoiceTriggersEnabled(),
+        modelReady: voiceTriggerModelReady(),
+        triggers: loadVoiceTriggers(),
+    });
+});
+
+app.patch('/api/superadmin/voice-triggers/config', requireSuperadmin, (req, res) => {
+    const body = req.body || {};
+    if ('enabled' in body) {
+        const next = body.enabled === true;
+        setVoiceTriggersEnabled(next);
+        if (next) startVoiceTriggerCapture(); else stopVoiceTriggerCapture();
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'voice-triggers.config',
+            target: null,
+            details: { enabled: next },
+        });
+    }
+    res.json({ ok: true, enabled: getVoiceTriggersEnabled(), modelReady: voiceTriggerModelReady() });
+});
+
+app.post('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
+    const body = req.body || {};
+    const phrase = normalizeTriggerPhrase(body.phrase);
+    if (!phrase) return res.status(400).json({ error: 'Phrase is required' });
+    if (phrase.length > 64) return res.status(400).json({ error: 'Phrase too long (max 64 chars)' });
+    if (!/^[a-z0-9' ]+$/.test(phrase)) return res.status(400).json({ error: 'Phrase must be lowercase letters, numbers, spaces, or apostrophes' });
+    const soundFilename = body.soundFilename ? path.basename(String(body.soundFilename)) : null;
+    if (!soundFilename) return res.status(400).json({ error: 'soundFilename is required' });
+    if (!fs.existsSync(path.join(SOUNDS_DIR, soundFilename))) return res.status(400).json({ error: 'Sound file not found' });
+    const cooldownSec = Math.max(0, Math.min(3600, Number(body.cooldownSec) || 5));
+    const speakerUserId = body.speakerUserId ? String(body.speakerUserId).trim() : null;
+    if (speakerUserId && !/^\d{5,32}$/.test(speakerUserId)) return res.status(400).json({ error: 'speakerUserId must be a Discord snowflake or null' });
+    const list = loadVoiceTriggers();
+    const item = {
+        id: makeTriggerId(),
+        phrase,
+        soundFilename,
+        cooldownSec,
+        enabled: body.enabled !== false,
+        speakerUserId: speakerUserId || null,
+        createdBy: req.session.user.username,
+        createdAt: Date.now(),
+    };
+    list.push(item);
+    saveVoiceTriggers(list);
+    rebuildVoiceTriggerGrammar();
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'voice-triggers.create',
+        target: item.id,
+        details: { phrase, soundFilename, cooldownSec, speakerUserId },
+    });
+    res.json({ ok: true, trigger: item });
+});
+
+app.patch('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) => {
+    const id = String(req.params.id || '');
+    const list = loadVoiceTriggers();
+    const idx = list.findIndex(t => t.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Trigger not found' });
+    const body = req.body || {};
+    const patch = {};
+    if ('phrase' in body) {
+        const phrase = normalizeTriggerPhrase(body.phrase);
+        if (!phrase) return res.status(400).json({ error: 'Phrase is required' });
+        if (phrase.length > 64) return res.status(400).json({ error: 'Phrase too long' });
+        if (!/^[a-z0-9' ]+$/.test(phrase)) return res.status(400).json({ error: 'Phrase must be lowercase letters, numbers, spaces, or apostrophes' });
+        patch.phrase = phrase;
+    }
+    if ('soundFilename' in body) {
+        const f = body.soundFilename ? path.basename(String(body.soundFilename)) : null;
+        if (!f) return res.status(400).json({ error: 'soundFilename is required' });
+        if (!fs.existsSync(path.join(SOUNDS_DIR, f))) return res.status(400).json({ error: 'Sound file not found' });
+        patch.soundFilename = f;
+    }
+    if ('cooldownSec' in body) patch.cooldownSec = Math.max(0, Math.min(3600, Number(body.cooldownSec) || 0));
+    if ('enabled' in body) patch.enabled = body.enabled === true;
+    if ('speakerUserId' in body) {
+        const id2 = body.speakerUserId ? String(body.speakerUserId).trim() : null;
+        if (id2 && !/^\d{5,32}$/.test(id2)) return res.status(400).json({ error: 'speakerUserId must be a Discord snowflake or null' });
+        patch.speakerUserId = id2 || null;
+    }
+    list[idx] = { ...list[idx], ...patch };
+    saveVoiceTriggers(list);
+    rebuildVoiceTriggerGrammar();
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'voice-triggers.update',
+        target: id,
+        details: patch,
+    });
+    res.json({ ok: true, trigger: list[idx] });
+});
+
+app.delete('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) => {
+    const id = String(req.params.id || '');
+    const list = loadVoiceTriggers();
+    const idx = list.findIndex(t => t.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Trigger not found' });
+    const removed = list.splice(idx, 1)[0];
+    saveVoiceTriggers(list);
+    rebuildVoiceTriggerGrammar();
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'voice-triggers.delete',
+        target: id,
+        details: { phrase: removed.phrase },
+    });
+    res.json({ ok: true });
 });
 
 app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {

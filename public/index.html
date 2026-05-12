@@ -1390,6 +1390,7 @@
                 <button type="button" class="superadmin-tab" data-panel="activity" onclick="switchSuperadminTab('activity')">Activity</button>
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
                 <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Entrance / Exit</button>
+                <button type="button" class="superadmin-tab" data-panel="voiceTriggers" onclick="switchSuperadminTab('voiceTriggers')">Voice Triggers</button>
             </div>
 
             <div id="superadminPanelAccess" class="superadmin-panel active">
@@ -1852,6 +1853,57 @@
                             <tbody id="entranceExitBody"></tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+
+            <div id="superadminPanelVoiceTriggers" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Global</div>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" id="voiceTriggersGlobalToggle" onchange="setVoiceTriggersGlobal(this.checked)">
+                        <span>Listen to channel speech and play sounds on configured phrases</span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When enabled, the bot transcribes voice in its current channel using a small on-device English model and fires the mapped sound on a phrase match. No audio is sent off-box.</p>
+                    <p id="voiceTriggersModelStatus" style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0;"></p>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Add trigger</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchVoiceTriggers()">Refresh</button>
+                    </div>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.5rem;">Phrases are matched case-insensitively as substrings of recognized speech. Keep them short — "airhorn", "wow" — and pick a cooldown long enough that the bot doesn't spam.</p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 6rem 1fr 5rem; gap: 0.4rem; align-items: end;">
+                        <div class="field" style="margin:0;"><label for="vtNewPhrase">Phrase</label><input type="text" id="vtNewPhrase" placeholder="e.g. airhorn" maxlength="64"></div>
+                        <div class="field" style="margin:0;"><label for="vtNewSound">Sound</label><select id="vtNewSound"></select></div>
+                        <div class="field" style="margin:0;"><label for="vtNewCooldown">Cooldown (s)</label><input type="number" id="vtNewCooldown" min="0" max="3600" value="5"></div>
+                        <div class="field" style="margin:0;"><label for="vtNewSpeaker">Speaker (optional)</label><select id="vtNewSpeaker"><option value="">— anyone —</option></select></div>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="addVoiceTrigger()">Add</button>
+                    </div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Triggers</div>
+                    <div style="overflow-x:auto;">
+                        <table class="guest-history-table" style="width:100%; font-size: 0.85rem; border-collapse: collapse; table-layout: fixed;">
+                            <colgroup>
+                                <col style="width: 14rem">
+                                <col style="width: 14rem">
+                                <col style="width: 6rem">
+                                <col style="width: 12rem">
+                                <col style="width: 5rem">
+                                <col style="width: 5rem">
+                            </colgroup>
+                            <thead><tr>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Phrase</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Sound</th>
+                                <th style="text-align:right; padding: 0.35rem 0.5rem;">Cooldown (s)</th>
+                                <th style="text-align:left; padding: 0.35rem 0.5rem;">Speaker</th>
+                                <th style="text-align:center; padding: 0.35rem 0.5rem;">Enabled</th>
+                                <th style="text-align:right; padding: 0.35rem 0.5rem;"></th>
+                            </tr></thead>
+                            <tbody id="voiceTriggersBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="voiceTriggersEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No triggers yet</div>
                 </div>
             </div>
         </div>
@@ -3120,6 +3172,7 @@
             if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
             if (panelId === 'guests') { fetchCooldownOverrides(); }
             if (panelId === 'entranceExit') fetchEntranceExitAdmin();
+            if (panelId === 'voiceTriggers') fetchVoiceTriggers();
         }
 
         function clearAuditFilters() {
@@ -7753,6 +7806,143 @@
             if (!res || !res.ok) {
                 alert('Failed to update global toggle');
                 fetchEntranceExitAdmin();
+            }
+        }
+
+        // ---------------- Voice triggers (superadmin) ----------------
+        async function fetchVoiceTriggers() {
+            const [cfgRes, membersRes] = await Promise.all([
+                api('/api/superadmin/voice-triggers'),
+                api('/api/superadmin/discord-members'),
+            ]);
+            if (!cfgRes || !cfgRes.ok) return;
+            const cfg = await cfgRes.json();
+            const membersData = (membersRes && membersRes.ok) ? await membersRes.json() : { members: [] };
+            _discordMembersCache = Array.isArray(membersData.members) ? membersData.members : [];
+            const toggle = document.getElementById('voiceTriggersGlobalToggle');
+            if (toggle) toggle.checked = cfg.enabled === true;
+            const status = document.getElementById('voiceTriggersModelStatus');
+            if (status) status.textContent = cfg.modelReady ? 'Speech model loaded.' : 'Speech model not loaded — run scripts/update.sh on the host to install vosk-en-us-small.';
+            _populateVoiceTriggerSelects();
+            _renderVoiceTriggerRows(Array.isArray(cfg.triggers) ? cfg.triggers : []);
+        }
+
+        function _populateVoiceTriggerSelects() {
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const soundOptions = '<option value="">— pick sound —</option>' + soundsList.map(s => {
+                const fn = s.filename || s;
+                const dn = s.displayName || fn;
+                return '<option value="' + esc(fn) + '">' + esc(dn) + '</option>';
+            }).join('');
+            const speakerOptions = '<option value="">— anyone —</option>' + _discordMembersCache.map(m =>
+                '<option value="' + esc(m.id) + '">' + esc(m.displayName || m.username || m.id) + '</option>'
+            ).join('');
+            const soundSel = document.getElementById('vtNewSound');
+            const speakerSel = document.getElementById('vtNewSpeaker');
+            if (soundSel) soundSel.innerHTML = soundOptions;
+            if (speakerSel) speakerSel.innerHTML = speakerOptions;
+        }
+
+        function _renderVoiceTriggerRows(triggers) {
+            const tbody = document.getElementById('voiceTriggersBody');
+            const empty = document.getElementById('voiceTriggersEmpty');
+            if (!tbody) return;
+            const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            if (!triggers.length) {
+                tbody.innerHTML = '';
+                if (empty) empty.style.display = '';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            const soundOptions = '<option value="">— pick sound —</option>' + soundsList.map(s => {
+                const fn = s.filename || s;
+                const dn = s.displayName || fn;
+                return '<option value="' + esc(fn) + '">' + esc(dn) + '</option>';
+            }).join('');
+            const speakerOptions = '<option value="">— anyone —</option>' + _discordMembersCache.map(m =>
+                '<option value="' + esc(m.id) + '">' + esc(m.displayName || m.username || m.id) + '</option>'
+            ).join('');
+            tbody.innerHTML = triggers.map(t => {
+                const speakerLabel = t.speakerUserId
+                    ? (_discordMembersCache.find(m => m.id === t.speakerUserId)?.displayName || t.speakerUserId)
+                    : '';
+                return '<tr data-id="' + esc(t.id) + '">'
+                    + '<td style="padding: 0.35rem 0.5rem;"><input type="text" class="vt-phrase" maxlength="64" value="' + esc(t.phrase) + '" style="width:100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;"></td>'
+                    + '<td style="padding: 0.35rem 0.5rem;"><select class="vt-sound" style="width:100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;">' + soundOptions + '</select></td>'
+                    + '<td style="padding: 0.35rem 0.5rem; text-align:right;"><input type="number" class="vt-cooldown" min="0" max="3600" value="' + esc(t.cooldownSec ?? 5) + '" style="width:4rem; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem; text-align:right;"></td>'
+                    + '<td style="padding: 0.35rem 0.5rem;"><select class="vt-speaker" style="width:100%; padding: 0.25rem 0.4rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.8rem;">' + speakerOptions + '</select>' + (speakerLabel && !_discordMembersCache.find(m => m.id === t.speakerUserId) ? '<div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.2rem;">id ' + esc(t.speakerUserId) + ' (not in channel)</div>' : '') + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem; text-align:center;"><input type="checkbox" class="vt-enabled"' + (t.enabled !== false ? ' checked' : '') + '></td>'
+                    + '<td style="padding: 0.35rem 0.5rem; text-align:right;"><button type="button" class="btn btn-ghost btn-sm vt-delete">Delete</button></td>'
+                    + '</tr>';
+            }).join('');
+            triggers.forEach(t => {
+                const row = tbody.querySelector('tr[data-id="' + CSS.escape(t.id) + '"]');
+                if (!row) return;
+                row.querySelector('.vt-sound').value = t.soundFilename || '';
+                row.querySelector('.vt-speaker').value = _discordMembersCache.find(m => m.id === t.speakerUserId) ? t.speakerUserId : '';
+                row.querySelector('.vt-phrase').addEventListener('change', (e) => patchVoiceTrigger(t.id, { phrase: e.target.value }));
+                row.querySelector('.vt-sound').addEventListener('change', (e) => patchVoiceTrigger(t.id, { soundFilename: e.target.value || null }));
+                row.querySelector('.vt-cooldown').addEventListener('change', (e) => patchVoiceTrigger(t.id, { cooldownSec: Number(e.target.value) || 0 }));
+                row.querySelector('.vt-speaker').addEventListener('change', (e) => patchVoiceTrigger(t.id, { speakerUserId: e.target.value || null }));
+                row.querySelector('.vt-enabled').addEventListener('change', (e) => patchVoiceTrigger(t.id, { enabled: !!e.target.checked }));
+                row.querySelector('.vt-delete').addEventListener('click', () => deleteVoiceTrigger(t.id, t.phrase));
+            });
+        }
+
+        async function addVoiceTrigger() {
+            const phrase = (document.getElementById('vtNewPhrase')?.value || '').trim();
+            const soundFilename = document.getElementById('vtNewSound')?.value || '';
+            const cooldownSec = Number(document.getElementById('vtNewCooldown')?.value) || 0;
+            const speakerUserId = document.getElementById('vtNewSpeaker')?.value || null;
+            if (!phrase) return alert('Phrase is required');
+            if (!soundFilename) return alert('Pick a sound');
+            const res = await api('/api/superadmin/voice-triggers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phrase, soundFilename, cooldownSec, speakerUserId }),
+            });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                return alert(err.error || 'Failed to add trigger');
+            }
+            document.getElementById('vtNewPhrase').value = '';
+            document.getElementById('vtNewSound').value = '';
+            document.getElementById('vtNewCooldown').value = '5';
+            document.getElementById('vtNewSpeaker').value = '';
+            fetchVoiceTriggers();
+        }
+
+        async function patchVoiceTrigger(id, patch) {
+            const res = await api('/api/superadmin/voice-triggers/' + encodeURIComponent(id), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch),
+            });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                alert(err.error || 'Failed to update trigger');
+                fetchVoiceTriggers();
+            }
+        }
+
+        async function deleteVoiceTrigger(id, phrase) {
+            if (!confirm('Delete trigger "' + phrase + '"?')) return;
+            const res = await api('/api/superadmin/voice-triggers/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (!res || !res.ok) {
+                alert('Failed to delete trigger');
+            }
+            fetchVoiceTriggers();
+        }
+
+        async function setVoiceTriggersGlobal(enabled) {
+            const res = await api('/api/superadmin/voice-triggers/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: !!enabled }),
+            });
+            if (!res || !res.ok) {
+                alert('Failed to update global toggle');
+                fetchVoiceTriggers();
             }
         }
 
