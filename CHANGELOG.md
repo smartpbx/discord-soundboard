@@ -8,6 +8,7 @@ see `CLAUDE.md` for conventions.
 ## 2026-05-11
 - **Voice triggers** — Superadmin → Voice Triggers configures phrase-to-sound mappings; the bot listens to its current voice channel and plays the mapped sound when it hears the phrase. Speech recognition runs on-device (vosk small English model, grammar-restricted to your configured phrases), so no audio leaves the host. Each trigger has its own cooldown and an optional speaker filter so a phrase can be scoped to one specific Discord user. The model installs automatically on `scripts/update.sh` (~40 MB one-time download).
 - **Bot no longer self-deafens** — voice connections now join with `selfDeaf: false` so the bot can hear the channel for voice triggers (previously joined deafened by default).
+- **Global voice-trigger cooldown** — Voice Triggers tab adds a "Global cooldown" input that throttles all trigger fires combined, on top of each row's per-trigger cooldown. 0 disables.
 
 ## 2026-04-28
 - **Delete sounds permission** — Superadmin → Access & Limits can allow users and/or admins to permanently delete library sounds (same archive behavior as before). Superadmin → Users → Overrides adds a per-account “Delete sounds” override. The edit-panel Delete button follows the same rules; guests still cannot delete.

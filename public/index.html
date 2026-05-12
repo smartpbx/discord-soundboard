@@ -1864,7 +1864,12 @@
                         <span>Listen to channel speech and play sounds on configured phrases</span>
                     </label>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When enabled, the bot transcribes voice in its current channel using a small on-device English model and fires the mapped sound on a phrase match. No audio is sent off-box.</p>
-                    <p id="voiceTriggersModelStatus" style="font-size: 0.8rem; color: var(--text-muted); margin: 0.3rem 0 0;"></p>
+                    <div class="field" style="margin: 0.6rem 0 0; max-width: 16rem;">
+                        <label for="voiceTriggersGlobalCooldown">Global cooldown (s)</label>
+                        <input type="number" id="voiceTriggersGlobalCooldown" min="0" max="3600" value="0" onchange="setVoiceTriggersGlobalCooldown(this.value)" style="width:100%; box-sizing:border-box;">
+                        <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Minimum seconds between any two trigger fires combined. 0 disables. Per-trigger cooldowns still apply on top.</div>
+                    </div>
+                    <p id="voiceTriggersModelStatus" style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0;"></p>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
@@ -7821,6 +7826,8 @@
             _discordMembersCache = Array.isArray(membersData.members) ? membersData.members : [];
             const toggle = document.getElementById('voiceTriggersGlobalToggle');
             if (toggle) toggle.checked = cfg.enabled === true;
+            const cdInput = document.getElementById('voiceTriggersGlobalCooldown');
+            if (cdInput) cdInput.value = Number(cfg.globalCooldownSec) || 0;
             const status = document.getElementById('voiceTriggersModelStatus');
             if (status) status.textContent = cfg.modelReady ? 'Speech model loaded.' : 'Speech model not loaded — run scripts/update.sh on the host to install vosk-en-us-small.';
             _populateVoiceTriggerSelects();
@@ -7942,6 +7949,19 @@
             });
             if (!res || !res.ok) {
                 alert('Failed to update global toggle');
+                fetchVoiceTriggers();
+            }
+        }
+
+        async function setVoiceTriggersGlobalCooldown(sec) {
+            const n = Math.max(0, Math.min(3600, Number(sec) || 0));
+            const res = await api('/api/superadmin/voice-triggers/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ globalCooldownSec: n }),
+            });
+            if (!res || !res.ok) {
+                alert('Failed to update global cooldown');
                 fetchVoiceTriggers();
             }
         }

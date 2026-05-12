@@ -571,6 +571,15 @@ function setVoiceTriggersEnabled(v) {
     d.voiceTriggersEnabled = v === true;
     saveGuestData(d);
 }
+function getVoiceTriggersGlobalCooldownSec() {
+    const n = Number(loadGuestData().voiceTriggersGlobalCooldownSec);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+function setVoiceTriggersGlobalCooldownSec(sec) {
+    const d = loadGuestData();
+    d.voiceTriggersGlobalCooldownSec = Math.max(0, Math.min(3600, Number(sec) || 0));
+    saveGuestData(d);
+}
 function loadVoiceTriggers() {
     const arr = loadGuestData().voiceTriggers;
     return Array.isArray(arr) ? arr : [];
@@ -1503,6 +1512,7 @@ let voskLib = null;
 let voiceTriggerAttachedReceiver = null;
 const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, decoder, downmix }
 const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
+let voiceTriggerGlobalLastFired = 0;     // ms timestamp of last fire across all triggers
 let voiceTriggerGrammarPhrases = []; // array of strings; vosk wraps OOV speech in [unk]
 
 // Decimate 48k stereo s16le → 16k mono s16le (3:1 group, simple average).
@@ -1633,6 +1643,8 @@ function handleSpeechResult(userId, text) {
     if (!normalized) return;
     const list = loadVoiceTriggers();
     const now = Date.now();
+    const globalCooldownMs = getVoiceTriggersGlobalCooldownSec() * 1000;
+    if (globalCooldownMs && now - voiceTriggerGlobalLastFired < globalCooldownMs) return;
     for (const trigger of list) {
         if (!trigger.enabled) continue;
         if (trigger.speakerUserId && trigger.speakerUserId !== String(userId)) continue;
@@ -1641,10 +1653,13 @@ function handleSpeechResult(userId, text) {
         const cooldownMs = (trigger.cooldownSec || 0) * 1000;
         if (now - last < cooldownMs) continue;
         voiceTriggerLastFired.set(trigger.id, now);
+        voiceTriggerGlobalLastFired = now;
         console.log(`[voice-triggers] fired '${trigger.phrase}' for ${userId} (heard "${text}")`);
         playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'superadmin' })
             .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
             .catch(err => console.error('[voice-triggers] playback error:', err.message));
+        // After firing one trigger, respect global cooldown for subsequent matches in this utterance.
+        if (globalCooldownMs) break;
     }
 }
 
@@ -3100,6 +3115,7 @@ app.get('/api/superadmin/discord-members', requireSuperadmin, (req, res) => {
 app.get('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
     res.json({
         enabled: getVoiceTriggersEnabled(),
+        globalCooldownSec: getVoiceTriggersGlobalCooldownSec(),
         modelReady: voiceTriggerModelReady(),
         triggers: loadVoiceTriggers(),
     });
@@ -3107,19 +3123,32 @@ app.get('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
 
 app.patch('/api/superadmin/voice-triggers/config', requireSuperadmin, (req, res) => {
     const body = req.body || {};
+    const details = {};
     if ('enabled' in body) {
         const next = body.enabled === true;
         setVoiceTriggersEnabled(next);
         if (next) startVoiceTriggerCapture(); else stopVoiceTriggerCapture();
+        details.enabled = next;
+    }
+    if ('globalCooldownSec' in body) {
+        setVoiceTriggersGlobalCooldownSec(body.globalCooldownSec);
+        details.globalCooldownSec = getVoiceTriggersGlobalCooldownSec();
+    }
+    if (Object.keys(details).length) {
         statsDb.recordAdminAction({
             actor: req.session.user.username,
             actorRole: req.session.user.role,
             action: 'voice-triggers.config',
             target: null,
-            details: { enabled: next },
+            details,
         });
     }
-    res.json({ ok: true, enabled: getVoiceTriggersEnabled(), modelReady: voiceTriggerModelReady() });
+    res.json({
+        ok: true,
+        enabled: getVoiceTriggersEnabled(),
+        globalCooldownSec: getVoiceTriggersGlobalCooldownSec(),
+        modelReady: voiceTriggerModelReady(),
+    });
 });
 
 app.post('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
