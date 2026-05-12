@@ -974,6 +974,10 @@
                         <span class="top-bar-toggle-label">Voice activation</span>
                         <span class="toggle-switch"><input type="checkbox" id="voiceTriggersMenuToggle" onchange="setVoiceTriggersGlobal(this.checked)"><span class="toggle-slider"></span></span>
                     </label>
+                    <label class="top-bar-toggle superadmin-only hidden" title="Allow /votekick and /votetimeout slash commands in Discord" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding: 0.3rem 0; cursor:pointer;">
+                        <span class="top-bar-toggle-label">Voting (/votekick · /votetimeout)</span>
+                        <span class="toggle-switch"><input type="checkbox" id="votingMenuToggle" onchange="setVotingEnabledFromMenu(this.checked)"><span class="toggle-slider"></span></span>
+                    </label>
                 </div>
             </div>
             <div class="top-bar-voice admin-only hidden" id="voiceConnectedBar">
@@ -6791,21 +6795,38 @@
             const mp = document.getElementById('multiPlayMenuToggle');
             const mpExisting = document.getElementById('multiPlayToggle');
             if (mp) mp.checked = !!(typeof multiPlayActive !== 'undefined' ? multiPlayActive : (mpExisting && mpExisting.checked));
-            // Voice activation lives only in guest.json; fetch fresh in case the
-            // Voice Triggers tab hasn't been opened this session.
+            // Voice activation + voting live in guest.json; fetch fresh in case
+            // the relevant tabs haven't been opened this session.
             if (user && user.role === 'superadmin') {
                 try {
-                    const res = await api('/api/superadmin/voice-triggers');
-                    if (res && res.ok) {
-                        const cfg = await res.json();
-                        const vt = document.getElementById('voiceTriggersMenuToggle');
-                        if (vt) vt.checked = cfg.enabled === true;
-                        // Mirror into the Voice Triggers tab if it's been rendered
-                        const tab = document.getElementById('voiceTriggersGlobalToggle');
-                        if (tab) tab.checked = cfg.enabled === true;
+                    const [vtRes, vRes] = await Promise.all([
+                        api('/api/superadmin/voice-triggers'),
+                        api('/api/superadmin/voting'),
+                    ]);
+                    if (vtRes && vtRes.ok) {
+                        const cfg = await vtRes.json();
+                        const m = document.getElementById('voiceTriggersMenuToggle');
+                        const t = document.getElementById('voiceTriggersGlobalToggle');
+                        if (m) m.checked = cfg.enabled === true;
+                        if (t) t.checked = cfg.enabled === true;
+                    }
+                    if (vRes && vRes.ok) {
+                        const cfg = await vRes.json();
+                        const m = document.getElementById('votingMenuToggle');
+                        const t = document.getElementById('votingEnabled');
+                        if (m) m.checked = cfg.enabled === true;
+                        if (t) t.checked = cfg.enabled === true;
                     }
                 } catch {}
             }
+        }
+
+        async function setVotingEnabledFromMenu(enabled) {
+            await patchVotingConfig({ enabled: !!enabled });
+            const m = document.getElementById('votingMenuToggle');
+            const t = document.getElementById('votingEnabled');
+            if (m) m.checked = !!enabled;
+            if (t) t.checked = !!enabled;
         }
 
         var vs = document.getElementById('volumeSlider');

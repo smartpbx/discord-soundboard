@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-05-12
+- **Voting toggle in the Controls menu** — the top-bar ⚙ Controls popover gains a "Voting (/votekick · /votetimeout)" switch (superadmin-only), mirrored with the toggle in Superadmin → Voting.
+
 ## 2026-05-11
 - **Voice triggers** — Superadmin → Voice Triggers configures phrase-to-sound mappings; the bot listens to its current voice channel and plays the mapped sound when it hears the phrase. Speech recognition runs on-device (vosk small English model, grammar-restricted to your configured phrases), so no audio leaves the host. Each trigger has its own cooldown and an optional speaker filter so a phrase can be scoped to one specific Discord user. The model installs automatically on `scripts/update.sh` (~40 MB one-time download).
 - **Bot no longer self-deafens** — voice connections now join with `selfDeaf: false` so the bot can hear the channel for voice triggers (previously joined deafened by default).
