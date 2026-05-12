@@ -11,6 +11,7 @@ see `CLAUDE.md` for conventions.
 - **Global voice-trigger cooldown** — Voice Triggers tab adds a "Global cooldown" input that throttles all trigger fires combined, on top of each row's per-trigger cooldown. 0 disables.
 - **Voice trigger activity log** — Voice Triggers tab gains a "Recent activity" table showing the last 50 matched-phrase events: when, speaker, phrase, transcript, sound, and status (fired vs. cooldown-skipped vs. global-cooldown-skipped). Useful for tuning cooldowns and spotting false positives.
 - **Controls menu in the top bar** — the inline "Only admins / Only superadmin" toggles fold into a single ⚙ Controls button that opens a popover containing those toggles plus Multi-play and Voice activation. The Multi-play card section and the Voice Triggers tab's Voice-activation toggle still work as before; flipping any of the four stays in sync across both surfaces.
+- **Voice triggers now log the full sentence** — vosk runs open-vocabulary instead of grammar-restricted so the activity log's Transcript column shows the whole heard sentence (e.g. "this song is so bad") rather than just the matched word. Trigger matching is unchanged — phrases are substring-matched against the transcript.
 
 ## 2026-04-28
 - **Delete sounds permission** — Superadmin → Access & Limits can allow users and/or admins to permanently delete library sounds (same archive behavior as before). Superadmin → Users → Overrides adds a per-account “Delete sounds” override. The edit-panel Delete button follows the same rules; guests still cannot delete.

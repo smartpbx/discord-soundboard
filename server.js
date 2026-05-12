@@ -1513,7 +1513,7 @@ let voiceTriggerAttachedReceiver = null;
 const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, decoder, downmix }
 const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
 let voiceTriggerGlobalLastFired = 0;     // ms timestamp of last fire across all triggers
-let voiceTriggerGrammarPhrases = []; // array of strings; vosk wraps OOV speech in [unk]
+let voiceTriggerActivePhrases = []; // enabled phrases; empty = short-circuit (no recognizer)
 const VOICE_TRIGGER_LOG_MAX = 50;
 const voiceTriggerLog = []; // newest last; capped at VOICE_TRIGGER_LOG_MAX
 
@@ -1581,13 +1581,13 @@ function cleanupSpeakerEntry(entry) {
 }
 
 function rebuildVoiceTriggerGrammar() {
+    // Open-vocabulary recognition so the activity log can show the full
+    // transcribed sentence (a grammar-restricted recognizer can only emit
+    // configured phrases). Substring matching against the full transcript
+    // happens in handleSpeechResult. The phrases list is kept only so an
+    // empty-list short-circuit avoids running vosk for nothing.
     const phrases = loadVoiceTriggers().filter(t => t.enabled).map(t => t.phrase);
-    const unique = [...new Set(phrases)];
-    // Vosk grammar: list of allowed phrases plus the "[unk]" sentinel that
-    // catches out-of-vocabulary speech. Empty array short-circuits the
-    // recognizer entirely so we don't burn CPU when nothing is configured.
-    voiceTriggerGrammarPhrases = unique.length ? [...unique, '[unk]'] : [];
-    // Tear down active recognizers so the next utterance picks up new grammar.
+    voiceTriggerActivePhrases = [...new Set(phrases)];
     for (const [userId, entry] of voiceTriggerSpeakers) {
         cleanupSpeakerEntry(entry);
         voiceTriggerSpeakers.delete(userId);
@@ -1601,14 +1601,14 @@ function startVoiceTriggerCapture() {
     const receiver = currentConnection.receiver;
     if (voiceTriggerAttachedReceiver === receiver) return; // already wired
     voiceTriggerAttachedReceiver = receiver;
-    if (voiceTriggerGrammarPhrases.length === 0) rebuildVoiceTriggerGrammar();
+    if (voiceTriggerActivePhrases.length === 0) rebuildVoiceTriggerGrammar();
 
     receiver.speaking.on('start', (userId) => {
         if (voiceTriggerAttachedReceiver !== receiver) return;
         if (voiceTriggerSpeakers.has(userId)) return;
-        if (voiceTriggerGrammarPhrases.length === 0) return;
+        if (voiceTriggerActivePhrases.length === 0) return;
         try {
-            const recognizer = new voskLib.Recognizer({ model: voskModel, sampleRate: 16000, grammar: voiceTriggerGrammarPhrases });
+            const recognizer = new voskLib.Recognizer({ model: voskModel, sampleRate: 16000 });
             const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
             const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
             const downmix = new PcmStereo48ToMono16();
