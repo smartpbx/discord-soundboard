@@ -1,0 +1,37 @@
+# Secrets — never include in build context
+.env
+.env.*
+
+# Local-only state
+data/
+sounds/
+guest.json
+pending.json
+state.json
+models/
+tmp/
+
+# Generated / caches
+node_modules/
+tts-server/.venv/
+tts-server/__pycache__/
+tts-server/engines/__pycache__/
+tts-server/models/
+data/tts-cache/
+
+# Build artefacts
+*.log
+.DS_Store
+Thumbs.db
+
+# Git / IDE
+.git/
+.gitignore
+.claude/
+.codex/
+.vscode/
+.idea/
+
+# Local one-off scripts under the repo root
+run_*.sh
+validate_*.py

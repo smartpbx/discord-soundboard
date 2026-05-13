@@ -218,9 +218,10 @@ function setGuestMaxDuration(sec) {
     saveGuestData(d);
 }
 
+// With `trust proxy` set, Express resolves req.ip from the leftmost
+// X-Forwarded-For but only when the immediate hop matches a trusted proxy.
+// Direct hits to the bot (bypassing Caddy) can't spoof the header anymore.
 function getClientIP(req) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) return String(forwarded).split(',')[0].trim();
     return req.ip || req.connection?.remoteAddress || 'unknown';
 }
 
@@ -1108,14 +1109,34 @@ app.get('/api/changelog', (req, res) => {
     }
 });
 
+const SESSION_SECRET = (process.env.SESSION_SECRET || '').trim();
+if (!SESSION_SECRET || SESSION_SECRET === 'soundboard-secret-change-me') {
+    console.error('[fatal] SESSION_SECRET env var is required (and must not be the placeholder). Generate one with: openssl rand -hex 32');
+    process.exit(1);
+}
+
+// Behind Caddy (CT 106) reverse proxy. Without this, req.ip is the proxy's
+// loopback address and X-Forwarded-For is unverified, so any direct hit
+// could spoof the header to dodge IP-based cooldowns / blocks.
+app.set('trust proxy', 1);
 app.use(express.static('public'));
 app.use(express.json());
 app.use(require('cookie-parser')());
 app.use(require('express-session')({
-    secret: process.env.SESSION_SECRET || 'soundboard-secret-change-me',
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 },
+    cookie: {
+        httpOnly: true,
+        // 'auto' = secure when the connection is HTTPS (production behind
+        // Caddy), insecure for local dev over plain HTTP.
+        secure: 'auto',
+        // SameSite=lax stops the basic CSRF case (external site POSTs to
+        // /api/play, /api/superadmin/* etc.) while still allowing top-level
+        // navigation back into the app.
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
 }));
 
 
@@ -1193,8 +1214,9 @@ function addApprovedUser(username, password, role) {
     const un = String(username).trim().toLowerCase();
     if (!un || !password) return false;
     const r = (role === 'admin' ? 'admin' : 'user');
-    USERS.set(un, { username: un, password: password, role: r, mustChangePassword: false, disabled: false });
-    approvedSignups.push({ username: un, password, role: r, mustChangePassword: false, disabled: false });
+    const stored = ensureHashedPassword(password);
+    USERS.set(un, { username: un, password: stored, role: r, mustChangePassword: false, disabled: false });
+    approvedSignups.push({ username: un, password: stored, role: r, mustChangePassword: false, disabled: false });
     saveApprovedSignups(approvedSignups);
     return true;
 }
@@ -1264,11 +1286,12 @@ function updateManagedUserPassword(username, newPassword, forceChange) {
     const idx = approvedSignups.findIndex(u => u.username === un);
     if (idx < 0) return false;
     if (!newPassword || newPassword.length < 6) return false;
-    approvedSignups[idx].password = newPassword;
+    const stored = hashPassword(newPassword);
+    approvedSignups[idx].password = stored;
     approvedSignups[idx].mustChangePassword = forceChange === true;
     const entry = USERS.get(un);
     if (entry) {
-        entry.password = newPassword;
+        entry.password = stored;
         entry.mustChangePassword = forceChange === true;
     }
     saveApprovedSignups(approvedSignups);
@@ -1277,14 +1300,17 @@ function updateManagedUserPassword(username, newPassword, forceChange) {
 function updateOwnPassword(username, currentPassword, newPassword) {
     const un = String(username).trim().toLowerCase();
     const entry = USERS.get(un);
-    if (!entry || entry.password !== currentPassword) return false;
+    if (!entry) return false;
     if (envUsernames.has(un)) return false;
+    const { valid } = verifyPassword(currentPassword, entry.password);
+    if (!valid) return false;
     const idx = approvedSignups.findIndex(u => u.username === un);
     if (idx < 0) return false;
     if (!newPassword || newPassword.length < 6) return false;
-    approvedSignups[idx].password = newPassword;
+    const stored = hashPassword(newPassword);
+    approvedSignups[idx].password = stored;
     approvedSignups[idx].mustChangePassword = false;
-    entry.password = newPassword;
+    entry.password = stored;
     entry.mustChangePassword = false;
     saveApprovedSignups(approvedSignups);
     return true;
@@ -1449,15 +1475,67 @@ function requireSuperadmin(req, res, next) {
     next();
 }
 
+// Passwords are stored as `scrypt:<saltHex>:<hashHex>`. Legacy plaintext
+// rows (anything that doesn't start with `scrypt:`) are accepted on a one-
+// time basis at next login and silently upgraded to a hash. Env-sourced
+// passwords (.env USERS / *_PASSWORD) stay plaintext at rest — they're
+// rewritten on every boot from the env file, so persistence is moot.
+function hashPassword(plain) {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(String(plain), salt, 64);
+    return 'scrypt:' + salt.toString('hex') + ':' + hash.toString('hex');
+}
+function ensureHashedPassword(value) {
+    if (typeof value === 'string' && value.startsWith('scrypt:')) return value;
+    return hashPassword(value);
+}
+function verifyPassword(plain, stored) {
+    if (!stored) return { valid: false, needsUpgrade: false };
+    const s = String(stored);
+    if (s.startsWith('scrypt:')) {
+        const parts = s.split(':');
+        if (parts.length !== 3) return { valid: false, needsUpgrade: false };
+        let actual;
+        try {
+            const salt = Buffer.from(parts[1], 'hex');
+            const expected = Buffer.from(parts[2], 'hex');
+            actual = crypto.scryptSync(String(plain), salt, expected.length);
+            const valid = actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+            return { valid, needsUpgrade: false };
+        } catch {
+            return { valid: false, needsUpgrade: false };
+        }
+    }
+    // Legacy plaintext — constant-time compare to keep the path uniform.
+    const plainBuf = Buffer.from(String(plain), 'utf8');
+    const storedBuf = Buffer.from(s, 'utf8');
+    const valid = plainBuf.length === storedBuf.length && crypto.timingSafeEqual(plainBuf, storedBuf);
+    return { valid, needsUpgrade: valid };
+}
+
 function checkCredentials(username, password) {
     const u = username ? String(username).trim().toLowerCase() : '';
     const p = String(password || '');
     const entry = USERS.get(u);
-    if (entry && entry.password === p) {
-        if (entry.disabled === true) return { disabled: true };
-        return { username: entry.username, role: entry.role, mustChangePassword: entry.mustChangePassword === true };
+    if (!entry) return null;
+    const { valid, needsUpgrade } = verifyPassword(p, entry.password);
+    if (!valid) return null;
+    if (entry.disabled === true) return { disabled: true };
+    if (needsUpgrade && !envUsernames.has(u)) {
+        try {
+            const newHash = hashPassword(p);
+            entry.password = newHash;
+            const idx = approvedSignups.findIndex(x => String(x.username || '').toLowerCase() === u);
+            if (idx >= 0) {
+                approvedSignups[idx].password = newHash;
+                saveApprovedSignups(approvedSignups);
+                console.log(`[auth] migrated plaintext password to scrypt for ${u}`);
+            }
+        } catch (err) {
+            console.warn('[auth] password hash migration failed:', err.message);
+        }
     }
-    return null;
+    return { username: entry.username, role: entry.role, mustChangePassword: entry.mustChangePassword === true };
 }
 
 const client = new Client({ 
@@ -2169,7 +2247,10 @@ function handleSpeechResult(userId, text, firedThisUtterance = null) {
         const logEntry = recordVoiceTriggerEvent({ ...baseEvent, status: 'fired' });
         if (firedThisUtterance) firedThisUtterance.set(trigger.id, logEntry);
         console.log(`[voice-triggers] fired '${trigger.phrase}' for ${userId} (heard "${text}")`);
-        playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'superadmin' })
+        // Voice triggers play as a regular 'user' so they obey the admin-only
+        // / superadmin-only gates configured for the soundboard. Earlier this
+        // ran with role 'superadmin', which silently bypassed every gate.
+        playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'user' })
             .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
             .catch(err => console.error('[voice-triggers] playback error:', err.message));
         // After firing one trigger, respect global cooldown for subsequent matches in this utterance.
@@ -2302,11 +2383,50 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     }
 });
 
+// Per-IP login attempt tracker. 10 failed attempts in 10 minutes locks the
+// IP out for the rest of the window. Memory-only; cleared on restart, which
+// is fine for a private-Discord bot — this is a brute-force speed bump, not
+// a stateful security boundary.
+const LOGIN_RATELIMIT_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_RATELIMIT_MAX_FAILS = 10;
+const loginAttempts = new Map(); // ip -> { failedAt: number[], lockedUntil?: number }
+function recordLoginFailure(ip) {
+    const now = Date.now();
+    const rec = loginAttempts.get(ip) || { failedAt: [] };
+    rec.failedAt = rec.failedAt.filter(t => now - t < LOGIN_RATELIMIT_WINDOW_MS);
+    rec.failedAt.push(now);
+    if (rec.failedAt.length >= LOGIN_RATELIMIT_MAX_FAILS) {
+        rec.lockedUntil = now + LOGIN_RATELIMIT_WINDOW_MS;
+    }
+    loginAttempts.set(ip, rec);
+}
+function checkLoginRateLimit(ip) {
+    const rec = loginAttempts.get(ip);
+    if (!rec) return { allowed: true };
+    const now = Date.now();
+    if (rec.lockedUntil && rec.lockedUntil > now) {
+        return { allowed: false, retryAfterSec: Math.ceil((rec.lockedUntil - now) / 1000) };
+    }
+    return { allowed: true };
+}
+
 app.post('/api/login', (req, res) => {
+    const ip = getClientIP(req);
+    const limit = checkLoginRateLimit(ip);
+    if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSec));
+        return res.status(429).json({ error: `Too many failed attempts. Try again in ${Math.ceil(limit.retryAfterSec / 60)}m.` });
+    }
     const { username, password } = req.body || {};
     const user = checkCredentials(String(username || ''), String(password || ''));
-    if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+    if (!user) {
+        recordLoginFailure(ip);
+        return res.status(401).json({ error: 'Invalid username or password' });
+    }
     if (user.disabled) return res.status(403).json({ error: 'Account is disabled. Contact an admin.' });
+    // Successful login wipes the failure record so a real user who fat-fingers
+    // a few times before getting it right doesn't stay locked.
+    loginAttempts.delete(ip);
     req.session.user = user;
     req.session.save((err) => {
         if (err) return res.status(500).json({ error: 'Session error' });
@@ -2330,7 +2450,7 @@ app.post('/api/register', (req, res) => {
     if (USERS.has(unLower)) return res.status(400).json({ error: 'Username already taken' });
     const pending = loadPendingUsers();
     if (pending.some(p => String(p.username || '').toLowerCase() === unLower)) return res.status(400).json({ error: 'Registration already pending' });
-    pending.push({ username: unLower, password: pw, createdAt: Date.now() });
+    pending.push({ username: unLower, password: hashPassword(pw), createdAt: Date.now() });
     savePendingUsers(pending);
     res.status(201).json({ message: 'Registration submitted. Awaiting admin approval.' });
 });
@@ -3492,7 +3612,12 @@ function _consumeAbsurdCaptchaToken(req, safeFilename) {
         delete req.session.absurdCaptchaToken;
         return { ok: false, status: 428, body: { error: 'Finish the absurd captcha for this sound first.', captchaRequired: true } };
     }
-    if (!token || token !== record.token) {
+    if (!token || !record.token) {
+        return { ok: false, status: 428, body: { error: 'Finish the absurd captcha first.', captchaRequired: true } };
+    }
+    const a = Buffer.from(String(token), 'utf8');
+    const b = Buffer.from(String(record.token), 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
         return { ok: false, status: 428, body: { error: 'Finish the absurd captcha first.', captchaRequired: true } };
     }
     delete req.session.absurdCaptchaToken;
@@ -6825,6 +6950,17 @@ app.get('/api/suno/config', requireAuth, (req, res) => {
     });
 });
 
+// Suno task IDs are opaque tokens we mint via the Suno API; validate them
+// strictly before they reach any path.join() in lib/suno-gen.js, so a crafted
+// `..` segment can't escape STAGING_DIR.
+const SUNO_TASK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+function requireValidSunoTaskId(req, res, next) {
+    if (!SUNO_TASK_ID_RE.test(String(req.params.taskId || ''))) {
+        return res.status(400).json({ error: 'Invalid taskId' });
+    }
+    next();
+}
+
 app.get('/api/suno/credits', requireAuth, async (req, res) => {
     try {
         const credits = await sunoGen.getCredits();
@@ -6857,7 +6993,7 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
     }
 });
 
-app.get('/api/suno/status/:taskId', requireAuth, async (req, res) => {
+app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, async (req, res) => {
     const taskId = req.params.taskId;
     try {
         // Short-circuit: if we've already downloaded the final audio, return cached meta.
@@ -6881,7 +7017,7 @@ app.get('/api/suno/status/:taskId', requireAuth, async (req, res) => {
     }
 });
 
-app.get('/api/suno/preview/:taskId/:slot', requireAuth, (req, res) => {
+app.get('/api/suno/preview/:taskId/:slot', requireAuth, requireValidSunoTaskId, (req, res) => {
     const p = sunoGen.getSlotAudioPath(req.params.taskId, parseInt(req.params.slot, 10));
     if (!p) return res.status(404).json({ error: 'Audio not ready' });
     res.setHeader('Content-Type', 'audio/mpeg');
@@ -6889,14 +7025,14 @@ app.get('/api/suno/preview/:taskId/:slot', requireAuth, (req, res) => {
     fs.createReadStream(p).pipe(res);
 });
 
-app.get('/api/suno/cover/:taskId/:slot', requireAuth, (req, res) => {
+app.get('/api/suno/cover/:taskId/:slot', requireAuth, requireValidSunoTaskId, (req, res) => {
     const p = sunoGen.getSlotCoverPath(req.params.taskId, parseInt(req.params.slot, 10));
     if (!p) return res.status(404).json({ error: 'Cover not ready' });
     res.setHeader('Content-Type', 'image/jpeg');
     fs.createReadStream(p).pipe(res);
 });
 
-app.post('/api/suno/save/:taskId', requireAuth, (req, res) => {
+app.post('/api/suno/save/:taskId', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
     const slot = parseInt((req.body && req.body.slot) || 0, 10);
     const meta = sunoGen.getStagingMeta(taskId);
@@ -6960,7 +7096,7 @@ app.post('/api/suno/save/:taskId', requireAuth, (req, res) => {
     res.json({ ok: true, filename, cover: coverRel, entry: sounds[filename] });
 });
 
-app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
+app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
     // Optional: refund the day's usage counter if user cancels early.
     const refunded = req.query.refund === '1';
@@ -6980,7 +7116,7 @@ app.delete('/api/suno/discard/:taskId', requireAuth, (req, res) => {
 // Prefers the fully-downloaded local MP3, falls back to the Suno stream URL
 // (ffmpeg pulls HTTP directly, so we don't have to wait for the full download).
 // Limited to users with Suno access (same gate as /generate).
-app.post('/api/suno/play/:taskId/:slot', requireAuth, requireSunoAllowed, async (req, res) => {
+app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, requireSunoAllowed, async (req, res) => {
     const slot = parseInt(req.params.slot, 10);
     const taskId = req.params.taskId;
     let ffInput = sunoGen.getSlotAudioPath(taskId, slot);
