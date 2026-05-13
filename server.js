@@ -2852,6 +2852,18 @@ function _watchBroadcast(room, payload) {
     }
 }
 
+// Deduplicated [{username, role}] list of viewers currently in a room. One
+// person can have multiple tabs open; we collapse those into a single pill.
+function _viewerList(room) {
+    const seen = new Map();
+    for (const ws of room.viewers) {
+        const un = ws._un;
+        if (!un) continue;
+        if (!seen.has(un)) seen.set(un, { username: un, role: ws._role || 'user' });
+    }
+    return Array.from(seen.values());
+}
+
 function _watchCurrentPosition(room) {
     if (!room.state.playing) return room.state.position;
     return room.state.position + (Date.now() - room.state.positionAt) / 1000;
@@ -10128,6 +10140,8 @@ const httpServer = app.listen(PORT, () => {
 const { WebSocketServer } = require('ws');
 const watchWss = new WebSocketServer({ noServer: true });
 watchWss.on('connection', (ws, req, room, username, role) => {
+    ws._un = username;
+    ws._role = role || null;
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10138,11 +10152,11 @@ watchWss.on('connection', (ws, req, room, username, role) => {
             yourRole: role || null,
         }));
     } catch {}
-    _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    _watchBroadcast(room, { type: 'viewers', count: room.viewers.size, list: _viewerList(room) });
     ws.on('message', () => {});
     const cleanup = () => {
         room.viewers.delete(ws);
-        if (watchRooms.has(room.id)) _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
+        if (watchRooms.has(room.id)) _watchBroadcast(room, { type: 'viewers', count: room.viewers.size, list: _viewerList(room) });
     };
     ws.on('close', cleanup);
     ws.on('error', cleanup);
@@ -10151,6 +10165,8 @@ watchWss.on('connection', (ws, req, room, username, role) => {
 // WebSocket upgrade for Movie Night rooms — same shape, different room map.
 const mnWss = new WebSocketServer({ noServer: true });
 mnWss.on('connection', (ws, req, room, username, role) => {
+    ws._un = username;
+    ws._role = role || null;
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10161,11 +10177,11 @@ mnWss.on('connection', (ws, req, room, username, role) => {
             yourRole: role || null,
         }));
     } catch {}
-    _mnBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    _mnBroadcast(room, { type: 'viewers', count: room.viewers.size, list: _viewerList(room) });
     ws.on('message', () => {});
     const cleanup = () => {
         room.viewers.delete(ws);
-        if (movieNightRooms.has(room.id)) _mnBroadcast(room, { type: 'viewers', count: room.viewers.size });
+        if (movieNightRooms.has(room.id)) _mnBroadcast(room, { type: 'viewers', count: room.viewers.size, list: _viewerList(room) });
     };
     ws.on('close', cleanup);
     ws.on('error', cleanup);

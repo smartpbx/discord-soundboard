@@ -42,8 +42,17 @@
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .controls { display: flex; gap: 0.4rem; flex-wrap: wrap; }
         .controls.hidden { display: none; }
-        .status-line { font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 1rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.75rem; flex-wrap: wrap; }
+        .status-line { font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 1rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
         .status-line .sep { color: var(--border); }
+        .viewer-pills { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
+        .viewer-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.74rem; font-weight: 500; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); }
+        .viewer-pill .vp-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+        .viewer-pill.role-superadmin { border-color: rgba(124,58,237,0.5); color: var(--accent); }
+        .viewer-pill.role-admin { border-color: rgba(124,58,237,0.3); }
+        .viewer-pill.role-guest { color: var(--text-muted); }
+        .viewer-pill.is-host { border-color: var(--accent); }
+        .viewer-pill.is-host .vp-dot { background: var(--accent); }
+        .viewer-pill.is-me { box-shadow: 0 0 0 1px rgba(124,58,237,0.35); }
         .toast {
             position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
             background: var(--accent); color: white; padding: 0.5rem 1rem;
@@ -77,6 +86,7 @@
             <span id="statusState">—</span>
             <span class="sep">·</span>
             <span id="statusViewers">0 viewers</span>
+            <span class="viewer-pills" id="viewerPills"></span>
             <span class="sep">·</span>
             <span id="statusSource">source: ?</span>
         </div>
@@ -96,12 +106,39 @@
     const ROLE_BADGE = document.getElementById('watchRoleBadge');
     const STATUS_STATE = document.getElementById('statusState');
     const STATUS_VIEWERS = document.getElementById('statusViewers');
+    const VIEWER_PILLS = document.getElementById('viewerPills');
     const STATUS_SOURCE = document.getElementById('statusSource');
     const TOAST = document.getElementById('toast');
 
     let room = null;
     let me = null;
     let isHost = false;
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function renderViewerPills(list) {
+        if (!VIEWER_PILLS) return;
+        if (!Array.isArray(list) || list.length === 0) { VIEWER_PILLS.innerHTML = ''; return; }
+        // Sort host first, then by role (superadmin/admin/user/guest), then alpha.
+        const roleOrder = { superadmin: 0, admin: 1, user: 2, guest: 3 };
+        const hostUn = room && room.hostUsername;
+        const sorted = [...list].sort((a, b) => {
+            const ah = a.username === hostUn ? 0 : 1;
+            const bh = b.username === hostUn ? 0 : 1;
+            if (ah !== bh) return ah - bh;
+            const ar = (roleOrder[a.role] ?? 9), br = (roleOrder[b.role] ?? 9);
+            if (ar !== br) return ar - br;
+            return String(a.username || '').localeCompare(String(b.username || ''));
+        });
+        VIEWER_PILLS.innerHTML = sorted.map(u => {
+            const roleClass = ' role-' + (u.role || 'user');
+            const hostClass = (u.username === hostUn) ? ' is-host' : '';
+            const meClass = (u.username === me) ? ' is-me' : '';
+            const label = u.role === 'guest' ? 'Guest' : (u.username || u.role);
+            const title = u.username === hostUn ? 'Host' : (u.role || '');
+            return '<span class="viewer-pill' + roleClass + hostClass + meClass + '" title="' + escapeHtml(title) + '"><span class="vp-dot"></span>' + escapeHtml(label) + '</span>';
+        }).join('');
+    }
     let player = null;          // generic player handle (varies by sourceType)
     let videoEl = null;         // when sourceType === 'video'
     let suppressEvents = false; // skip re-broadcasting events we're applying remotely
@@ -176,6 +213,7 @@
                 showToast('Host is at ' + fmtTime(msg.position) + ' — scrub your player to match.', 3500);
             } else if (msg.type === 'viewers') {
                 STATUS_VIEWERS.textContent = msg.count + ' viewer' + (msg.count === 1 ? '' : 's');
+                renderViewerPills(msg.list || []);
             } else if (msg.type === 'closed') {
                 showOverlay('Room closed', '<p>The host has ended this watch party.</p>');
                 CONTROLS.classList.add('hidden');
