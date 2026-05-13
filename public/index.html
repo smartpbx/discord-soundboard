@@ -985,6 +985,23 @@
         <div class="sidebar">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
+            <div class="clip-menu-wrap" style="position:relative">
+                <button type="button" class="volume-btn" id="clipBtn" onclick="toggleClipMenu()" title="Save the last N seconds of voice-channel audio">
+                    <span class="volume-btn-icon">📎</span>
+                    <span class="volume-btn-pct">Clip</span>
+                </button>
+                <div class="volume-menu hidden" id="clipMenu" style="min-width: 180px; right: auto; left: 0;">
+                    <div class="volume-menu-header">
+                        <span>Capture last…</span>
+                        <button type="button" class="volume-menu-close" onclick="closeClipMenu()" title="Close">✕</button>
+                    </div>
+                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(10)">10 seconds</button>
+                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(30)">30 seconds</button>
+                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(60)">1 minute</button>
+                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(120)">2 minutes</button>
+                    <button type="button" class="header-menu-item" style="border-top:1px solid var(--border); margin-top:0.25rem; padding-top:0.5rem;" onclick="openClips(); closeClipMenu();">Manage clips…</button>
+                </div>
+            </div>
             <div class="controls-menu-wrap admin-only" style="position:relative">
                 <button type="button" class="volume-btn" id="controlsBtn" onclick="toggleControlsMenu()" title="Playback controls">
                     <span class="volume-btn-icon">⚙</span>
@@ -2856,6 +2873,66 @@
                 badge.classList.add('hidden');
             }
         }
+        function toggleClipMenu() {
+            const menu = document.getElementById('clipMenu');
+            if (!menu) return;
+            const isHidden = menu.classList.contains('hidden');
+            menu.classList.toggle('hidden', !isHidden);
+            if (isHidden) {
+                setTimeout(() => document.addEventListener('click', closeClipMenuOnce), 0);
+            } else {
+                document.removeEventListener('click', closeClipMenuOnce);
+            }
+        }
+        function closeClipMenu() {
+            const menu = document.getElementById('clipMenu');
+            if (menu) menu.classList.add('hidden');
+            document.removeEventListener('click', closeClipMenuOnce);
+        }
+        function closeClipMenuOnce(e) {
+            const wrap = document.querySelector('.clip-menu-wrap');
+            if (wrap && !wrap.contains(e.target)) closeClipMenu();
+        }
+        let _clipCaptureInflight = false;
+        async function captureClipFromUI(seconds) {
+            closeClipMenu();
+            if (_clipCaptureInflight) { showToast('Already capturing…', 'info'); return; }
+            _clipCaptureInflight = true;
+            const btn = document.getElementById('clipBtn');
+            if (btn) btn.disabled = true;
+            try {
+                showToast('Capturing last ' + seconds + 's…', 'info');
+                const res = await api('/api/clip/capture', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ seconds }),
+                });
+                if (res && res.ok) {
+                    const data = await res.json();
+                    await openClips();
+                    showToast('Clipped! Trim and save below.', 'success');
+                    // Highlight the new clip so it's easy to find when there
+                    // are several recent entries.
+                    setTimeout(() => {
+                        if (!data.clip) return;
+                        const row = document.querySelector('.clip-row[data-id="' + data.clip.id + '"]');
+                        if (row) {
+                            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            row.style.transition = 'box-shadow 0.4s';
+                            row.style.boxShadow = '0 0 0 2px var(--accent)';
+                            setTimeout(() => { row.style.boxShadow = ''; }, 2000);
+                        }
+                    }, 250);
+                } else if (res) {
+                    const d = await res.json().catch(() => ({}));
+                    showToast(d.error || 'Capture failed', 'error');
+                }
+            } finally {
+                _clipCaptureInflight = false;
+                if (btn) btn.disabled = false;
+            }
+        }
+
         // Poll clip count once at startup + every 30s so the badge reflects
         // new /clip-created entries without needing the modal to be open.
         async function _pollClipsCount() {

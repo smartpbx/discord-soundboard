@@ -2355,46 +2355,64 @@ function stopClipCapture() {
     clipBuffers.clear();
 }
 
-async function handleClipCommand(interaction) {
+// Shared capture path used by both /clip (Discord slash) and the web UI's
+// Clip button. Returns { ok, meta?, error? } — callers translate to their
+// own reply/response shape.
+async function captureClip(seconds, byContext) {
     if (!activeGuildId || !currentConnection) {
-        return interaction.reply({ content: "I'm not in a voice channel right now. Use `/rejoin` first.", flags: MessageFlags.Ephemeral });
+        return { ok: false, code: 'no-channel', error: "Bot isn't in a voice channel." };
     }
-    const requested = interaction.options.getInteger('seconds') ?? CLIP_DEFAULT_REQUEST_SEC;
-    const seconds = Math.max(CLIP_MIN_REQUEST_SEC, Math.min(CLIP_MAX_REQUEST_SEC, requested));
     if (clipBuffers.size === 0) {
-        return interaction.reply({ content: 'No voice audio has been captured yet — someone has to be talking first.', flags: MessageFlags.Ephemeral });
+        return { ok: false, code: 'no-audio', error: 'No voice audio has been captured yet — someone has to be talking first.' };
     }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const sec = Math.max(CLIP_MIN_REQUEST_SEC, Math.min(CLIP_MAX_REQUEST_SEC, Number(seconds) || CLIP_DEFAULT_REQUEST_SEC));
     try {
-        const pcm = mixClipToPcm(seconds);
+        const pcm = mixClipToPcm(sec);
         const mp3 = await encodeClipPcmToMp3(pcm);
         const id = 'clip_' + crypto.randomBytes(6).toString('hex');
         const filename = id + '.mp3';
         fs.writeFileSync(path.join(CLIPS_DIR, filename), mp3);
-        const arr = loadClipsIndex();
         const meta = {
             id,
             filename,
             createdAt: Date.now(),
-            durationSec: seconds,
-            byUserId: String(interaction.user?.id || ''),
-            byUserTag: interaction.user?.tag || null,
+            durationSec: sec,
+            byUserId: String(byContext?.userId || ''),
+            byUserTag: byContext?.userTag || null,
             channelId: lastChannelId,
-            guildId: interaction.guildId,
+            guildId: byContext?.guildId || null,
+            source: byContext?.source || 'unknown',
             savedToSoundboard: null,
         };
+        const arr = loadClipsIndex();
         arr.unshift(meta);
         while (arr.length > CLIP_RETAIN_COUNT) {
             const dropped = arr.pop();
             try { fs.unlinkSync(path.join(CLIPS_DIR, dropped.filename)); } catch {}
         }
         saveClipsIndex(arr);
-        console.log(`[clip] saved ${id} (${seconds}s) for ${meta.byUserTag || meta.byUserId}`);
-        return interaction.editReply({ content: `Saved the last **${seconds}s** as \`${id}\`. Open the soundboard → ☰ menu → **Clips** to preview, trim, and save it as a sound.` });
+        console.log(`[clip] saved ${id} (${sec}s) for ${meta.byUserTag || meta.byUserId || 'anon'} via ${meta.source}`);
+        return { ok: true, meta };
     } catch (err) {
-        console.error('[clip] failed:', err);
-        try { await interaction.editReply({ content: 'Clip failed: ' + (err.message || 'unknown error') }); } catch {}
+        console.error('[clip] capture failed:', err);
+        return { ok: false, code: 'encode-failed', error: err.message || 'unknown error' };
     }
+}
+
+async function handleClipCommand(interaction) {
+    const requested = interaction.options.getInteger('seconds') ?? CLIP_DEFAULT_REQUEST_SEC;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const result = await captureClip(requested, {
+        userId: interaction.user?.id,
+        userTag: interaction.user?.tag,
+        guildId: interaction.guildId,
+        source: 'slash',
+    });
+    if (!result.ok) {
+        const hint = result.code === 'no-channel' ? ' Use `/rejoin` first.' : '';
+        return interaction.editReply({ content: result.error + hint });
+    }
+    return interaction.editReply({ content: `Saved the last **${result.meta.durationSec}s** as \`${result.meta.id}\`. Open the soundboard → **Clip** button (or ☰ → **Clips**) to preview, trim, and save it as a sound.` });
 }
 
 function handleSpeechResult(userId, text, firedThisUtterance = null) {
@@ -7518,6 +7536,26 @@ function requireValidClipId(req, res, next) {
 
 app.get('/api/clips', requireAuth, (req, res) => {
     res.json(loadClipsIndex());
+});
+
+// Web-UI equivalent of `/clip` — captures the last N seconds of voice-channel
+// audio into the rolling-clip index. Returns the new clip's metadata so the
+// frontend can scroll the Clips modal to it.
+app.post('/api/clip/capture', requireAuth, async (req, res) => {
+    const requested = Number((req.body || {}).seconds);
+    if (!Number.isFinite(requested)) {
+        return res.status(400).json({ error: 'seconds (number) required' });
+    }
+    const result = await captureClip(requested, {
+        userId: req.session.user?.username,
+        userTag: req.session.user?.username,
+        source: 'web',
+    });
+    if (!result.ok) {
+        const status = result.code === 'no-channel' || result.code === 'no-audio' ? 400 : 500;
+        return res.status(status).json({ error: result.error, code: result.code });
+    }
+    res.json({ ok: true, clip: result.meta });
 });
 
 app.get('/api/clips/:id/audio', requireAuth, requireValidClipId, (req, res) => {
