@@ -689,11 +689,10 @@ function setVotingConfig(patch) {
     saveGuestData(d);
     return next;
 }
-const VOTE_LOG_MAX = 50;
-const voteLog = [];
 function recordVoteEvent(entry) {
-    voteLog.push({ when: Date.now(), ...entry });
-    if (voteLog.length > VOTE_LOG_MAX) voteLog.splice(0, voteLog.length - VOTE_LOG_MAX);
+    const stored = { when: Date.now(), ...entry };
+    try { statsDb.recordVoteEvent(stored); } catch (err) { console.warn('[voting] vote-log persist failed:', err.message); }
+    return stored;
 }
 function loadVoiceTriggers() {
     const arr = loadGuestData().voiceTriggers;
@@ -2165,15 +2164,12 @@ const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, d
 const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
 let voiceTriggerGlobalLastFired = 0;     // ms timestamp of last fire across all triggers
 let voiceTriggerActivePhrases = []; // enabled phrases; empty = short-circuit (no recognizer)
-const VOICE_TRIGGER_LOG_MAX = 50;
-const voiceTriggerLog = []; // newest last; capped at VOICE_TRIGGER_LOG_MAX
-
 function recordVoiceTriggerEvent(entry) {
     const stored = { when: Date.now(), ...entry };
-    voiceTriggerLog.push(stored);
-    if (voiceTriggerLog.length > VOICE_TRIGGER_LOG_MAX) {
-        voiceTriggerLog.splice(0, voiceTriggerLog.length - VOICE_TRIGGER_LOG_MAX);
-    }
+    // Persist to SQLite so the activity log survives restarts. The returned
+    // object is kept as a live handle the partial->final transcript-upgrade
+    // path mutates in place; the persisted row is a static snapshot.
+    try { statsDb.recordVoiceTriggerEvent(stored); } catch (err) { console.warn('[voice-triggers] log persist failed:', err.message); }
     return stored;
 }
 
@@ -4567,12 +4563,13 @@ app.get('/api/superadmin/voice-triggers/log', requireSuperadmin, (req, res) => {
             }
         }
     } catch {}
-    const events = voiceTriggerLog.slice().reverse().map(ev => ({
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+    const events = statsDb.listVoiceTriggerEvents(limit).map(ev => ({
         ...ev,
         soundDisplayName: ev.soundFilename ? getDisplayName(meta, ev.soundFilename) : null,
         speakerDisplayName: memberNameById.get(ev.speakerUserId) || null,
     }));
-    res.json({ events, max: VOICE_TRIGGER_LOG_MAX });
+    res.json({ events, max: limit });
 });
 
 app.delete('/api/superadmin/voice-triggers/:id', requireSuperadmin, (req, res) => {
@@ -4642,12 +4639,13 @@ app.get('/api/superadmin/voting/log', requireSuperadmin, (req, res) => {
             }
         }
     } catch {}
-    const events = voteLog.slice().reverse().map(ev => ({
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 200));
+    const events = statsDb.listVoteEvents(limit).map(ev => ({
         ...ev,
-        targetDisplayName: memberNameById.get(ev.targetUserId) || ev.targetUsername || null,
-        initiatorDisplayName: memberNameById.get(ev.initiatorUserId) || ev.initiatorUsername || null,
+        targetDisplayName: memberNameById.get(ev.targetUserId) || ev.targetDisplayName || ev.targetUsername || null,
+        initiatorDisplayName: memberNameById.get(ev.initiatorUserId) || ev.initiatorDisplayName || ev.initiatorUsername || null,
     }));
-    res.json({ events, max: VOTE_LOG_MAX });
+    res.json({ events, max: limit });
 });
 
 app.get('/api/superadmin/pending-uploads/audio/:filename', requireSuperadmin, (req, res) => {
