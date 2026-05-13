@@ -1840,13 +1840,30 @@ async function registerSlashCommands() {
     }
 }
 
+// Rapid back-to-back /rejoin invocations leak UDP sockets and crash the
+// process with `write ENOBUFS` once the kernel send-buffer fills up. Cooldown
+// throttles the command and a small delay lets the destroyed connection's
+// socket actually close before we open a fresh one.
+const REJOIN_COOLDOWN_MS = 5_000;
+const REJOIN_BOUNCE_DELAY_MS = 250;
+let lastRejoinAt = 0;
+
 async function handleRejoinCommand(interaction) {
     const channel = interaction.member?.voice?.channel;
     if (!channel || !channel.isVoiceBased?.()) {
         return interaction.reply({ content: 'Join a voice channel first, then run `/rejoin` again.', flags: MessageFlags.Ephemeral });
     }
+    const now = Date.now();
+    const sinceLast = now - lastRejoinAt;
+    if (sinceLast < REJOIN_COOLDOWN_MS) {
+        const wait = Math.ceil((REJOIN_COOLDOWN_MS - sinceLast) / 1000);
+        return interaction.reply({ content: `Just bounced — give me ${wait}s before trying again.`, flags: MessageFlags.Ephemeral });
+    }
+    lastRejoinAt = now;
     try {
+        const wasConnected = !!activeGuildId;
         leaveVoiceChannel();
+        if (wasConnected) await new Promise(r => setTimeout(r, REJOIN_BOUNCE_DELAY_MS));
         joinChannelById(channel);
         lastChannelId = channel.id;
         saveServerState({ lastChannelId });
