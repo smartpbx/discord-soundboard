@@ -1275,6 +1275,23 @@ app.use(express.static('public', {
     etag: true,
     maxAge: 3600 * 1000,
 }));
+// HLS output of the Watch Together screen-capture proxy. The directory is
+// created on demand under DATA_DIR/captures/<captureId> when the 'capture'
+// strategy resolves a room; cleanup is handled by stopCaptureProxy() when
+// the watch room is closed or swept.
+app.use('/captures', express.static(path.join(__dirname, 'data', 'captures'), {
+    etag: false,
+    maxAge: 0,
+    setHeaders(res, filePath) {
+        if (filePath.endsWith('.m3u8')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        } else if (filePath.endsWith('.ts')) {
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+            res.setHeader('Content-Type', 'video/mp2t');
+        }
+    },
+}));
 app.use(express.json());
 app.use(require('cookie-parser')());
 // Held in a named ref so the WS upgrade handler (yt-session noVNC proxy) can
@@ -2854,6 +2871,7 @@ function _watchSweep() {
     const now = Date.now();
     for (const [id, room] of watchRooms) {
         if (now - room.lastActivity > WATCH_ROOM_TTL_MS && room.viewers.size === 0) {
+            if (room.sourceMeta?.captureId) stopCaptureProxy(room.sourceMeta.captureId);
             watchRooms.delete(id);
         }
     }
@@ -3016,12 +3034,131 @@ async function resolveWatchSource(url, forceStrategy) {
     return { sourceType, sourceMeta };
 }
 
-// Screen-capture proxy — renders the URL in a virtual Chromium and re-encodes
-// the rendered pixels as HLS for viewers. Required for DRM/iframe sources
-// that the CDP sniffer can't crack. Not yet implemented; ships next commit.
-async function startCaptureProxyForUrl(url) {
-    console.warn('[capture] not yet implemented; falling back. url:', url);
+// Screen-capture proxy — renders the URL in a virtual Chromium under Xvfb
+// and re-encodes the rendered pixels as HLS for all viewers. Required for
+// DRM-protected / iframe-locked sources the CDP sniffer can't crack
+// (browsers can play the page, so we play it once on the server and let
+// every viewer pull the same HLS). Video-only for v1; audio mux ships in a
+// follow-up once pulseaudio plumbing is in place.
+const CAPTURES_DIR = path.join(DATA_DIR, 'captures');
+try { fs.mkdirSync(CAPTURES_DIR, { recursive: true }); } catch {}
+const captureProxies = new Map();
+let _nextCaptureDisplay = 100;
+function _pickFreeXDisplay() {
+    for (let i = 0; i < 50; i++) {
+        const n = _nextCaptureDisplay++;
+        if (_nextCaptureDisplay > 199) _nextCaptureDisplay = 100;
+        try { fs.accessSync(`/tmp/.X${n}-lock`); continue; } catch { return n; }
+    }
     return null;
+}
+function stopCaptureProxy(captureId) {
+    const cap = captureProxies.get(captureId);
+    if (!cap) return false;
+    captureProxies.delete(captureId);
+    for (const p of [cap.ffmpeg, cap.chromium, cap.xvfb]) {
+        try { if (p && !p.killed) p.kill('SIGKILL'); } catch {}
+    }
+    setTimeout(() => { try { fs.rmSync(cap.dir, { recursive: true, force: true }); } catch {} }, 2000);
+    console.log('[capture] stopped', captureId);
+    return true;
+}
+async function startCaptureProxyForUrl(url) {
+    // Bail fast if Xvfb isn't installed — let the caller fall back.
+    try {
+        await new Promise((resolve, reject) => {
+            const p = spawn('which', ['Xvfb'], { stdio: 'ignore' });
+            p.on('exit', (code) => code === 0 ? resolve() : reject(new Error('Xvfb missing')));
+            p.on('error', reject);
+        });
+    } catch (e) {
+        console.warn('[capture] Xvfb not available — skipping');
+        return null;
+    }
+    const display = _pickFreeXDisplay();
+    if (display == null) { console.warn('[capture] no free X display'); return null; }
+    const captureId = 'cap_' + crypto.randomBytes(4).toString('hex');
+    const dir = path.join(CAPTURES_DIR, captureId);
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    const width = 1280, height = 720;
+    let xvfb, chromium, ffmpeg;
+    try {
+        xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', `${width}x${height}x24`, '-nolisten', 'tcp', '-ac', '+extension', 'RANDR'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (e) { console.warn('[capture] Xvfb spawn failed:', e.message); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} return null; }
+    await new Promise((r) => setTimeout(r, 600)); // let Xvfb come up
+    try {
+        const profileDir = path.join(dir, 'chrome-profile');
+        fs.mkdirSync(profileDir, { recursive: true });
+        chromium = spawn('/usr/bin/chromium', [
+            '--no-sandbox',
+            '--kiosk',
+            '--noerrdialogs',
+            '--disable-infobars',
+            '--disable-translate',
+            '--disable-features=Translate',
+            '--autoplay-policy=no-user-gesture-required',
+            `--window-size=${width},${height}`,
+            `--user-data-dir=${profileDir}`,
+            '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            url,
+        ], { stdio: 'ignore', env: { ...process.env, DISPLAY: `:${display}` } });
+    } catch (e) {
+        console.warn('[capture] chromium spawn failed:', e.message);
+        try { xvfb.kill('SIGKILL'); } catch {}
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+        return null;
+    }
+    await new Promise((r) => setTimeout(r, 2500)); // let chromium reach the page
+    const playlistPath = path.join(dir, 'index.m3u8');
+    const segPattern = path.join(dir, 'seg_%05d.ts');
+    try {
+        ffmpeg = spawn('ffmpeg', [
+            '-loglevel', 'warning',
+            '-f', 'x11grab',
+            '-draw_mouse', '0',
+            '-framerate', '30',
+            '-video_size', `${width}x${height}`,
+            '-i', `:${display}.0`,
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-tune', 'zerolatency',
+            '-profile:v', 'baseline',
+            '-level', '3.0',
+            '-g', '60',
+            '-sc_threshold', '0',
+            '-pix_fmt', 'yuv420p',
+            '-f', 'hls',
+            '-hls_time', '2',
+            '-hls_list_size', '6',
+            '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
+            '-hls_segment_filename', segPattern,
+            playlistPath,
+        ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (e) {
+        console.warn('[capture] ffmpeg spawn failed:', e.message);
+        try { chromium.kill('SIGKILL'); } catch {}
+        try { xvfb.kill('SIGKILL'); } catch {}
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+        return null;
+    }
+    ffmpeg.stderr?.on('data', (d) => {
+        const s = d.toString();
+        if (/error|fail|cannot/i.test(s)) console.warn('[capture]', captureId, s.trim().slice(0, 300));
+    });
+    ffmpeg.on('exit', (code) => { console.log('[capture]', captureId, 'ffmpeg exit', code); });
+    // Wait for the playlist file to appear so the viewer doesn't 404 on join.
+    for (let i = 0; i < 30; i++) {
+        try { fs.accessSync(playlistPath); break; } catch { await new Promise((r) => setTimeout(r, 300)); }
+        if (i === 29) {
+            console.warn('[capture]', captureId, 'playlist never materialized — aborting');
+            try { ffmpeg.kill('SIGKILL'); chromium.kill('SIGKILL'); xvfb.kill('SIGKILL'); } catch {}
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+            return null;
+        }
+    }
+    captureProxies.set(captureId, { url, dir, display, xvfb, chromium, ffmpeg, startedAt: Date.now() });
+    console.log('[capture] started', captureId, 'for', url);
+    return { captureId, streamUrl: `/captures/${captureId}/index.m3u8` };
 }
 
 function getWatchPartyEnabled(role, username) {
@@ -9384,6 +9521,7 @@ app.delete('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, r
     if (un !== room.hostUsername && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Only the host can close the room.' });
     _watchBroadcast(room, { type: 'closed' });
     for (const ws of room.viewers) { try { ws.close(); } catch {} }
+    if (room.sourceMeta?.captureId) stopCaptureProxy(room.sourceMeta.captureId);
     watchRooms.delete(req.params.id);
     console.log(`[watch] room ${req.params.id} closed by ${un}`);
     res.json({ ok: true });
