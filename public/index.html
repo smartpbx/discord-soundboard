@@ -94,6 +94,42 @@
             margin-bottom: 1rem;
         }
         .login-card input:focus { outline: none; border-color: var(--accent); }
+
+        /* Restore a visible focus indicator for keyboard users on every
+           interactive element. Many input/select rules in this file set
+           outline:none for the mouse-hover state but never gave keyboard
+           users any feedback. focus-visible only triggers on keyboard nav
+           (not mouse clicks), so it doesn't interfere with click states. */
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible,
+        textarea:focus-visible,
+        a:focus-visible,
+        [role="button"]:focus-visible,
+        [tabindex]:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+
+        /* Count badge on the Controls button — shows how many controls are
+           currently on so you don't need to open the popover to check. */
+        .controls-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            margin-left: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            line-height: 1;
+            color: white;
+            background: var(--accent);
+            border-radius: 9px;
+        }
+        .controls-badge.hidden { display: none !important; }
         .login-card .btn { width: 100%; padding: 0.75rem; margin-top: 0.5rem; }
         .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
         .login-card .signup-link { font-size: 0.9rem; margin-top: 0.75rem; text-align: center; }
@@ -952,6 +988,7 @@
                 <button type="button" class="volume-btn" id="controlsBtn" onclick="toggleControlsMenu()" title="Playback controls">
                     <span class="volume-btn-icon">⚙</span>
                     <span class="volume-btn-pct">Controls</span>
+                    <span id="controlsBadge" class="controls-badge hidden" aria-label="active controls" title=""></span>
                 </button>
                 <div class="volume-menu hidden" id="controlsMenu" style="min-width: 240px; right: auto; left: 0;">
                     <div class="volume-menu-header">
@@ -2466,6 +2503,87 @@
             }, duration);
         }
 
+        // Native confirm() / alert() / prompt() are jarring on mobile, untrusted-
+        // looking, and block the page. These helpers render an inline modal that
+        // matches the rest of the app and returns a Promise.
+        function _appModal({ title, message, okText, okStyle, cancelText, kind, defaultValue }) {
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'whats-new-overlay';
+                overlay.tabIndex = -1;
+                const isDanger = okStyle === 'danger';
+                const titleHtml = title ? '<div style="font-weight:600;font-size:1.05rem;margin-bottom:0.5rem;">' + (title.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))) + '</div>' : '';
+                const msgHtml = String(message || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])).replace(/\n/g, '<br>');
+                const inputHtml = kind === 'prompt'
+                    ? '<input type="text" id="_appModalInput" style="width:100%;margin-top:0.75rem;padding:0.5rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;">'
+                    : '';
+                const cancelHtml = cancelText
+                    ? '<button type="button" class="btn btn-ghost" id="_appModalCancel">' + cancelText + '</button>'
+                    : '';
+                const okClass = isDanger ? 'btn btn-danger' : 'btn btn-primary';
+                overlay.innerHTML =
+                    '<div role="dialog" aria-modal="true" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;max-width:440px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,0.4);">' +
+                    titleHtml +
+                    '<div style="line-height:1.45;color:var(--text);">' + msgHtml + '</div>' +
+                    inputHtml +
+                    '<div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">' +
+                    cancelHtml +
+                    '<button type="button" class="' + okClass + '" id="_appModalOk">' + okText + '</button>' +
+                    '</div></div>';
+                document.body.appendChild(overlay);
+                const input = overlay.querySelector('#_appModalInput');
+                if (input && typeof defaultValue === 'string') input.value = defaultValue;
+                const close = (value) => {
+                    document.removeEventListener('keydown', onKey);
+                    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                    resolve(value);
+                };
+                const onOk = () => close(kind === 'prompt' ? (input ? input.value : '') : true);
+                const onCancel = () => close(kind === 'prompt' ? null : false);
+                overlay.querySelector('#_appModalOk').addEventListener('click', onOk);
+                const cancelBtn = overlay.querySelector('#_appModalCancel');
+                if (cancelBtn) cancelBtn.addEventListener('click', onCancel);
+                overlay.addEventListener('click', (e) => { if (e.target === overlay) onCancel(); });
+                const onKey = (e) => {
+                    if (e.key === 'Escape') onCancel();
+                    else if (e.key === 'Enter' && (!input || document.activeElement === input)) onOk();
+                };
+                document.addEventListener('keydown', onKey);
+                setTimeout(() => { (input || overlay.querySelector('#_appModalOk')).focus(); }, 0);
+            });
+        }
+        function confirmModal(message, opts = {}) {
+            return _appModal({
+                title: opts.title || '',
+                message,
+                okText: opts.okText || 'Confirm',
+                okStyle: opts.danger ? 'danger' : 'primary',
+                cancelText: opts.cancelText || 'Cancel',
+                kind: 'confirm',
+            });
+        }
+        function alertModal(message, opts = {}) {
+            return _appModal({
+                title: opts.title || '',
+                message,
+                okText: opts.okText || 'OK',
+                okStyle: 'primary',
+                cancelText: '',
+                kind: 'alert',
+            });
+        }
+        function promptModal(message, defaultValue = '', opts = {}) {
+            return _appModal({
+                title: opts.title || '',
+                message,
+                okText: opts.okText || 'OK',
+                okStyle: 'primary',
+                cancelText: opts.cancelText || 'Cancel',
+                kind: 'prompt',
+                defaultValue,
+            });
+        }
+
         function openShortcuts() {
             const el = document.getElementById('shortcutsOverlay');
             if (el) el.classList.remove('hidden');
@@ -2700,7 +2818,16 @@
             if (filterInput) filterInput.value = soundFilter;
             if (typeof updateFilterClearVisibility === 'function') updateFilterClearVisibility();
             compactMode = prefs.compact === true;
-            mobileView = prefs.mobileView === true;
+            // Default the soundboard grid to the mobile layout on narrow
+            // viewports unless the user has explicitly opted out via the
+            // Sounds-options menu. The desktop sidebar layout pushes the
+            // grid below the player on phones, which is the dominant
+            // complaint from real-world (Discord-on-phone) usage.
+            if (typeof prefs.mobileView === 'boolean') {
+                mobileView = prefs.mobileView;
+            } else {
+                mobileView = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+            }
             const grid = document.getElementById('soundsList');
             const compactBtn = document.getElementById('compactBtn');
             const soundsCard = document.querySelector('.sounds-card');
@@ -4705,7 +4832,7 @@
         }
 
         async function toggleUserDisabled(username, disabled) {
-            if (disabled && !confirm('Disable "' + username + '"? They will be logged out and unable to sign in.')) return;
+            if (disabled && !(await confirmModal('Disable "' + username + '"? They will be logged out and unable to sign in.', { okText: 'Disable', danger: true }))) return;
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }) });
             if (res && res.ok) { fetchUsers(); showToast(disabled ? 'User disabled.' : 'User enabled.', 'success'); }
             else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
@@ -4728,7 +4855,7 @@
         }
 
         async function deleteUser(username) {
-            if (!confirm('Remove user "' + username + '"? They will no longer be able to log in.')) return;
+            if (!(await confirmModal('Remove user "' + username + '"? They will no longer be able to log in.', { okText: 'Remove', danger: true }))) return;
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'DELETE' });
             if (res && res.ok) fetchUsers();
             else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
@@ -5117,7 +5244,7 @@
         }
 
         async function deleteTag(name) {
-            if (!confirm('Delete tag "' + name + '"? It will be removed from all sounds.')) return;
+            if (!(await confirmModal('Delete tag "' + name + '"? It will be removed from all sounds.', { okText: 'Delete', danger: true }))) return;
             const res = await api('/api/tags/' + encodeURIComponent(name), { method: 'DELETE' });
             if (!res || !res.ok) return;
             tagsList = (tagsList || []).filter(t => t !== name);
@@ -5914,7 +6041,7 @@
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
             const displayName = (nameEl && nameEl.value) ? nameEl.value.trim() : filename;
-            if (!confirm('Delete "' + displayName + '" permanently? This cannot be undone.')) return;
+            if (!(await confirmModal('Delete "' + displayName + '" permanently? This cannot be undone.', { okText: 'Delete', danger: true }))) return;
             const res = await api('/api/sounds/' + encodeURIComponent(filename), { method: 'DELETE' });
             if (res && res.ok) {
                 fetchSounds();
@@ -5963,7 +6090,7 @@
             const filename = nameEl && nameEl.dataset.filename;
             if (!filename) return;
             const displayName = (nameEl && nameEl.value) ? nameEl.value.trim() : filename;
-            if (!confirm('Normalize "' + displayName + '"? This will permanently modify the audio file to balance its volume.')) return;
+            if (!(await confirmModal('Normalize "' + displayName + '"? This will permanently modify the audio file to balance its volume.', { okText: 'Normalize' }))) return;
             const btn = document.getElementById('soundPanelNormalizeBtn');
             if (btn) { btn.disabled = true; btn.textContent = 'Normalizing…'; }
             const res = await api('/api/sounds/normalize/' + encodeURIComponent(filename), { method: 'POST' });
@@ -6819,6 +6946,36 @@
                     }
                 } catch {}
             }
+            refreshControlsBadge();
+        }
+
+        // Reflect the on-count of the Controls popover toggles on the button
+        // itself so superadmins can see at a glance what's active without
+        // opening the menu.
+        function refreshControlsBadge() {
+            const badge = document.getElementById('controlsBadge');
+            if (!badge) return;
+            const toggleIds = [
+                ['playbackLockedTop', 'Admin-only playback'],
+                ['playbackSuperadminOnlyTop', 'Superadmin-only playback'],
+                ['multiPlayMenuToggle', 'Multi-play'],
+                ['voiceTriggersMenuToggle', 'Voice triggers'],
+                ['votingMenuToggle', 'Voting'],
+            ];
+            const onLabels = [];
+            for (const [id, label] of toggleIds) {
+                const el = document.getElementById(id);
+                if (el && el.checked) onLabels.push(label);
+            }
+            if (onLabels.length === 0) {
+                badge.classList.add('hidden');
+                badge.textContent = '';
+                badge.title = '';
+            } else {
+                badge.classList.remove('hidden');
+                badge.textContent = String(onLabels.length);
+                badge.title = 'On: ' + onLabels.join(', ');
+            }
         }
 
         async function setVotingEnabledFromMenu(enabled) {
@@ -6828,6 +6985,17 @@
             if (m) m.checked = !!enabled;
             if (t) t.checked = !!enabled;
         }
+
+        // Keep the Controls button badge in sync with whatever's toggled
+        // inside the popover. Delegated `change` on the menu catches every
+        // checkbox flip without each setter needing to remember to call us.
+        (function wireControlsBadge() {
+            const menu = document.getElementById('controlsMenu');
+            if (menu) menu.addEventListener('change', () => refreshControlsBadge());
+            // Initial paint after toggles render with their server-side state.
+            setTimeout(refreshControlsBadge, 500);
+            setTimeout(refreshControlsBadge, 2000);
+        })();
 
         var vs = document.getElementById('volumeSlider');
         var vsc = document.getElementById('volumeSliderCard');
@@ -8115,7 +8283,7 @@
         }
 
         async function deleteVoiceTrigger(id, phrase) {
-            if (!confirm('Delete trigger "' + phrase + '"?')) return;
+            if (!(await confirmModal('Delete trigger "' + phrase + '"?', { okText: 'Delete', danger: true }))) return;
             const res = await api('/api/superadmin/voice-triggers/' + encodeURIComponent(id), { method: 'DELETE' });
             if (!res || !res.ok) {
                 alert('Failed to delete trigger');
