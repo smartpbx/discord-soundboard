@@ -2542,6 +2542,11 @@
                 const overlay = document.createElement('div');
                 overlay.className = 'whats-new-overlay';
                 overlay.tabIndex = -1;
+                // Sit above any already-open .whats-new-overlay (Clips,
+                // Superadmin, What's New, etc.) and use an opaque-enough
+                // backdrop that the modal beneath doesn't bleed through.
+                overlay.style.zIndex = '1300';
+                overlay.style.background = 'rgba(0,0,0,0.85)';
                 const isDanger = okStyle === 'danger';
                 const titleHtml = title ? '<div style="font-weight:600;font-size:1.05rem;margin-bottom:0.5rem;">' + (title.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))) + '</div>' : '';
                 const msgHtml = String(message || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])).replace(/\n/g, '<br>');
@@ -2795,11 +2800,17 @@
                 body.textContent = 'Failed to load clips: ' + (err && err.message || 'unknown');
             }
         }
+        // Per-clip editor state — keyed by clip.id. Holds the decoded peaks
+        // for the waveform render, the trim selection, and the live preview
+        // <audio> element.
+        const _clipEditor = new Map();
+
         function _renderClips() {
             const body = document.getElementById('clipsBody');
             if (!body) return;
             if (!_clipsCache.length) {
-                body.innerHTML = '<div style="padding:1rem; color:var(--text-muted); text-align:center;">No clips yet. In Discord, run <code>/clip</code> (default 30 seconds) while people are talking.</div>';
+                body.innerHTML = '<div style="padding:1rem; color:var(--text-muted); text-align:center;">No clips yet. Hit the 📎 Clip button or run <code>/clip</code> in Discord while people are talking.</div>';
+                _clipEditor.clear();
                 return;
             }
             const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -2809,39 +2820,222 @@
                 const dur = Number(c.durationSec) || 0;
                 const saved = c.savedToSoundboard ? '<span style="color:var(--accent); font-size:0.78rem;">saved as ' + esc(c.savedToSoundboard) + '</span>' : '';
                 return (
-                    '<div class="clip-row" data-id="' + esc(c.id) + '" style="border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.75rem; background:var(--surface);">' +
-                    '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.4rem;">' +
+                    '<div class="clip-row" data-id="' + esc(c.id) + '" style="border:1px solid var(--border); border-radius:8px; padding:0.75rem; background:var(--surface);">' +
+                    '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">' +
                     '<div><strong>' + dur + 's</strong> · <span style="color:var(--text-muted); font-size:0.82rem;">' + when + ' · ' + by + '</span></div>' +
                     saved +
                     '</div>' +
-                    '<audio controls preload="none" src="/api/clips/' + esc(c.id) + '/audio" style="width:100%; margin-bottom:0.5rem;"></audio>' +
-                    '<div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.4rem;">' +
-                    '<label style="font-size:0.78rem; color:var(--text-muted);">Trim:</label>' +
-                    '<input type="number" min="0" max="' + dur + '" step="0.1" value="0" data-field="start" style="width:75px; padding:0.25rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"> s' +
-                    '<span style="color:var(--text-muted);">→</span>' +
-                    '<input type="number" min="0" max="' + dur + '" step="0.1" value="' + dur + '" data-field="end" style="width:75px; padding:0.25rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"> s' +
-                    '<input type="text" placeholder="Name (e.g. that one moment)" data-field="name" style="flex:1; min-width:200px; padding:0.25rem 0.5rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;">' +
+                    '<div class="sound-panel-waveform-wrap" data-clip-waveform>' +
+                    '<canvas data-clip-canvas width="400" height="80"></canvas>' +
+                    '<div class="sound-panel-waveform-handle start" data-clip-handle-start title="Drag to set start"></div>' +
+                    '<div class="sound-panel-waveform-handle end" data-clip-handle-end title="Drag to set end"></div>' +
                     '</div>' +
-                    '<div style="display:flex; gap:0.4rem; justify-content:flex-end;">' +
-                    '<button type="button" class="btn btn-ghost" onclick="_clipDelete(\'' + esc(c.id) + '\')">Discard</button>' +
-                    '<button type="button" class="btn btn-primary" onclick="_clipSaveAsSound(\'' + esc(c.id) + '\')">Save to soundboard</button>' +
+                    '<div class="sound-panel-preview-row">' +
+                    '<span data-clip-trim-label class="text-muted" style="font-size:0.85rem;">Loading waveform…</span>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" data-clip-preview>▶ Preview</button>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" data-clip-reset>Reset trim</button>' +
+                    '</div>' +
+                    '<div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.6rem;">' +
+                    '<input type="text" placeholder="Name (e.g. that one moment)" data-clip-name style="flex:1; padding:0.4rem 0.6rem; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font:inherit;">' +
+                    '<button type="button" class="btn btn-ghost" data-clip-discard>Discard</button>' +
+                    '<button type="button" class="btn btn-primary" data-clip-save>Save to soundboard</button>' +
                     '</div>' +
                     '</div>'
                 );
             }).join('');
+            // Wire up each row: load waveform, attach handlers
+            const rows = body.querySelectorAll('.clip-row');
+            rows.forEach(row => _wireClipRow(row));
         }
-        async function _clipSaveAsSound(id) {
-            const row = document.querySelector('.clip-row[data-id="' + id + '"]');
-            if (!row) return;
-            const startSec = parseFloat(row.querySelector('[data-field="start"]').value) || 0;
-            const endSec = parseFloat(row.querySelector('[data-field="end"]').value) || 0;
-            const displayName = String(row.querySelector('[data-field="name"]').value || '').trim();
+
+        function _wireClipRow(row) {
+            const id = row.dataset.id;
+            const meta = _clipsCache.find(c => c.id === id);
+            if (!meta) return;
+            const dur = Number(meta.durationSec) || 0;
+            const state = { peaks: null, duration: dur, startTime: 0, endTime: dur, audio: null, playhead: null };
+            _clipEditor.set(id, state);
+
+            const wrap = row.querySelector('[data-clip-waveform]');
+            const canvas = row.querySelector('[data-clip-canvas]');
+            const handleStart = row.querySelector('[data-clip-handle-start]');
+            const handleEnd = row.querySelector('[data-clip-handle-end]');
+            const label = row.querySelector('[data-clip-trim-label]');
+            const previewBtn = row.querySelector('[data-clip-preview]');
+            const resetBtn = row.querySelector('[data-clip-reset]');
+            const saveBtn = row.querySelector('[data-clip-save]');
+            const discardBtn = row.querySelector('[data-clip-discard]');
+
+            const draw = () => _drawClipWaveform(canvas, wrap, state);
+            const updateLabel = () => { label.textContent = 'Start: ' + _fmtTime(state.startTime) + ' — End: ' + _fmtTime(state.endTime); };
+            const updateHandles = () => {
+                if (state.duration <= 0) return;
+                const w = wrap.clientWidth || 400;
+                const startPct = state.startTime / state.duration;
+                const endPct = state.endTime / state.duration;
+                handleStart.style.left = Math.max(0, startPct * w - 5) + 'px';
+                handleEnd.style.right = Math.max(0, (1 - endPct) * w - 5) + 'px';
+                handleEnd.style.left = 'auto';
+            };
+            state._redraw = () => { draw(); updateLabel(); updateHandles(); };
+
+            // Drag handlers
+            const dragStart = (isStart) => (e) => {
+                e.preventDefault();
+                const move = (ev) => {
+                    const rect = wrap.getBoundingClientRect();
+                    const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+                    const t = pct * state.duration;
+                    if (isStart) state.startTime = Math.max(0, Math.min(t, state.endTime - 0.1));
+                    else state.endTime = Math.min(state.duration, Math.max(t, state.startTime + 0.1));
+                    state._redraw();
+                };
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', () => document.removeEventListener('mousemove', move), { once: true });
+            };
+            handleStart.addEventListener('mousedown', dragStart(true));
+            handleEnd.addEventListener('mousedown', dragStart(false));
+
+            previewBtn.addEventListener('click', () => _clipPreviewToggle(id, row));
+            resetBtn.addEventListener('click', () => {
+                state.startTime = 0;
+                state.endTime = state.duration;
+                state._redraw();
+            });
+            saveBtn.addEventListener('click', () => _clipSaveAsSound(id, row));
+            discardBtn.addEventListener('click', () => _clipDelete(id));
+
+            state._redraw();
+            _loadClipWaveform(id, row, state).then(() => state._redraw());
+
+            // Re-render on viewport resize so handles stay aligned.
+            const ro = new ResizeObserver(() => state._redraw());
+            ro.observe(wrap);
+        }
+
+        function _fmtTime(sec) {
+            if (!Number.isFinite(sec)) return '—';
+            const m = Math.floor(sec / 60);
+            const s = sec - m * 60;
+            return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+        }
+
+        async function _loadClipWaveform(id, row, state) {
+            try {
+                const res = await fetch('/api/clips/' + encodeURIComponent(id) + '/audio', { credentials: CREDENTIALS });
+                if (!res.ok) return;
+                const buf = await res.arrayBuffer();
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const decoded = await ctx.decodeAudioData(buf);
+                const ch = decoded.getChannelData(0);
+                state.duration = decoded.duration;
+                state.endTime = decoded.duration;
+                const bars = 300;
+                const step = Math.max(1, Math.floor(ch.length / bars));
+                const peaks = [];
+                for (let i = 0; i < bars; i++) {
+                    let min = 0, max = 0;
+                    for (let j = 0; j < step; j++) {
+                        const v = ch[i * step + j];
+                        if (v == null) continue;
+                        if (v < min) min = v;
+                        if (v > max) max = v;
+                    }
+                    peaks.push({ min, max });
+                }
+                state.peaks = peaks;
+                try { ctx.close(); } catch {}
+            } catch (e) {
+                console.warn('[clip] waveform load failed for', id, e);
+            }
+        }
+
+        function _drawClipWaveform(canvas, wrap, state) {
+            if (!canvas || !wrap) return;
+            const w = wrap.clientWidth || 400;
+            const h = 80;
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, w, h);
+            if (!state.peaks || !state.peaks.length) {
+                ctx.fillStyle = 'rgba(80,80,90,0.4)';
+                ctx.fillRect(0, h / 2 - 1, w, 2);
+                return;
+            }
+            const barCount = state.peaks.length;
+            const barW = Math.max(1, (w / barCount) - 0.5);
+            const dur = state.duration || 1;
+            const startPct = state.startTime / dur;
+            const endPct = state.endTime / dur;
+            state.peaks.forEach((peak, i) => {
+                const x = (i / barCount) * w;
+                const pct = (i + 0.5) / barCount;
+                const center = h / 2;
+                const halfH = Math.max(1, (Math.abs(peak.max - peak.min) / 2) * (h * 0.45));
+                const inRange = pct >= startPct && pct <= endPct;
+                ctx.fillStyle = inRange ? 'rgba(124, 58, 237, 0.7)' : 'rgba(80, 80, 90, 0.5)';
+                ctx.fillRect(x, center - halfH, barW, halfH * 2);
+            });
+            if (state.playhead != null && state.duration > 0) {
+                const playX = Math.max(0, Math.min(w, (state.playhead / state.duration) * w));
+                ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                ctx.fillRect(Math.floor(playX), 0, 2, h);
+            }
+        }
+
+        function _clipPreviewToggle(id, row) {
+            const state = _clipEditor.get(id);
+            const btn = row.querySelector('[data-clip-preview]');
+            if (!state || !btn) return;
+            if (state.audio) {
+                try { state.audio.pause(); } catch {}
+                state.audio = null;
+                state.playhead = null;
+                state._redraw();
+                btn.textContent = '▶ Preview';
+                return;
+            }
+            const audio = new Audio('/api/clips/' + encodeURIComponent(id) + '/audio');
+            audio.currentTime = state.startTime;
+            audio.addEventListener('timeupdate', () => {
+                state.playhead = audio.currentTime;
+                if (audio.currentTime >= state.endTime) {
+                    try { audio.pause(); } catch {}
+                    state.audio = null;
+                    state.playhead = null;
+                    btn.textContent = '▶ Preview';
+                }
+                state._redraw();
+            });
+            audio.addEventListener('ended', () => {
+                state.audio = null;
+                state.playhead = null;
+                state._redraw();
+                btn.textContent = '▶ Preview';
+            });
+            audio.addEventListener('error', () => {
+                state.audio = null;
+                state.playhead = null;
+                state._redraw();
+                btn.textContent = '▶ Preview';
+                showToast('Preview failed', 'error');
+            });
+            state.audio = audio;
+            btn.textContent = '⏹ Stop';
+            audio.play().catch(() => {});
+        }
+
+        async function _clipSaveAsSound(id, row) {
+            const state = _clipEditor.get(id);
+            if (!state) return;
+            const displayName = String(row.querySelector('[data-clip-name]').value || '').trim();
             if (!displayName) { showToast('Give it a name first', 'error'); return; }
-            if (endSec <= startSec) { showToast('End must be greater than start', 'error'); return; }
+            if (state.endTime <= state.startTime) { showToast('End must be after start', 'error'); return; }
             const res = await api('/api/clips/' + encodeURIComponent(id) + '/save-as-sound', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ startSec, endSec, displayName }),
+                body: JSON.stringify({ startSec: state.startTime, endSec: state.endTime, displayName }),
             });
             if (res && res.ok) {
                 const d = await res.json();

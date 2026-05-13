@@ -1119,7 +1119,19 @@ if (!SESSION_SECRET || SESSION_SECRET === 'soundboard-secret-change-me') {
 // loopback address and X-Forwarded-For is unverified, so any direct hit
 // could spoof the header to dodge IP-based cooldowns / blocks.
 app.set('trust proxy', 1);
-app.use(express.static('public'));
+
+// gzip / brotli all eligible responses. /api/sounds (~130 KB JSON) and the
+// single-file frontend (~660 KB) compress to roughly 1/5th, which is the
+// biggest payload win available without restructuring assets.
+app.use(require('compression')());
+
+app.use(express.static('public', {
+    // Strong cache + ETag for static assets. The /api/version SHA poll
+    // already forces a hard reload when the build SHA changes, so the
+    // 1-hour cap is just a backstop for non-deploy edits during dev.
+    etag: true,
+    maxAge: 3600 * 1000,
+}));
 app.use(express.json());
 app.use(require('cookie-parser')());
 // Held in a named ref so the WS upgrade handler (yt-session noVNC proxy) can
@@ -2261,48 +2273,85 @@ const CLIPS_DIR = path.join(DATA_DIR, 'clips');
 const CLIPS_INDEX_PATH = path.join(DATA_DIR, 'clips.json');
 try { fs.mkdirSync(CLIPS_DIR, { recursive: true }); } catch {}
 
-const clipBuffers = new Map();           // userId -> { chunks: [{pcm, ts}], totalBytes }
+// Per speaker we keep a list of "sessions". Each session corresponds to one
+// uninterrupted speaking turn (from receiver.speaking('start') until 800 ms
+// of silence ends the subscription). Within a session, PCM chunks are
+// strictly contiguous and back-to-back — Discord's opus decoder produces
+// a continuous 48 kHz stereo stream while a user is talking. Recording
+// per-chunk wall-clock timestamps (the previous design) was the source of
+// the choppy/garbled output: event-loop jitter between Date.now() calls
+// shifted consecutive 20 ms chunks by ±a few ms, so the mixer placed them
+// at overlapping byte offsets and chopped/duplicated samples. By anchoring
+// only on the session's first-chunk timestamp and laying every subsequent
+// chunk down contiguously inside the session, the audio inside a turn is
+// guaranteed bit-for-bit gapless; only the gap *between* sessions is
+// approximate, which is exactly the right resolution for "clip the last
+// N seconds" mixing.
+//
+//   clipBuffers: userId -> { sessions: [{ startTs, pcm: Buffer[], totalBytes }], activeSession }
+const clipBuffers = new Map();
 const clipCaptureSpeakers = new Map();   // userId -> { opusStream, decoder }
 let clipCaptureAttachedReceiver = null;
 let clipCaptureSpeakingListener = null;
 
-function appendClipChunk(userId, pcm) {
+function startClipSession(userId) {
     let buf = clipBuffers.get(userId);
     if (!buf) {
-        buf = { chunks: [], totalBytes: 0 };
+        buf = { sessions: [], active: null };
         clipBuffers.set(userId, buf);
     }
-    buf.chunks.push({ pcm, ts: Date.now() });
-    buf.totalBytes += pcm.length;
+    const session = { startTs: Date.now(), pcm: [], totalBytes: 0 };
+    buf.sessions.push(session);
+    buf.active = session;
+}
+
+function endClipSession(userId) {
+    const buf = clipBuffers.get(userId);
+    if (buf) buf.active = null;
+}
+
+function appendClipChunk(userId, pcm) {
+    const buf = clipBuffers.get(userId);
+    if (!buf || !buf.active) return;
+    buf.active.pcm.push(pcm);
+    buf.active.totalBytes += pcm.length;
+    // Cap retention per-user. Drop the oldest closed session entirely
+    // whenever total bytes exceed the cap. (Don't trim the active session
+    // — splitting it would re-introduce the contiguity problem.)
     const cap = CLIP_BUFFER_MAX_SEC * CLIP_BYTES_PER_SEC;
-    while (buf.totalBytes > cap && buf.chunks.length > 1) {
-        const dropped = buf.chunks.shift();
-        buf.totalBytes -= dropped.pcm.length;
+    let totalBytes = 0;
+    for (const s of buf.sessions) totalBytes += s.totalBytes;
+    while (totalBytes > cap && buf.sessions.length > 1) {
+        const dropped = buf.sessions.shift();
+        totalBytes -= dropped.totalBytes;
+        if (buf.active === dropped) buf.active = null;
     }
 }
 
-// Walk every speaker's ring buffer and lay their audio onto a fresh stereo
-// timeline. Overlapping audio is sample-summed with clipping; gaps stay
-// silent. Wall-clock arrival timestamps drive placement.
 function mixClipToPcm(seconds) {
     const totalShorts = seconds * CLIP_SAMPLE_RATE * CLIP_CHANNELS;
     const out = new Int16Array(totalShorts);
     const now = Date.now();
     const startMs = now - seconds * 1000;
     for (const [, buf] of clipBuffers) {
-        for (const chunk of buf.chunks) {
-            if (chunk.ts + (chunk.pcm.length / CLIP_BYTES_PER_SEC) * 1000 < startMs) continue;
-            if (chunk.ts > now) continue;
-            let outShortOffset = Math.floor(((chunk.ts - startMs) / 1000) * CLIP_SAMPLE_RATE) * CLIP_CHANNELS;
-            let chunkShortStart = 0;
+        for (const session of buf.sessions) {
+            if (session.totalBytes === 0) continue;
+            const sessionDurMs = (session.totalBytes / CLIP_BYTES_PER_SEC) * 1000;
+            if (session.startTs + sessionDurMs < startMs) continue;
+            if (session.startTs > now) continue;
+            // Concatenate session PCM once (so the Int16Array view is
+            // properly aligned with a clean underlying ArrayBuffer).
+            const sessionPcm = session.pcm.length === 1 ? session.pcm[0] : Buffer.concat(session.pcm, session.totalBytes);
+            let outShortOffset = Math.floor(((session.startTs - startMs) / 1000) * CLIP_SAMPLE_RATE) * CLIP_CHANNELS;
+            let sessionShortStart = 0;
             if (outShortOffset < 0) {
-                chunkShortStart = -outShortOffset;
+                sessionShortStart = -outShortOffset;
                 outShortOffset = 0;
             }
-            const chunkInt16 = new Int16Array(chunk.pcm.buffer, chunk.pcm.byteOffset, chunk.pcm.length / 2);
-            const copyLen = Math.min(chunkInt16.length - chunkShortStart, totalShorts - outShortOffset);
+            const sessionInt16 = new Int16Array(sessionPcm.buffer, sessionPcm.byteOffset, sessionPcm.length / 2);
+            const copyLen = Math.min(sessionInt16.length - sessionShortStart, totalShorts - outShortOffset);
             for (let i = 0; i < copyLen; i++) {
-                const sum = out[outShortOffset + i] + chunkInt16[chunkShortStart + i];
+                const sum = out[outShortOffset + i] + sessionInt16[sessionShortStart + i];
                 out[outShortOffset + i] = sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum;
             }
         }
@@ -2354,12 +2403,14 @@ function startClipCapture() {
         try {
             opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
             decoder = new prism.opus.Decoder({ rate: CLIP_SAMPLE_RATE, channels: CLIP_CHANNELS, frameSize: 960 });
+            startClipSession(userId);
             opusStream.pipe(decoder);
             decoder.on('data', (chunk) => { try { appendClipChunk(userId, Buffer.from(chunk)); } catch {} });
             let cleanedUp = false;
             const cleanup = () => {
                 if (cleanedUp) return;
                 cleanedUp = true;
+                endClipSession(userId);
                 try { opusStream.destroy(); } catch {}
                 try { decoder.destroy(); } catch {}
                 clipCaptureSpeakers.delete(userId);
@@ -2371,6 +2422,7 @@ function startClipCapture() {
             console.error('[clip] capture attach failed for', userId, err.message);
             try { opusStream?.destroy?.(); } catch {}
             try { decoder?.destroy?.(); } catch {}
+            endClipSession(userId);
         }
     };
     receiver.speaking.on('start', onSpeakingStart);
