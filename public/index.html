@@ -533,6 +533,13 @@
         .sounds-option-item.active { background: rgba(124, 58, 237, 0.2); color: var(--accent); }
         .sounds-option-item.active::before { content: '✓ '; }
         .sound-grid.reorder-mode .sound-item { user-select: none; }
+        .sound-grid.select-mode .sound-btn { cursor: pointer; }
+        .sound-grid.select-mode .sound-item-actions { display: none; }
+        .sound-grid.select-mode .sound-item.selected { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+        .bulk-bar { position: sticky; top: 0; z-index: 20; display: none; background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 0.5rem 0.75rem; margin: 0 0 0.6rem; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .bulk-bar.visible { display: flex; }
+        .bulk-bar .bulk-count { font-weight: 600; color: var(--accent); }
+        .bulk-bar .bulk-spacer { flex: 1; }
         .sound-item-wrap { display: contents; }
         .sound-grid.reorder-mode .sound-item-wrap { display: flex; flex-direction: column; cursor: grab; }
         .sound-grid.reorder-mode .sound-item-wrap:active { cursor: grabbing; }
@@ -1346,6 +1353,8 @@
                         <button type="button" class="sounds-option-item" id="heatmapBtn" onclick="toggleHeatmapMode(); closeSoundsOptionsMenu();" title="Tint each sound by play count — brighter = more plays, scaled against the most-played sound on the whole board">Heatmap</button>
                         <button type="button" class="sounds-option-item admin-only" id="reorderBtn" onclick="toggleReorder(); closeSoundsOptionsMenu();" title="Drag to reorder sounds">Reorder</button>
                         <button type="button" class="sounds-option-item admin-only" id="manageTagsBtn" onclick="toggleManageTags(); closeSoundsOptionsMenu();" title="Manage tags: reorder, delete, hide">Manage tags</button>
+                        <button type="button" class="sounds-option-item admin-only" id="selectModeBtn" onclick="toggleSelectMode(); closeSoundsOptionsMenu();" title="Bulk-select sounds for delete / retag">Select multiple</button>
+                        <button type="button" class="sounds-option-item admin-only" id="findDuplicatesBtn" onclick="findDuplicates(); closeSoundsOptionsMenu();" title="Scan the library for likely duplicates (same size + duration)">Find duplicates</button>
                     </div>
                 </div>
                 </div>
@@ -1389,6 +1398,15 @@
                 </div>
             </div>
             <hr class="sounds-divider">
+            <div id="bulkBar" class="bulk-bar">
+                <span class="bulk-count" id="bulkCount">0 selected</span>
+                <span class="bulk-spacer"></span>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="bulkSelectAllVisible()">Select all visible</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="bulkClearSelection()">Clear</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="bulkRetagPrompt()">Retag…</button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="bulkDeleteSelected()">Delete selected</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="toggleSelectMode()">Exit select</button>
+            </div>
             <div id="soundsList" class="sound-grid"></div>
             <div class="sound-panel-overlay hidden" id="soundPanelOverlay" onclick="if(event.target===this)closeSoundPanel()">
             <div class="sound-panel" id="soundPanel">
@@ -5659,6 +5677,99 @@
             renderSoundsGrid();
         }
 
+        // ---- Bulk select + delete + retag + duplicate scan ----
+        let selectMode = false;
+        const _selectedSounds = new Set();
+        function toggleSelectMode() {
+            selectMode = !selectMode;
+            if (!selectMode) _selectedSounds.clear();
+            const grid = document.getElementById('soundsList');
+            const bar = document.getElementById('bulkBar');
+            if (grid) grid.classList.toggle('select-mode', selectMode);
+            if (bar) bar.classList.toggle('visible', selectMode);
+            const btn = document.getElementById('selectModeBtn');
+            if (btn) btn.classList.toggle('active', selectMode);
+            renderBulkSelection();
+        }
+        function _handleSelectClick(filename) {
+            if (!selectMode) return false;
+            if (_selectedSounds.has(filename)) _selectedSounds.delete(filename);
+            else _selectedSounds.add(filename);
+            renderBulkSelection();
+            return true;
+        }
+        function renderBulkSelection() {
+            const count = _selectedSounds.size;
+            const el = document.getElementById('bulkCount');
+            if (el) el.textContent = count + ' selected';
+            document.querySelectorAll('.sound-item').forEach(it => {
+                const fn = it.dataset.filename;
+                it.classList.toggle('selected', !!fn && _selectedSounds.has(fn));
+            });
+        }
+        function bulkClearSelection() { _selectedSounds.clear(); renderBulkSelection(); }
+        function bulkSelectAllVisible() {
+            document.querySelectorAll('.sound-item').forEach(it => {
+                if (it.dataset.filename) _selectedSounds.add(it.dataset.filename);
+            });
+            renderBulkSelection();
+        }
+        async function bulkDeleteSelected() {
+            if (!_selectedSounds.size) { showToast('Nothing selected', 'info'); return; }
+            const list = [..._selectedSounds];
+            if (!(await confirmModal('Permanently delete ' + list.length + ' sound' + (list.length === 1 ? '' : 's') + '? This cannot be undone.', { okText: 'Delete', danger: true }))) return;
+            const res = await api('/api/sounds/bulk-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames: list }),
+            });
+            if (res && res.ok) {
+                const d = await res.json();
+                showToast('Deleted ' + d.deleted.length + (d.failed.length ? ' · ' + d.failed.length + ' failed' : ''), d.failed.length ? 'error' : 'success');
+                _selectedSounds.clear();
+                fetchSounds();
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Bulk delete failed', 'error');
+            }
+        }
+        async function bulkRetagPrompt() {
+            if (!_selectedSounds.size) { showToast('Nothing selected', 'info'); return; }
+            const addRaw = await promptModal('Tags to ADD (comma-separated, blank to skip):', '', { okText: 'Next' });
+            if (addRaw == null) return;
+            const removeRaw = await promptModal('Tags to REMOVE (comma-separated, blank to skip):', '', { okText: 'Apply' });
+            if (removeRaw == null) return;
+            const addTags = addRaw.split(',').map(s => s.trim()).filter(Boolean);
+            const removeTags = removeRaw.split(',').map(s => s.trim()).filter(Boolean);
+            if (!addTags.length && !removeTags.length) { showToast('Nothing to change', 'info'); return; }
+            const res = await api('/api/sounds/bulk-retag', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames: [..._selectedSounds], addTags, removeTags }),
+            });
+            if (res && res.ok) {
+                const d = await res.json();
+                showToast('Retagged ' + d.updated + ' sounds', 'success');
+                fetchSounds();
+            } else {
+                const d = res ? await res.json().catch(() => ({})) : {};
+                showToast(d.error || 'Bulk retag failed', 'error');
+            }
+        }
+        async function findDuplicates() {
+            const res = await api('/api/sounds/duplicates');
+            if (!res || !res.ok) { showToast('Failed to scan for duplicates', 'error'); return; }
+            const d = await res.json();
+            if (!d.totalGroups) { await alertModal('No duplicate groups found — every sound has a unique (size, duration) combination.', { title: 'Duplicate scan' }); return; }
+            const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+            const lines = d.groups.map((g, i) => {
+                const head = '<strong>Group ' + (i + 1) + ':</strong> ' + g[0].size + ' B · ' + (g[0].duration != null ? g[0].duration.toFixed(1) + 's' : '?s');
+                const items = g.map(f => '• ' + esc(f.displayName) + ' <code style="font-size:0.78rem;color:var(--text-muted)">' + esc(f.filename) + '</code>').join('<br>');
+                return head + '<br>' + items;
+            }).join('<br><br>');
+            await alertModal(d.totalGroups + ' duplicate group' + (d.totalGroups === 1 ? '' : 's') + ' found. Review and delete manually via the soundboard:\n\n' + lines.replace(/<br>/g, '\n').replace(/<[^>]+>/g, ''), { title: 'Duplicate scan results' });
+        }
+
         function setupSoundGridDragDrop(grid) {
             if (!grid || grid.dataset.dragSetup) return;
             grid.dataset.dragSetup = '1';
@@ -6884,6 +6995,9 @@
 
         async function playSound(filename, startTime, opts) {
             opts = opts || {};
+            // In bulk-select mode, a tile click toggles selection instead of
+            // playing. Returning early prevents the cooldown / fetch path.
+            if (selectMode && _handleSelectClick(filename)) return;
             // Tap-on-disabled feedback for mobile (where there's no tooltip).
             // Native `disabled` swallows clicks entirely, so the renderer now
             // uses `aria-disabled` + the `.disabled` visual class — meaning

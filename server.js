@@ -3596,6 +3596,117 @@ app.patch('/api/sounds/metadata', requireAdmin, (req, res) => {
     res.json({ filename: safeFilename, displayName: getDisplayName(meta, safeFilename), duration: getDuration(meta, safeFilename), tags: getTags(meta, safeFilename), color: getColor(meta, safeFilename), volume: getSoundVolume(meta, safeFilename), startTime: getSoundStartTime(meta, safeFilename), endTime: getSoundEndTime(meta, safeFilename), stopOthers: getSoundStopOthers(meta, safeFilename), tts: getSoundTts(meta, safeFilename) });
 });
 
+// Bulk delete — same semantics as the single DELETE (archive + remove from
+// meta + drop from order). Honours per-user sound-delete permission.
+app.post('/api/sounds/bulk-delete', requireAuth, (req, res) => {
+    const role = req.session.user.role;
+    const un = req.session.user.username;
+    if (!getSoundDeleteEnabled(role, un)) return res.status(403).json({ error: 'Sound delete is not enabled for your account' });
+    const incoming = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const safe = [...new Set(incoming.map(f => path.basename(String(f))).filter(f => /\.(mp3|wav|ogg)$/i.test(f)))];
+    if (!safe.length) return res.status(400).json({ error: 'No valid filenames' });
+    if (safe.length > 200) return res.status(400).json({ error: 'Max 200 per request' });
+    const deleted = [], failed = [];
+    const meta = loadSoundsMeta();
+    for (const filename of safe) {
+        const filePath = path.join(SOUNDS_DIR, filename);
+        if (!fs.existsSync(filePath)) { failed.push({ filename, reason: 'not-found' }); continue; }
+        const resolved = path.resolve(filePath);
+        if (!resolved.startsWith(path.resolve(SOUNDS_DIR))) { failed.push({ filename, reason: 'invalid-path' }); continue; }
+        try {
+            if (playbackState.filename === filename) {
+                player.stop();
+                playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
+            }
+            archiveSoundFile(filePath, filename);
+            delete meta[filename];
+            deleted.push(filename);
+        } catch (e) {
+            failed.push({ filename, reason: e.message || 'unknown' });
+        }
+    }
+    if (deleted.length) {
+        meta._order = getSoundOrder(meta).filter(f => !deleted.includes(f));
+        saveSoundsMeta(meta);
+    }
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'sound.bulk-delete',
+        target: null,
+        details: { deleted_count: deleted.length, failed_count: failed.length },
+    });
+    res.json({ deleted, failed });
+});
+
+// Bulk retag — add and/or remove tags across a set of filenames in one
+// pass. addTags / removeTags both arrays of strings.
+app.post('/api/sounds/bulk-retag', requireAdmin, (req, res) => {
+    const incoming = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const addTags = Array.isArray(req.body?.addTags) ? req.body.addTags.map(s => String(s).trim()).filter(Boolean) : [];
+    const removeTags = Array.isArray(req.body?.removeTags) ? req.body.removeTags.map(s => String(s).trim()).filter(Boolean) : [];
+    const safe = [...new Set(incoming.map(f => path.basename(String(f))).filter(f => /\.(mp3|wav|ogg)$/i.test(f)))];
+    if (!safe.length || (!addTags.length && !removeTags.length)) {
+        return res.status(400).json({ error: 'Need filenames + at least one addTag/removeTag' });
+    }
+    const meta = loadSoundsMeta();
+    let updated = 0;
+    for (const filename of safe) {
+        if (!(filename in meta) && !fs.existsSync(path.join(SOUNDS_DIR, filename))) continue;
+        const cur = getTags(meta, filename);
+        const set = new Set(cur);
+        for (const t of removeTags) set.delete(t);
+        for (const t of addTags) set.add(t);
+        const next = [...set];
+        const existing = meta[filename];
+        if (typeof existing === 'object' && existing !== null) meta[filename] = { ...existing, tags: next };
+        else meta[filename] = { displayName: typeof existing === 'string' ? existing : filename, tags: next };
+        updated++;
+    }
+    if (updated) saveSoundsMeta(meta);
+    statsDb.recordAdminAction({
+        actor: req.session.user.username,
+        actorRole: req.session.user.role,
+        action: 'sound.bulk-retag',
+        target: null,
+        details: { count: updated, addTags, removeTags },
+    });
+    res.json({ updated, addTags, removeTags });
+});
+
+// Duplicate detection — group sounds by (filesize, rounded-duration). Two
+// files with the same size to the byte AND the same duration to a tenth of
+// a second are almost certainly the same audio.
+app.get('/api/sounds/duplicates', requireAdmin, async (req, res) => {
+    try {
+        const files = fs.readdirSync(SOUNDS_DIR).filter(f => /\.(mp3|wav|ogg)$/i.test(f));
+        const meta = loadSoundsMeta();
+        const groups = new Map();
+        for (const filename of files) {
+            const fp = path.join(SOUNDS_DIR, filename);
+            let stat;
+            try { stat = fs.statSync(fp); } catch { continue; }
+            let dur = getDuration(meta, filename);
+            if (dur == null) {
+                try { dur = await probeDurationAsync(fp); } catch {}
+                if (dur != null) setSoundMeta(filename, { duration: dur });
+            }
+            const key = `${stat.size}_${dur != null ? Math.round(dur * 10) : 'na'}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({
+                filename,
+                displayName: getDisplayName(meta, filename),
+                size: stat.size,
+                duration: dur,
+            });
+        }
+        const dupGroups = [...groups.values()].filter(g => g.length > 1);
+        res.json({ groups: dupGroups, totalGroups: dupGroups.length });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
     const { filename, newName } = req.body || {};
     const safeFilename = filename && path.basename(String(filename));
