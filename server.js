@@ -830,6 +830,9 @@ function loadSoundsMeta() {
 
 function saveSoundsMeta(data) {
     writeJsonAtomic(SOUNDS_META_PATH, data);
+    // Any meta edit (rename, retag, volume, trim, etc.) needs the next
+    // /api/sounds poll to see the change immediately.
+    if (typeof invalidateSoundsCache === 'function') invalidateSoundsCache();
 }
 
 function getDisplayName(meta, filename) {
@@ -3216,49 +3219,83 @@ app.post('/api/leave', requireAdmin, (req, res) => {
     }
 });
 
-app.get('/api/sounds', requireAuth, (req, res) => {
-    fs.readdir(SOUNDS_DIR, (err, files) => {
-        if (err) return res.status(500).send('Error reading sounds directory');
-        const meta = loadSoundsMeta();
-        const audioFiles = (files || []).filter(f => f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.ogg'));
-        const order = getSoundOrder(meta);
-        const orderSet = new Set(order);
-        const ordered = order.filter(f => audioFiles.includes(f));
-        const rest = audioFiles.filter(f => !orderSet.has(f));
-        const sorted = [...ordered, ...rest];
-        const list = sorted.map(filename => {
-            const m = meta[filename];
-            const suno = (m && typeof m === 'object' && m.suno && typeof m.suno === 'object') ? m.suno : null;
-            let mtime = null;
-            try { mtime = fs.statSync(path.join(SOUNDS_DIR, filename)).mtimeMs; } catch {}
-            return {
-                filename,
-                displayName: getDisplayName(meta, filename),
-                duration: getDuration(meta, filename),
-                tags: getTags(meta, filename),
-                color: getColor(meta, filename),
-                volume: getSoundVolume(meta, filename),
-                startTime: getSoundStartTime(meta, filename),
-                endTime: getSoundEndTime(meta, filename),
-                stopOthers: getSoundStopOthers(meta, filename),
-                tts: getSoundTts(meta, filename),
-                mtime,
-                suno: suno ? {
-                    model: suno.model || null,
-                    style: suno.style || null,
-                    cover: suno.cover || null,
-                    title: suno.title || null,
-                    // Keep big fields off the list response; frontend fetches full meta on demand
-                    has_lyrics: !!suno.lyrics,
-                } : null,
-            };
-        });
-        const tagOrder = getTagOrder(meta);
-        const hidden = getHiddenTags(meta);
-        const allTags = getAllTagsFromSounds(meta);
-        const tags = tagOrder.length ? [...tagOrder, ...allTags.filter(t => !tagOrder.includes(t))] : allTags;
-        res.json({ list, tags: [...new Set(tags)], hidden });
+// /api/sounds is polled at 1-10s by every connected client and rebuilds a
+// ~130 KB JSON payload that requires N statSync calls + a full meta JSON
+// parse. Cache the body + ETag for SOUNDS_CACHE_TTL_MS and serve 304 on
+// matching If-None-Match. Invalidations from sound writes/deletes/meta-
+// edits null the cache so updates surface immediately.
+let _soundsCache = null;
+const SOUNDS_CACHE_TTL_MS = 10_000;
+
+function buildSoundsResponse() {
+    const files = fs.readdirSync(SOUNDS_DIR);
+    const meta = loadSoundsMeta();
+    const audioFiles = files.filter(f => f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.ogg'));
+    const order = getSoundOrder(meta);
+    const orderSet = new Set(order);
+    const ordered = order.filter(f => audioFiles.includes(f));
+    const rest = audioFiles.filter(f => !orderSet.has(f));
+    const sorted = [...ordered, ...rest];
+    const list = sorted.map(filename => {
+        const m = meta[filename];
+        const suno = (m && typeof m === 'object' && m.suno && typeof m.suno === 'object') ? m.suno : null;
+        let mtime = null;
+        try { mtime = fs.statSync(path.join(SOUNDS_DIR, filename)).mtimeMs; } catch {}
+        return {
+            filename,
+            displayName: getDisplayName(meta, filename),
+            duration: getDuration(meta, filename),
+            tags: getTags(meta, filename),
+            color: getColor(meta, filename),
+            volume: getSoundVolume(meta, filename),
+            startTime: getSoundStartTime(meta, filename),
+            endTime: getSoundEndTime(meta, filename),
+            stopOthers: getSoundStopOthers(meta, filename),
+            tts: getSoundTts(meta, filename),
+            mtime,
+            suno: suno ? {
+                model: suno.model || null,
+                style: suno.style || null,
+                cover: suno.cover || null,
+                title: suno.title || null,
+                has_lyrics: !!suno.lyrics,
+            } : null,
+        };
     });
+    const tagOrder = getTagOrder(meta);
+    const hidden = getHiddenTags(meta);
+    const allTags = getAllTagsFromSounds(meta);
+    const tags = tagOrder.length ? [...tagOrder, ...allTags.filter(t => !tagOrder.includes(t))] : allTags;
+    return { list, tags: [...new Set(tags)], hidden };
+}
+
+function getCachedSoundsResponse() {
+    const now = Date.now();
+    if (_soundsCache && now - _soundsCache.builtAt < SOUNDS_CACHE_TTL_MS) {
+        return _soundsCache;
+    }
+    const body = buildSoundsResponse();
+    const json = JSON.stringify(body);
+    const etag = '"' + crypto.createHash('sha1').update(json).digest('base64').slice(0, 22) + '"';
+    _soundsCache = { body, json, etag, builtAt: now };
+    return _soundsCache;
+}
+
+function invalidateSoundsCache() {
+    _soundsCache = null;
+}
+
+app.get('/api/sounds', requireAuth, (req, res) => {
+    let cache;
+    try { cache = getCachedSoundsResponse(); }
+    catch (err) { return res.status(500).send('Error reading sounds directory'); }
+    if (req.headers['if-none-match'] === cache.etag) {
+        res.setHeader('ETag', cache.etag);
+        return res.status(304).end();
+    }
+    res.setHeader('ETag', cache.etag);
+    res.setHeader('Cache-Control', 'private, max-age=10');
+    res.type('application/json').send(cache.json);
 });
 
 app.patch('/api/sounds/order', requireAdmin, (req, res) => {
