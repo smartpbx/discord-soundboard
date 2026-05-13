@@ -2546,7 +2546,7 @@
                 // Superadmin, What's New, etc.) and use an opaque-enough
                 // backdrop that the modal beneath doesn't bleed through.
                 overlay.style.zIndex = '1300';
-                overlay.style.background = 'rgba(0,0,0,0.85)';
+                overlay.style.background = 'rgba(0,0,0,0.92)';
                 const isDanger = okStyle === 'danger';
                 const titleHtml = title ? '<div style="font-weight:600;font-size:1.05rem;margin-bottom:0.5rem;">' + (title.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))) + '</div>' : '';
                 const msgHtml = String(message || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])).replace(/\n/g, '<br>');
@@ -2557,8 +2557,13 @@
                     ? '<button type="button" class="btn btn-ghost" id="_appModalCancel">' + cancelText + '</button>'
                     : '';
                 const okClass = isDanger ? 'btn btn-danger' : 'btn btn-primary';
+                // Inline dialog box style — uses --surface (the standard
+                // card surface) rather than --card, which doesn't exist as
+                // a CSS variable. The previous --card fall-through evaluated
+                // to `transparent` and made the dialog see-through against
+                // a translucent overlay.
                 overlay.innerHTML =
-                    '<div role="dialog" aria-modal="true" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;max-width:440px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,0.4);">' +
+                    '<div role="dialog" aria-modal="true" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.25rem;max-width:440px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,0.4);">' +
                     titleHtml +
                     '<div style="line-height:1.45;color:var(--text);">' + msgHtml + '</div>' +
                     inputHtml +
@@ -2988,42 +2993,36 @@
             const state = _clipEditor.get(id);
             const btn = row.querySelector('[data-clip-preview]');
             if (!state || !btn) return;
-            if (state.audio) {
-                try { state.audio.pause(); } catch {}
+            const stopPreview = () => {
+                if (state._rafId) { cancelAnimationFrame(state._rafId); state._rafId = null; }
+                if (state.audio) { try { state.audio.pause(); } catch {} }
                 state.audio = null;
                 state.playhead = null;
                 state._redraw();
                 btn.textContent = '▶ Preview';
-                return;
-            }
+            };
+            if (state.audio) { stopPreview(); return; }
             const audio = new Audio('/api/clips/' + encodeURIComponent(id) + '/audio');
             audio.currentTime = state.startTime;
-            audio.addEventListener('timeupdate', () => {
+            // HTML5 audio's `timeupdate` only fires every ~250 ms, which made
+            // the playhead jump in discrete chunks. requestAnimationFrame
+            // gives us per-frame updates so the cursor glides smoothly. We
+            // still gate on `state.audio` so the loop self-terminates after
+            // pause/end/error.
+            const tick = () => {
+                if (state.audio !== audio) return;
                 state.playhead = audio.currentTime;
-                if (audio.currentTime >= state.endTime) {
-                    try { audio.pause(); } catch {}
-                    state.audio = null;
-                    state.playhead = null;
-                    btn.textContent = '▶ Preview';
-                }
+                if (audio.currentTime >= state.endTime) { stopPreview(); return; }
                 state._redraw();
-            });
-            audio.addEventListener('ended', () => {
-                state.audio = null;
-                state.playhead = null;
-                state._redraw();
-                btn.textContent = '▶ Preview';
-            });
-            audio.addEventListener('error', () => {
-                state.audio = null;
-                state.playhead = null;
-                state._redraw();
-                btn.textContent = '▶ Preview';
-                showToast('Preview failed', 'error');
-            });
+                state._rafId = requestAnimationFrame(tick);
+            };
+            audio.addEventListener('ended', stopPreview);
+            audio.addEventListener('error', () => { stopPreview(); showToast('Preview failed', 'error'); });
             state.audio = audio;
             btn.textContent = '⏹ Stop';
-            audio.play().catch(() => {});
+            audio.play().then(() => {
+                state._rafId = requestAnimationFrame(tick);
+            }).catch(() => stopPreview());
         }
 
         async function _clipSaveAsSound(id, row) {
