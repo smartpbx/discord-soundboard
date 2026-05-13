@@ -5774,6 +5774,7 @@
             _playQueueActive = true;
             if (btn) { btn.textContent = '⏹ Stop queue (' + _playQueue.length + ')'; btn.classList.add('active'); }
             showToast('Queued ' + _playQueue.length + ' sounds.', 'success');
+            updateNowPlaying();
             _advancePlayQueue();
         }
         function _advancePlayQueue() {
@@ -5783,10 +5784,12 @@
             if (!next) {
                 _playQueueActive = false;
                 if (btn) { btn.textContent = '▶ Play all'; btn.classList.remove('active'); }
+                updateNowPlaying();
                 showToast('Queue done.', 'success');
                 return;
             }
             if (btn) btn.textContent = '⏹ Stop queue (' + _playQueue.length + ' left)';
+            updateNowPlaying();
             if (_playQueueGapTimer) clearTimeout(_playQueueGapTimer);
             _playQueueGapTimer = setTimeout(() => {
                 if (!_playQueueActive) return;
@@ -7447,6 +7450,17 @@
         }
 
         async function stopPlayback() {
+            // Cancel any active play-all queue BEFORE issuing /api/stop so
+            // the auto-advance on the 'idle' state-change doesn't immediately
+            // fire the next queued sound.
+            if (_playQueueActive) {
+                _playQueueActive = false;
+                _playQueue = [];
+                if (_playQueueGapTimer) { clearTimeout(_playQueueGapTimer); _playQueueGapTimer = null; }
+                const qbtn = document.getElementById('playQueueBtn');
+                if (qbtn) { qbtn.textContent = '▶ Play all'; qbtn.classList.remove('active'); }
+                showToast('Queue cancelled.', 'info');
+            }
             const res = await api('/api/stop', { method: 'POST' });
             if (!res) return;
             playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
@@ -7534,32 +7548,35 @@
             const card = document.getElementById('playerCard');
             const text = document.getElementById('nowPlayingText');
             const mbb = document.getElementById('mbbNowPlaying');
+            const queueLeft = _playQueueActive ? _playQueue.length : 0;
+            const queueBadge = queueLeft > 0
+                ? ' <span style="color:var(--accent);font-weight:600">· Queue: ' + queueLeft + ' left</span>'
+                : '';
             let html;
             let isPlaying = false;
             if (playback.status === 'idle' || !playback.displayName) {
-                html = 'Nothing playing';
-                if (html !== lastNowPlayingHtml) {
-                    lastNowPlayingHtml = html;
-                    text.innerHTML = html;
-                    card.classList.add('player-idle');
-                }
+                html = queueLeft > 0
+                    ? 'Queue: <strong>' + queueLeft + ' left</strong>'
+                    : 'Nothing playing';
             } else {
                 isPlaying = true;
                 html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
                 if (playback.startedBy && playback.startedBy.username) {
                     html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
                 }
-                if (html !== lastNowPlayingHtml) {
-                    lastNowPlayingHtml = html;
-                    text.innerHTML = html;
-                    card.classList.remove('player-idle');
-                }
+                html += queueBadge;
+            }
+            if (html !== lastNowPlayingHtml) {
+                lastNowPlayingHtml = html;
+                text.innerHTML = html;
+                card.classList.toggle('player-idle', !isPlaying);
             }
             if (mbb) {
-                mbb.textContent = isPlaying ? '▶ ' + (playback.displayName || playback.filename || '') : 'Nothing playing';
-                mbb.classList.toggle('is-playing', isPlaying);
+                let mbbText = isPlaying ? '▶ ' + (playback.displayName || playback.filename || '') : 'Nothing playing';
+                if (queueLeft > 0) mbbText += ' · Queue: ' + queueLeft + ' left';
+                mbb.textContent = mbbText;
+                mbb.classList.toggle('is-playing', isPlaying || queueLeft > 0);
             }
-            // Legacy per-player TTS save button replaced by per-row saves on the Recent TTS list.
         }
 
         function formatTime(s) {
