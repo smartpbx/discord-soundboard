@@ -2869,8 +2869,9 @@ function _watchRoomPublic(room) {
 
 function _watchSweep() {
     const now = Date.now();
+    const ttlMs = getWatchRoomTtlHours() * 60 * 60 * 1000;
     for (const [id, room] of watchRooms) {
-        if (now - room.lastActivity > WATCH_ROOM_TTL_MS && room.viewers.size === 0) {
+        if (now - room.lastActivity > ttlMs && room.viewers.size === 0) {
             if (room.sourceMeta?.captureId) stopCaptureProxy(room.sourceMeta.captureId);
             watchRooms.delete(id);
         }
@@ -2890,6 +2891,62 @@ function setWatchStrategy(v) {
     if (!WATCH_STRATEGIES.includes(v)) return false;
     const d = loadGuestData();
     d.watchSyncStrategy = v;
+    saveGuestData(d);
+    return true;
+}
+
+// CDP sniffer timeout — how long to let headless Chromium watch the page for
+// stream URLs before giving up. Higher = more reliable on slow aggregators,
+// lower = faster fallback to capture. Default 25s.
+function getWatchCdpTimeoutMs() {
+    const v = Number(loadGuestData().watchCdpTimeoutMs);
+    return Number.isFinite(v) && v >= 3000 && v <= 120000 ? v : 25000;
+}
+function setWatchCdpTimeoutMs(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 3000 || n > 120000) return false;
+    const d = loadGuestData();
+    d.watchCdpTimeoutMs = n;
+    saveGuestData(d);
+    return true;
+}
+// Capture proxy resolution. Valid: 480p | 720p | 1080p. Stored as the
+// preset string; resolution() resolves to {width,height}.
+const WATCH_CAPTURE_PRESETS = { '480p': { width: 854, height: 480 }, '720p': { width: 1280, height: 720 }, '1080p': { width: 1920, height: 1080 } };
+function getWatchCaptureResolution() {
+    const v = loadGuestData().watchCaptureResolution;
+    return WATCH_CAPTURE_PRESETS[v] ? v : '720p';
+}
+function setWatchCaptureResolution(v) {
+    if (!WATCH_CAPTURE_PRESETS[v]) return false;
+    const d = loadGuestData();
+    d.watchCaptureResolution = v;
+    saveGuestData(d);
+    return true;
+}
+// Capture proxy framerate. Valid: 24 | 30 | 60.
+function getWatchCaptureFramerate() {
+    const v = Number(loadGuestData().watchCaptureFramerate);
+    return [24, 30, 60].includes(v) ? v : 30;
+}
+function setWatchCaptureFramerate(v) {
+    const n = Number(v);
+    if (![24, 30, 60].includes(n)) return false;
+    const d = loadGuestData();
+    d.watchCaptureFramerate = n;
+    saveGuestData(d);
+    return true;
+}
+// Idle TTL for /watch and /movienight rooms. Hours; default 6.
+function getWatchRoomTtlHours() {
+    const v = Number(loadGuestData().watchRoomTtlHours);
+    return Number.isFinite(v) && v >= 1 && v <= 168 ? v : 6;
+}
+function setWatchRoomTtlHours(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1 || n > 168) return false;
+    const d = loadGuestData();
+    d.watchRoomTtlHours = n;
     saveGuestData(d);
     return true;
 }
@@ -3023,7 +3080,7 @@ async function resolveWatchSource(url, forceStrategy) {
         if (strategy === 'ytdlp') return { sourceType, sourceMeta };
     }
     if (strategy === 'auto' || strategy === 'cdp') {
-        const cdpUrl = await resolveViaCdpSniffer(sourceMeta.url || url);
+        const cdpUrl = await resolveViaCdpSniffer(sourceMeta.url || url, getWatchCdpTimeoutMs());
         if (cdpUrl) return { sourceType: 'video', sourceMeta: { url: cdpUrl, originalUrl: url, via: 'cdp', resolvedAt: Date.now() } };
         if (strategy === 'cdp') return { sourceType, sourceMeta };
     }
@@ -3080,7 +3137,9 @@ async function startCaptureProxyForUrl(url) {
     const captureId = 'cap_' + crypto.randomBytes(4).toString('hex');
     const dir = path.join(CAPTURES_DIR, captureId);
     try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-    const width = 1280, height = 720;
+    const preset = WATCH_CAPTURE_PRESETS[getWatchCaptureResolution()] || WATCH_CAPTURE_PRESETS['720p'];
+    const { width, height } = preset;
+    const framerate = getWatchCaptureFramerate();
     let xvfb, chromium, ffmpeg;
     try {
         xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', `${width}x${height}x24`, '-nolisten', 'tcp', '-ac', '+extension', 'RANDR'], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -3116,7 +3175,7 @@ async function startCaptureProxyForUrl(url) {
             '-loglevel', 'warning',
             '-f', 'x11grab',
             '-draw_mouse', '0',
-            '-framerate', '30',
+            '-framerate', String(framerate),
             '-video_size', `${width}x${height}`,
             '-i', `:${display}.0`,
             '-c:v', 'libx264',
@@ -3124,7 +3183,7 @@ async function startCaptureProxyForUrl(url) {
             '-tune', 'zerolatency',
             '-profile:v', 'baseline',
             '-level', '3.0',
-            '-g', '60',
+            '-g', String(framerate * 2),
             '-sc_threshold', '0',
             '-pix_fmt', 'yuv420p',
             '-f', 'hls',
@@ -3296,8 +3355,9 @@ function _mnFinalize(room) {
 
 function _mnSweep() {
     const now = Date.now();
+    const ttlMs = getWatchRoomTtlHours() * 60 * 60 * 1000;
     for (const [id, room] of movieNightRooms) {
-        if (now - room.lastActivity > MOVIENIGHT_TTL_MS && room.viewers.size === 0) {
+        if (now - room.lastActivity > ttlMs && room.viewers.size === 0) {
             movieNightRooms.delete(id);
         }
     }
@@ -4710,6 +4770,11 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.playQueueEnabled = { guest: getPlayQueueEnabled('guest'), user: getPlayQueueEnabled('user'), admin: getPlayQueueEnabled('admin'), superadmin: getPlayQueueEnabled('superadmin') };
         out.watchSyncStrategy = getWatchStrategy();
         out.watchSyncStrategies = WATCH_STRATEGIES.slice();
+        out.watchPartyEnabled = { guest: getWatchPartyEnabled('guest'), user: getWatchPartyEnabled('user'), admin: getWatchPartyEnabled('admin'), superadmin: getWatchPartyEnabled('superadmin') };
+        out.watchCdpTimeoutMs = getWatchCdpTimeoutMs();
+        out.watchCaptureResolution = getWatchCaptureResolution();
+        out.watchCaptureFramerate = getWatchCaptureFramerate();
+        out.watchRoomTtlHours = getWatchRoomTtlHours();
     }
     out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
     out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
@@ -4885,6 +4950,32 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
                     details: { strategy: out.watchSyncStrategy },
                 });
             }
+        }
+        const { watchPartyEnabled } = req.body;
+        if (watchPartyEnabled && typeof watchPartyEnabled === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof watchPartyEnabled[r] === 'boolean') setWatchPartyEnabled(r, watchPartyEnabled[r]);
+            }
+            out.watchPartyEnabled = { guest: getWatchPartyEnabled('guest'), user: getWatchPartyEnabled('user'), admin: getWatchPartyEnabled('admin'), superadmin: getWatchPartyEnabled('superadmin') };
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.watchPartyEnabled',
+                target: null,
+                details: out.watchPartyEnabled,
+            });
+        }
+        if (typeof req.body.watchCdpTimeoutMs === 'number') {
+            if (setWatchCdpTimeoutMs(req.body.watchCdpTimeoutMs)) out.watchCdpTimeoutMs = getWatchCdpTimeoutMs();
+        }
+        if (typeof req.body.watchCaptureResolution === 'string') {
+            if (setWatchCaptureResolution(req.body.watchCaptureResolution)) out.watchCaptureResolution = getWatchCaptureResolution();
+        }
+        if (typeof req.body.watchCaptureFramerate === 'number') {
+            if (setWatchCaptureFramerate(req.body.watchCaptureFramerate)) out.watchCaptureFramerate = getWatchCaptureFramerate();
+        }
+        if (typeof req.body.watchRoomTtlHours === 'number') {
+            if (setWatchRoomTtlHours(req.body.watchRoomTtlHours)) out.watchRoomTtlHours = getWatchRoomTtlHours();
         }
         const { soundDeleteEnabled } = req.body;
         if (soundDeleteEnabled && typeof soundDeleteEnabled === 'object') {
@@ -6963,6 +7054,93 @@ app.post('/api/admin/yt-session/cookies/:state', requireSuperadmin, (req, res) =
         return res.status(500).json({ error: 'Failed to write .env: ' + e.message });
     }
     res.json({ ok: true, cookiesFromBrowser: state === 'on' ? profileDefault : null });
+});
+
+// Watch Party superadmin state — feeds the "Watch Party" panel: active
+// /watch + /movienight rooms, active capture proxies, and which of the
+// underlying binaries (Xvfb, chromium, ffmpeg, yt-dlp) are present. Pure
+// read-only; rooms can be force-closed via the existing DELETE endpoints
+// since those already accept superadmin.
+function _execProbe(cmd) {
+    return new Promise((resolve) => {
+        const p = spawn('which', [cmd], { stdio: 'ignore' });
+        p.on('exit', (code) => resolve(code === 0));
+        p.on('error', () => resolve(false));
+    });
+}
+app.get('/api/admin/watch/state', requireSuperadmin, async (req, res) => {
+    const now = Date.now();
+    const rooms = [];
+    for (const r of watchRooms.values()) {
+        rooms.push({
+            id: r.id,
+            hostUsername: r.hostUsername,
+            hostRole: r.hostRole,
+            url: r.url,
+            sourceType: r.sourceType,
+            via: r.sourceMeta?.via || null,
+            captureId: r.sourceMeta?.captureId || null,
+            viewerCount: r.viewers.size,
+            createdAt: r.createdAt,
+            ageMs: now - r.createdAt,
+            idleMs: now - r.lastActivity,
+            playing: !!r.state?.playing,
+            position: r.state?.position || 0,
+        });
+    }
+    const mnRooms = [];
+    for (const r of movieNightRooms.values()) {
+        mnRooms.push({
+            id: r.id,
+            hostUsername: r.hostUsername,
+            hostRole: r.hostRole,
+            phase: r.phase,
+            candidateCount: (r.candidates || []).length,
+            viewerCount: r.viewers.size,
+            createdAt: r.createdAt,
+            ageMs: now - r.createdAt,
+            idleMs: now - r.lastActivity,
+            winnerWatchRoomId: r.winnerWatchRoomId || null,
+        });
+    }
+    const captures = [];
+    for (const [id, cap] of captureProxies) {
+        captures.push({
+            captureId: id,
+            url: cap.url,
+            display: cap.display,
+            startedAt: cap.startedAt,
+            ageMs: now - cap.startedAt,
+            ffmpegAlive: !!(cap.ffmpeg && !cap.ffmpeg.killed && cap.ffmpeg.exitCode == null),
+            chromiumAlive: !!(cap.chromium && !cap.chromium.killed && cap.chromium.exitCode == null),
+            xvfbAlive: !!(cap.xvfb && !cap.xvfb.killed && cap.xvfb.exitCode == null),
+        });
+    }
+    const [xvfb, chromium, ffmpeg, ytDlp] = await Promise.all([
+        _execProbe('Xvfb'), _execProbe('chromium'), _execProbe('ffmpeg'), _execProbe('yt-dlp'),
+    ]);
+    res.json({
+        rooms,
+        mnRooms,
+        captures,
+        diagnostics: {
+            xvfb, chromium, ffmpeg, ytDlp,
+            ytCookiesEnabled: !!process.env.YTDLP_COOKIES_FROM_BROWSER,
+            captureDir: CAPTURES_DIR,
+            captureResolution: getWatchCaptureResolution(),
+            captureFramerate: getWatchCaptureFramerate(),
+            cdpTimeoutMs: getWatchCdpTimeoutMs(),
+            ttlHours: getWatchRoomTtlHours(),
+            strategy: getWatchStrategy(),
+        },
+    });
+});
+app.post('/api/admin/watch/captures/:id/stop', requireSuperadmin, (req, res) => {
+    const id = String(req.params.id || '');
+    if (!/^cap_[a-f0-9]+$/.test(id)) return res.status(400).json({ error: 'Bad capture id' });
+    const ok = stopCaptureProxy(id);
+    if (!ok) return res.status(404).json({ error: 'Capture not found' });
+    res.json({ ok: true });
 });
 
 // Reverse-proxy regular HTTP under /admin/yt-vnc/* to the local websockify.

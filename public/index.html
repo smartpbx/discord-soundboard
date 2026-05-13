@@ -1551,6 +1551,7 @@
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
                 <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Linked Users</button>
                 <button type="button" class="superadmin-tab" data-panel="voiceTriggers" onclick="switchSuperadminTab('voiceTriggers')">Voice Triggers</button>
+                <button type="button" class="superadmin-tab" data-panel="watchParty" onclick="switchSuperadminTab('watchParty')">Watch Party</button>
                 <button type="button" class="superadmin-tab" data-panel="voting" onclick="switchSuperadminTab('voting')">Voting</button>
             </div>
 
@@ -1792,12 +1793,6 @@
                         </div>
                     </div>
                     <div class="sa-field-help">When enabled for a role, users in that role can paste a video URL and stream its audio into Discord. yt-dlp-supported sites only; Instagram / TikTok may be brittle. Set a max duration to 0 to disable the length cap for that role.</div>
-                </div>
-
-                <div class="superadmin-section">
-                    <div class="superadmin-section-title">Watch Together — sync strategy</div>
-                    <div class="sa-field-help" style="margin-bottom:0.6rem;">When you start a Watch Together room, the server tries to resolve the URL into a directly-playable stream so all viewers stay in sync. Different sites need different approaches — switch this if a source isn't working. <strong>Auto</strong> tries them in order. <strong>Iframe-only</strong> skips resolution and uses a click-to-start embed (no sync, but lowest-latency for the host).</div>
-                    <div id="watchSyncStrategyOpts" style="display:flex; flex-direction:column; gap:0.35rem;"></div>
                 </div>
 
                 <div class="superadmin-section">
@@ -2195,6 +2190,86 @@
                         </table>
                     </div>
                     <div id="voiceTriggerLogEmpty" class="pending-empty" style="font-size: 0.85rem; color: var(--text-muted); padding: 0.5rem;">No activity yet</div>
+                </div>
+            </div>
+
+            <div id="superadminPanelWatchParty" class="superadmin-panel">
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Permissions</div>
+                    <div class="sa-field-help" style="margin-bottom:0.6rem;">Who can start a <code>/watch</code> or <code>/movienight</code> room (one toggle covers both — a role that can vote on a movie can also start the room that plays it). Guests can never start rooms. Per-user overrides on Superadmin → Users (the <em>Watch Party</em> column).</div>
+                    <div class="sa-toggle-group" style="margin-bottom: 0.2rem;">
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="watchPartyEnabledUser" onchange="setWatchPartyEnabledSetting('user', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow users</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="watchPartyEnabledAdmin" onchange="setWatchPartyEnabledSetting('admin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow admins</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="watchPartyEnabledSuperadmin" onchange="setWatchPartyEnabledSetting('superadmin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow superadmin</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Sync strategy</div>
+                    <div class="sa-field-help" style="margin-bottom:0.6rem;">When you start a Watch Together room, the server tries to resolve the URL into a directly-playable stream so all viewers stay in sync. Different sites need different approaches — switch this if a source isn't working. <strong>Auto</strong> tries them in order. <strong>Iframe-only</strong> skips resolution and uses a click-to-start embed (no sync, but lowest-latency for the host).</div>
+                    <div id="watchSyncStrategyOpts" style="display:flex; flex-direction:column; gap:0.35rem;"></div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Capture proxy + CDP timing</div>
+                    <div class="sa-field-help" style="margin-bottom:0.6rem;">The capture proxy and CDP sniffer share these knobs. Higher capture resolution / framerate is heavier on CT 109's CPU; the default (720p / 30 fps) is the safe choice. CDP timeout = how long the sniffer waits for a page's first stream URL before giving up.</div>
+                    <div class="sa-field-row">
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Resolution</span>
+                            <select id="watchCaptureResolution" onchange="setWatchCaptureResolutionSetting(this.value)">
+                                <option value="480p">480p (854×480)</option>
+                                <option value="720p">720p (1280×720)</option>
+                                <option value="1080p">1080p (1920×1080)</option>
+                            </select>
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Framerate</span>
+                            <select id="watchCaptureFramerate" onchange="setWatchCaptureFramerateSetting(this.value)">
+                                <option value="24">24 fps</option>
+                                <option value="30">30 fps</option>
+                                <option value="60">60 fps</option>
+                            </select>
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">CDP timeout (ms)</span>
+                            <input type="number" id="watchCdpTimeoutMs" min="3000" max="120000" step="1000" onchange="setWatchCdpTimeoutMsSetting(this.value)">
+                        </div>
+                        <div class="sa-field is-narrow">
+                            <span class="sa-field-label">Idle TTL (hours)</span>
+                            <input type="number" id="watchRoomTtlHours" min="1" max="168" step="1" onchange="setWatchRoomTtlHoursSetting(this.value)">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Active rooms <span id="watchPartyAutoPollDot" style="font-size:0.7rem; color: var(--text-muted); margin-left:0.4rem;">·</span></span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshWatchPartyState()">Refresh</button>
+                    </div>
+                    <div id="watchPartyRooms"></div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Capture proxies</div>
+                    <div class="sa-field-help" style="margin-bottom:0.5rem;">Each entry is a live Xvfb + Chromium + ffmpeg pipeline. Force-stopping one will pause any Watch Together room using it (the room won't auto-recover — host has to re-create).</div>
+                    <div id="watchPartyCaptures"></div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Diagnostics</div>
+                    <div id="watchPartyDiagnostics" style="font-family: var(--font-mono, monospace); font-size: 0.78rem; color: var(--text-muted);"></div>
                 </div>
             </div>
 
@@ -3987,6 +4062,8 @@
             if (panelId === 'entranceExit') fetchEntranceExitAdmin();
             if (panelId === 'voiceTriggers') { fetchVoiceTriggers(); fetchVoiceTriggerLog(); }
             if (panelId === 'voting') { fetchVotingConfig(); fetchVotingLog(); }
+            if (panelId === 'watchParty') { startWatchPartyAutoPoll(); }
+            else { stopWatchPartyAutoPoll(); }
         }
 
         function clearAuditFilters() {
@@ -4486,7 +4563,21 @@
                         if (el && d.playQueueEnabled[r] !== undefined) el.checked = d.playQueueEnabled[r] === true;
                     }
                 }
+                if (d.watchPartyEnabled) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('watchPartyEnabled' + r.charAt(0).toUpperCase() + r.slice(1));
+                        if (el && d.watchPartyEnabled[r] !== undefined) el.checked = d.watchPartyEnabled[r] === true;
+                    }
+                }
                 renderWatchSyncStrategy(d.watchSyncStrategies, d.watchSyncStrategy);
+                const resSel = document.getElementById('watchCaptureResolution');
+                if (resSel && d.watchCaptureResolution) resSel.value = d.watchCaptureResolution;
+                const fpsSel = document.getElementById('watchCaptureFramerate');
+                if (fpsSel && d.watchCaptureFramerate) fpsSel.value = String(d.watchCaptureFramerate);
+                const cdpInp = document.getElementById('watchCdpTimeoutMs');
+                if (cdpInp && d.watchCdpTimeoutMs) cdpInp.value = d.watchCdpTimeoutMs;
+                const ttlInp = document.getElementById('watchRoomTtlHours');
+                if (ttlInp && d.watchRoomTtlHours) ttlInp.value = d.watchRoomTtlHours;
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -4784,6 +4875,140 @@
         async function setWatchSyncStrategy(strategy) {
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchSyncStrategy: strategy }) });
             fetchSettings();
+        }
+        async function setWatchPartyEnabledSetting(role, enabled) {
+            const obj = {}; obj[role] = !!enabled;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchPartyEnabled: obj }) });
+            fetchSettings();
+        }
+        async function setWatchCaptureResolutionSetting(v) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchCaptureResolution: v }) });
+        }
+        async function setWatchCaptureFramerateSetting(v) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchCaptureFramerate: Number(v) }) });
+        }
+        async function setWatchCdpTimeoutMsSetting(v) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchCdpTimeoutMs: Number(v) }) });
+        }
+        async function setWatchRoomTtlHoursSetting(v) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchRoomTtlHours: Number(v) }) });
+        }
+        function _fmtAge(ms) {
+            const s = Math.floor(ms / 1000);
+            if (s < 60) return s + 's';
+            const m = Math.floor(s / 60);
+            if (m < 60) return m + 'm';
+            const h = Math.floor(m / 60);
+            return h + 'h ' + (m % 60) + 'm';
+        }
+        function _escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+        let _watchPartyPollTimer = null;
+        async function refreshWatchPartyState() {
+            const dot = document.getElementById('watchPartyAutoPollDot');
+            if (dot) dot.style.color = 'var(--accent)';
+            try {
+                const r = await api('/api/admin/watch/state');
+                if (!r.ok) return;
+                const d = await r.json();
+                renderWatchPartyRooms(d.rooms || [], d.mnRooms || []);
+                renderWatchPartyCaptures(d.captures || []);
+                renderWatchPartyDiagnostics(d.diagnostics || {});
+            } catch {}
+            finally { if (dot) setTimeout(() => { dot.style.color = 'var(--text-muted)'; }, 300); }
+        }
+        function renderWatchPartyRooms(rooms, mnRooms) {
+            const wrap = document.getElementById('watchPartyRooms');
+            if (!wrap) return;
+            const parts = [];
+            if (!rooms.length && !mnRooms.length) {
+                wrap.innerHTML = '<div class="sa-field-help">No active rooms.</div>';
+                return;
+            }
+            if (rooms.length) {
+                parts.push('<div style="font-size:0.78rem; color:var(--text-muted); margin:0.4rem 0 0.25rem;">Watch Together (' + rooms.length + ')</div>');
+                parts.push('<table style="width:100%; font-size:0.82rem; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding: 0.3rem;">ID</th><th style="text-align:left; padding: 0.3rem;">Host</th><th style="text-align:left; padding: 0.3rem;">Source</th><th style="text-align:left; padding: 0.3rem;">Viewers</th><th style="text-align:left; padding: 0.3rem;">Playing</th><th style="text-align:left; padding: 0.3rem;">Age</th><th></th></tr></thead><tbody>');
+                for (const r of rooms) {
+                    const via = r.via ? ' (' + _escapeHtml(r.via) + ')' : '';
+                    parts.push('<tr><td style="padding:0.3rem;"><a href="/watch/' + _escapeHtml(r.id) + '" target="_blank">' + _escapeHtml(r.id) + '</a></td>'
+                        + '<td style="padding:0.3rem;">' + _escapeHtml(r.hostUsername) + '</td>'
+                        + '<td style="padding:0.3rem;">' + _escapeHtml(r.sourceType) + via + '</td>'
+                        + '<td style="padding:0.3rem;">' + r.viewerCount + '</td>'
+                        + '<td style="padding:0.3rem;">' + (r.playing ? '▶' : '⏸') + '</td>'
+                        + '<td style="padding:0.3rem;">' + _fmtAge(r.ageMs) + '</td>'
+                        + '<td style="padding:0.3rem; text-align:right;"><button class="btn btn-ghost btn-sm" onclick="closeWatchRoom(\'' + _escapeHtml(r.id) + '\')">Close</button></td></tr>');
+                }
+                parts.push('</tbody></table>');
+            }
+            if (mnRooms.length) {
+                parts.push('<div style="font-size:0.78rem; color:var(--text-muted); margin:0.8rem 0 0.25rem;">Movie Night (' + mnRooms.length + ')</div>');
+                parts.push('<table style="width:100%; font-size:0.82rem; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding: 0.3rem;">ID</th><th style="text-align:left; padding: 0.3rem;">Host</th><th style="text-align:left; padding: 0.3rem;">Phase</th><th style="text-align:left; padding: 0.3rem;">Candidates</th><th style="text-align:left; padding: 0.3rem;">Viewers</th><th style="text-align:left; padding: 0.3rem;">Age</th><th></th></tr></thead><tbody>');
+                for (const r of mnRooms) {
+                    parts.push('<tr><td style="padding:0.3rem;"><a href="/movienight/' + _escapeHtml(r.id) + '" target="_blank">' + _escapeHtml(r.id) + '</a></td>'
+                        + '<td style="padding:0.3rem;">' + _escapeHtml(r.hostUsername) + '</td>'
+                        + '<td style="padding:0.3rem;">' + _escapeHtml(r.phase) + '</td>'
+                        + '<td style="padding:0.3rem;">' + r.candidateCount + '</td>'
+                        + '<td style="padding:0.3rem;">' + r.viewerCount + '</td>'
+                        + '<td style="padding:0.3rem;">' + _fmtAge(r.ageMs) + '</td>'
+                        + '<td style="padding:0.3rem; text-align:right;"><button class="btn btn-ghost btn-sm" onclick="closeMnRoom(\'' + _escapeHtml(r.id) + '\')">Close</button></td></tr>');
+                }
+                parts.push('</tbody></table>');
+            }
+            wrap.innerHTML = parts.join('');
+        }
+        function renderWatchPartyCaptures(caps) {
+            const wrap = document.getElementById('watchPartyCaptures');
+            if (!wrap) return;
+            if (!caps.length) { wrap.innerHTML = '<div class="sa-field-help">No active capture proxies.</div>'; return; }
+            const parts = ['<table style="width:100%; font-size:0.82rem; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding: 0.3rem;">ID</th><th style="text-align:left; padding: 0.3rem;">URL</th><th style="text-align:left; padding: 0.3rem;">Display</th><th style="text-align:left; padding: 0.3rem;">Procs</th><th style="text-align:left; padding: 0.3rem;">Age</th><th></th></tr></thead><tbody>'];
+            for (const c of caps) {
+                const procs = [c.xvfbAlive ? 'Xvfb' : 'xvfb✗', c.chromiumAlive ? 'Chrome' : 'chrome✗', c.ffmpegAlive ? 'ffmpeg' : 'ffmpeg✗'].join(' ');
+                parts.push('<tr><td style="padding:0.3rem; font-family: var(--font-mono, monospace);">' + _escapeHtml(c.captureId) + '</td>'
+                    + '<td style="padding:0.3rem; max-width: 24rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + _escapeHtml(c.url) + '">' + _escapeHtml(c.url) + '</td>'
+                    + '<td style="padding:0.3rem;">:' + c.display + '</td>'
+                    + '<td style="padding:0.3rem; font-size:0.75rem;">' + _escapeHtml(procs) + '</td>'
+                    + '<td style="padding:0.3rem;">' + _fmtAge(c.ageMs) + '</td>'
+                    + '<td style="padding:0.3rem; text-align:right;"><button class="btn btn-ghost btn-sm" onclick="stopWatchCapture(\'' + _escapeHtml(c.captureId) + '\')">Stop</button></td></tr>');
+            }
+            parts.push('</tbody></table>');
+            wrap.innerHTML = parts.join('');
+        }
+        function renderWatchPartyDiagnostics(d) {
+            const wrap = document.getElementById('watchPartyDiagnostics');
+            if (!wrap) return;
+            const ok = (b) => b ? '<span style="color: var(--success, #4ade80);">✓ installed</span>' : '<span style="color: var(--danger, #ef4444);">✗ missing</span>';
+            wrap.innerHTML =
+                'Xvfb: ' + ok(d.xvfb) + ' &nbsp; chromium: ' + ok(d.chromium) + ' &nbsp; ffmpeg: ' + ok(d.ffmpeg) + ' &nbsp; yt-dlp: ' + ok(d.ytDlp) + '<br>'
+                + 'YT cookies: ' + (d.ytCookiesEnabled ? '<span style="color: var(--success, #4ade80);">enabled</span>' : '<span style="color: var(--warning, #fbbf24);">not enabled</span>') + ' &nbsp; '
+                + 'strategy: <code>' + _escapeHtml(d.strategy) + '</code> &nbsp; '
+                + 'capture: ' + _escapeHtml(d.captureResolution) + ' @ ' + d.captureFramerate + 'fps &nbsp; '
+                + 'CDP timeout: ' + d.cdpTimeoutMs + 'ms &nbsp; '
+                + 'TTL: ' + d.ttlHours + 'h<br>'
+                + 'capture dir: <code>' + _escapeHtml(d.captureDir) + '</code>';
+        }
+        async function closeWatchRoom(id) {
+            if (!confirm('Force-close watch room ' + id + '? All viewers will be disconnected.')) return;
+            await api('/api/watch/rooms/' + encodeURIComponent(id), { method: 'DELETE' });
+            refreshWatchPartyState();
+        }
+        async function closeMnRoom(id) {
+            if (!confirm('Force-close movie night room ' + id + '? All viewers will be disconnected.')) return;
+            await api('/api/movienight/rooms/' + encodeURIComponent(id), { method: 'DELETE' });
+            refreshWatchPartyState();
+        }
+        async function stopWatchCapture(id) {
+            if (!confirm('Stop capture proxy ' + id + '? Any watch room using it will freeze.')) return;
+            await api('/api/admin/watch/captures/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+            refreshWatchPartyState();
+        }
+        function startWatchPartyAutoPoll() {
+            stopWatchPartyAutoPoll();
+            refreshWatchPartyState();
+            _watchPartyPollTimer = setInterval(refreshWatchPartyState, 5000);
+        }
+        function stopWatchPartyAutoPoll() {
+            if (_watchPartyPollTimer) { clearInterval(_watchPartyPollTimer); _watchPartyPollTimer = null; }
         }
 
         // ---------------- YouTube cookie session (Tier-1 bot-wall bypass) ----------------
@@ -5635,6 +5860,7 @@
             { key: 'urlStreamEnabled',        type: 'bool', label: 'URL streaming enabled',    hint: 'Allow streaming YouTube/TikTok/etc. URLs.' },
             { key: 'clipEnabled',             type: 'bool', label: 'Voice clipping enabled',   hint: 'Allow capturing the last N seconds of voice-channel audio (📎 Clip + /clip) and saving clips to the soundboard.' },
             { key: 'playQueueEnabled',        type: 'bool', label: 'Play-all queue enabled',   hint: 'Allow using the ▶ Play all button that queues every visible sound and plays them sequentially.' },
+            { key: 'watchPartyEnabled',       type: 'bool', label: 'Watch Party enabled',      hint: 'Allow starting /watch and /movienight rooms.' },
             { key: 'urlStreamMaxDurationSec', type: 'num',  label: 'URL stream max (s)',       hint: 'Max playable duration for URL streams.' },
             { key: 'userMaxDuration',         type: 'num',  label: 'Playback max (s)',         hint: 'Max length a single sound can play.' },
             { key: 'userCooldownSec',         type: 'num',  label: 'Playback cooldown (s)',    hint: 'Seconds between plays.' },
@@ -5679,6 +5905,7 @@
                 urlStreamMaxDurationSec: (settings.urlStreamMaxDurationSec || {})[role],
                 clipEnabled: (settings.clipEnabled || {})[role],
                 playQueueEnabled: (settings.playQueueEnabled || {})[role],
+                watchPartyEnabled: (settings.watchPartyEnabled || {})[role],
                 userMaxDuration: settings.userMaxDuration,
                 userCooldownSec: settings.userCooldownSec,
                 userUploadEnabled: settings.userUploadEnabled,
