@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Movie Night</title>
+    <style>
+        :root {
+            --bg: #0f0f12; --surface: #18181c; --surface-hover: #1f1f24;
+            --text: #e4e4e7; --text-muted: #a1a1aa; --border: #2a2a30;
+            --accent: #7c3aed; --danger: #dc2626; --radius: 10px;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
+        .shell { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+        h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+        .sub { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 1.5rem; }
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+        .badge.host { background: rgba(124,58,237,0.2); color: var(--accent); border: 1px solid var(--accent); margin-left: 0.5rem; }
+        .add-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .add-row input { flex: 1; min-width: 240px; padding: 0.55rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; }
+        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+        .btn.danger { background: var(--danger); border-color: var(--danger); color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+        .card {
+            position: relative; background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column;
+        }
+        .card.winner { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+        .card .poster { width: 100%; aspect-ratio: 2 / 3; background: #000 center/cover no-repeat; }
+        .card .poster.placeholder { background: linear-gradient(135deg, #1f1f24, #0f0f12); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 2rem; }
+        .card .body { padding: 0.6rem 0.75rem; flex: 1; display: flex; flex-direction: column; gap: 0.3rem; }
+        .card .title { font-weight: 600; font-size: 0.9rem; line-height: 1.3; word-break: break-word; }
+        .card .meta { font-size: 0.75rem; color: var(--text-muted); }
+        .card .actions { padding: 0.5rem 0.75rem; border-top: 1px solid var(--border); display: flex; gap: 0.4rem; align-items: center; }
+        .card .actions .tally { margin-left: auto; font-weight: 600; color: var(--accent); }
+        .card .vote-btn { flex: 1; padding: 0.45rem; font-size: 0.8rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
+        .card .vote-btn.is-mine { background: var(--accent); border-color: var(--accent); color: white; }
+        .card .drm-warn { font-size: 0.7rem; color: var(--danger); padding: 0.4rem 0.75rem; background: rgba(220,38,38,0.1); border-top: 1px solid rgba(220,38,38,0.3); }
+        .card .x-btn { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 0.85rem; padding: 0; }
+        .phase-bar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0.85rem; margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+        .phase-bar .pill { padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); }
+        .phase-bar .pill.active { background: var(--accent); border-color: var(--accent); color: white; }
+        .phase-bar .countdown { font-family: 'SF Mono', Menlo, monospace; color: var(--accent); font-weight: 600; }
+        .phase-bar .spacer { flex: 1; }
+        .empty { padding: 2rem 1rem; text-align: center; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius); }
+        .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--accent); color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100; }
+        .toast.visible { opacity: 1; }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <h1>🎬 Movie Night <span class="badge host" id="roleBadge" style="display:none">HOST</span></h1>
+    <p class="sub" id="sub">host: <span id="hostName">—</span> · <span id="viewerCount">1 viewer</span></p>
+
+    <div class="phase-bar">
+        <span class="pill" id="phaseGather">1. Gather</span>
+        <span class="pill" id="phaseVote">2. Vote</span>
+        <span class="pill" id="phaseDecided">3. Watch</span>
+        <span class="countdown" id="countdown"></span>
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" id="btnStartVote" style="display:none" onclick="startVote()">Start 30-second vote</button>
+        <button type="button" class="btn" id="btnEndVote" style="display:none" onclick="endVote()">End vote early</button>
+        <button type="button" class="btn danger" id="btnClose" style="display:none" onclick="closeRoom()">✕ Close</button>
+    </div>
+
+    <div class="add-row" id="addRow">
+        <input type="text" id="urlInput" placeholder="Paste a YouTube / weflix / Vimeo / direct video URL…" onkeydown="if(event.key==='Enter')addCandidate()">
+        <button type="button" class="btn primary" onclick="addCandidate()">+ Add candidate</button>
+    </div>
+
+    <div id="candidatesHost"></div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+(function() {
+    const m = window.location.pathname.match(/^\/movienight\/(mn_[a-f0-9]{8})$/i);
+    if (!m) { document.body.innerHTML = '<div style="padding:2rem;text-align:center">Invalid room URL</div>'; return; }
+    const ROOM_ID = m[1];
+    let room = null;
+    let me = null;
+    let isHost = false;
+    let myVote = null;
+    let ws = null;
+    let countdownTimer = null;
+
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.textContent = msg; t.classList.add('visible');
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => t.classList.remove('visible'), 2000);
+    }
+
+    async function init() {
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID, { credentials: 'same-origin' });
+        if (res.status === 401) { document.body.innerHTML = '<div style="padding:2rem;text-align:center">Sign in to the soundboard first.</div>'; return; }
+        if (res.status === 403) { document.body.innerHTML = '<div style="padding:2rem;text-align:center">Movie Night is disabled for your account.</div>'; return; }
+        if (res.status === 404) { document.body.innerHTML = '<div style="padding:2rem;text-align:center">Room not found or expired.</div>'; return; }
+        if (!res.ok) { document.body.innerHTML = '<div style="padding:2rem;text-align:center">Failed to load.</div>'; return; }
+        room = await res.json();
+        renderAll();
+        connectWs();
+    }
+
+    function connectWs() {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + window.location.host + '/api/movienight/rooms/' + ROOM_ID + '/socket');
+        ws.onmessage = (evt) => {
+            let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+            if (msg.type === 'hello') {
+                me = msg.you; isHost = (me === room.hostUsername);
+                document.getElementById('roleBadge').style.display = isHost ? 'inline-block' : 'none';
+                room = msg.room; renderAll();
+            } else if (msg.type === 'candidates') {
+                room.candidates = msg.candidates; renderCandidates();
+            } else if (msg.type === 'tally') {
+                room.vote = room.vote || {};
+                room.vote.tallies = msg.tallies;
+                renderCandidates();
+            } else if (msg.type === 'vote-started') {
+                room = msg.room; renderAll();
+            } else if (msg.type === 'decided') {
+                room = msg.room;
+                renderAll();
+                showToast('Winner: ' + (room.candidates[room.winnerIdx]?.title || '?') + ' — opening room in 2s…');
+                setTimeout(() => { window.location.href = '/watch/' + msg.watchRoomId; }, 2000);
+            } else if (msg.type === 'viewers') {
+                document.getElementById('viewerCount').textContent = msg.count + ' viewer' + (msg.count === 1 ? '' : 's');
+            } else if (msg.type === 'closed') {
+                document.body.innerHTML = '<div style="padding:2rem;text-align:center">The host closed this room.</div>';
+            } else if (msg.type === 'error') {
+                showToast(msg.error);
+            }
+        };
+        ws.onclose = () => { setTimeout(connectWs, 2000); };
+    }
+
+    function renderAll() {
+        document.getElementById('hostName').textContent = room.hostUsername;
+        document.getElementById('viewerCount').textContent = room.viewerCount + ' viewer' + (room.viewerCount === 1 ? '' : 's');
+        document.getElementById('phaseGather').classList.toggle('active', room.phase === 'gathering');
+        document.getElementById('phaseVote').classList.toggle('active', room.phase === 'voting');
+        document.getElementById('phaseDecided').classList.toggle('active', room.phase === 'decided');
+        const showAdd = room.phase === 'gathering';
+        document.getElementById('addRow').style.display = showAdd ? 'flex' : 'none';
+        document.getElementById('btnStartVote').style.display = (isHost && room.phase === 'gathering' && room.candidates.length >= 2) ? '' : 'none';
+        document.getElementById('btnEndVote').style.display = (isHost && room.phase === 'voting') ? '' : 'none';
+        document.getElementById('btnClose').style.display = isHost ? '' : 'none';
+        renderCandidates();
+        renderCountdown();
+    }
+
+    function renderCandidates() {
+        const host = document.getElementById('candidatesHost');
+        if (!room.candidates.length) {
+            host.innerHTML = '<div class="empty">No candidates yet. Paste a URL above to add the first one.</div>';
+            return;
+        }
+        const tallies = room.vote?.tallies || [];
+        host.innerHTML = '<div class="grid">' + room.candidates.map((c, idx) => {
+            const isWinner = room.winnerIdx === idx;
+            const tally = tallies[idx] || 0;
+            const myChoice = myVote === idx;
+            const allowVote = room.phase === 'voting';
+            const allowRemove = room.phase === 'gathering' && (c.addedBy === me || isHost);
+            const poster = c.poster
+                ? '<div class="poster" style="background-image:url(' + JSON.stringify(c.poster) + ')"></div>'
+                : '<div class="poster placeholder">🎞️</div>';
+            return ''
+                + '<div class="card' + (isWinner ? ' winner' : '') + '">'
+                + (allowRemove ? '<button class="x-btn" title="Remove" onclick="removeCandidate(' + idx + ')">×</button>' : '')
+                + poster
+                + '<div class="body">'
+                +   '<div class="title">' + esc(c.title) + '</div>'
+                +   '<div class="meta">' + esc(c.sourceType) + ' · added by ' + esc(c.addedBy) + '</div>'
+                + '</div>'
+                + (c.drmBlocked ? '<div class="drm-warn">DRM — won\'t play in the bot. Use Discord Go Live instead.</div>' : '')
+                + '<div class="actions">'
+                +   (allowVote
+                        ? '<button class="vote-btn' + (myChoice ? ' is-mine' : '') + '" onclick="castVote(' + idx + ')">' + (myChoice ? '✓ Voted' : 'Vote') + '</button>'
+                        : (room.phase === 'decided' && isWinner ? '<span style="color:var(--accent);font-weight:600">🏆 Winner</span>' : '<span style="color:var(--text-muted)">' + esc(c.url.length > 30 ? c.url.slice(0, 30) + '…' : c.url) + '</span>'))
+                +   (room.phase === 'voting' || room.phase === 'decided' ? '<span class="tally">' + tally + '</span>' : '')
+                + '</div>'
+                + '</div>';
+        }).join('') + '</div>';
+    }
+
+    function renderCountdown() {
+        const el = document.getElementById('countdown');
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        if (room.phase !== 'voting' || !room.vote?.endsAt) { el.textContent = ''; return; }
+        const tick = () => {
+            const left = Math.max(0, Math.ceil((room.vote.endsAt - Date.now()) / 1000));
+            el.textContent = left + 's left';
+            if (left === 0 && countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        };
+        tick();
+        countdownTimer = setInterval(tick, 250);
+    }
+
+    async function addCandidate() {
+        const input = document.getElementById('urlInput');
+        const url = input.value.trim();
+        if (!url) return;
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/candidates', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+        });
+        if (res.ok) { input.value = ''; }
+        else {
+            const d = await res.json().catch(() => ({}));
+            showToast(d.error || 'Failed to add');
+        }
+    }
+    window.addCandidate = addCandidate;
+
+    async function removeCandidate(idx) {
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/candidates/' + idx, { method: 'DELETE', credentials: 'same-origin' });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed'); }
+    }
+    window.removeCandidate = removeCandidate;
+
+    async function startVote() {
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/start-vote', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed'); }
+    }
+    window.startVote = startVote;
+
+    async function castVote(idx) {
+        myVote = idx;
+        renderCandidates();
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/vote', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ idx }),
+        });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Vote failed'); }
+    }
+    window.castVote = castVote;
+
+    async function endVote() {
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/end-vote', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed'); }
+    }
+    window.endVote = endVote;
+
+    async function closeRoom() {
+        if (!confirm('Close this Movie Night room for everyone?')) return;
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID, { method: 'DELETE', credentials: 'same-origin' });
+        if (res.ok) document.body.innerHTML = '<div style="padding:2rem;text-align:center">Room closed.</div>';
+    }
+    window.closeRoom = closeRoom;
+
+    init();
+})();
+</script>
+</body>
+</html>

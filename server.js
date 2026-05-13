@@ -2195,6 +2195,9 @@ async function registerSlashCommands() {
             .setDescription('Start a synced Watch Together room around a video URL')
             .addStringOption(o => o.setName('url').setDescription('YouTube / Vimeo / Twitch / direct video / weflix URL').setRequired(true))
             .addBooleanOption(o => o.setName('public').setDescription('Post the join link to the channel (default: only you see it)').setRequired(false)),
+        new SlashCommandBuilder()
+            .setName('movienight')
+            .setDescription('Open a pre-watch room where everyone adds candidate URLs + votes on which to play'),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2281,6 +2284,7 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'clip') return handleClipCommand(interaction);
             if (interaction.commandName === 'play') return handlePlayCommand(interaction);
             if (interaction.commandName === 'watch') return handleWatchCommand(interaction);
+            if (interaction.commandName === 'movienight') return handleMovieNightCommand(interaction);
         } else if (interaction.isAutocomplete?.()) {
             if (interaction.commandName === 'play') return handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
@@ -2288,6 +2292,8 @@ client.on('interactionCreate', async (interaction) => {
             if (m) return handleVoteButton(interaction, m[1], m[2]);
             const w = String(interaction.customId || '').match(/^watch:post:(w_[a-f0-9]{8})$/i);
             if (w) return handleWatchPostButton(interaction, w[1]);
+            const mn = String(interaction.customId || '').match(/^mn:post:(mn_[a-f0-9]{8})$/i);
+            if (mn) return handleMovieNightPostButton(interaction, mn[1]);
         }
     } catch (err) {
         console.error('[voting] interaction error:', err);
@@ -2868,6 +2874,137 @@ function setWatchPartyEnabled(role, v) {
     saveGuestData(d);
 }
 
+// ---------------------------------------------------------------------------
+// Movie Night — pre-watch rooms with candidate list + vote-to-pick.
+// Once a winner is decided, the room's selected candidate becomes a regular
+// Watch Together room (same player path, same WS sync) and viewers are
+// redirected to /watch/<id>.
+// ---------------------------------------------------------------------------
+const MOVIENIGHT_TTL_MS = 6 * 60 * 60 * 1000;
+const MOVIENIGHT_MAX_CANDIDATES = 12;
+const MOVIENIGHT_VOTE_WINDOW_MS = 30_000;
+const movieNightRooms = new Map();
+
+function makeMovieNightRoomId() { return 'mn_' + crypto.randomBytes(4).toString('hex'); }
+
+function _mnBroadcast(room, payload) {
+    const json = JSON.stringify(payload);
+    for (const ws of room.viewers) {
+        if (ws.readyState === 1) { try { ws.send(json); } catch {} }
+    }
+}
+
+function _mnRoomPublic(room) {
+    return {
+        id: room.id,
+        hostUsername: room.hostUsername,
+        hostRole: room.hostRole,
+        createdAt: room.createdAt,
+        candidates: room.candidates,
+        viewerCount: room.viewers.size,
+        phase: room.phase,
+        vote: room.vote ? { endsAt: room.vote.endsAt, tallies: _mnTallies(room) } : null,
+        winnerIdx: room.winnerIdx,
+        winnerWatchRoomId: room.winnerWatchRoomId,
+    };
+}
+
+function _mnTallies(room) {
+    if (!room.vote) return null;
+    const t = new Array(room.candidates.length).fill(0);
+    for (const idx of room.vote.byUser.values()) {
+        if (Number.isInteger(idx) && idx >= 0 && idx < t.length) t[idx]++;
+    }
+    return t;
+}
+
+// Best-effort title/poster scrape via Open Graph meta tags. Falls back to
+// the URL's pathname if no og:title. Skipped for known DRM hosts.
+async function scrapeOgMeta(url) {
+    try {
+        const res = await fetch(url, {
+            headers: {
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'accept': 'text/html,application/xhtml+xml',
+            },
+        });
+        if (!res.ok) return null;
+        const html = await res.text();
+        const pick = (re) => { const m = html.match(re); return m ? m[1].trim() : null; };
+        return {
+            title: pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+                || pick(/<meta[^>]+name=["']title["'][^>]+content=["']([^"']+)["']/i)
+                || pick(/<title>([^<]+)<\/title>/i),
+            poster: pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+                || pick(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i),
+            description: pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i),
+        };
+    } catch { return null; }
+}
+
+function getMovieNightEnabled(role, username) {
+    // Movie Night gates on the same permission as Watch Together — picking a
+    // movie that you can't actually play would be silly.
+    return getWatchPartyEnabled(role, username);
+}
+
+function _mnFinalize(room) {
+    if (room.phase !== 'voting' || !room.vote) return;
+    if (room.vote.timer) { clearTimeout(room.vote.timer); room.vote.timer = null; }
+    const tallies = _mnTallies(room);
+    let maxIdx = 0, maxVotes = -1;
+    tallies.forEach((v, i) => { if (v > maxVotes) { maxVotes = v; maxIdx = i; } });
+    // Tie-breaker: random among top-tied.
+    const tied = tallies.map((v, i) => v === maxVotes ? i : -1).filter(i => i >= 0);
+    const winnerIdx = tied[Math.floor(Math.random() * tied.length)];
+    room.winnerIdx = winnerIdx;
+    room.phase = 'decided';
+    // Create the corresponding watch room.
+    const winner = room.candidates[winnerIdx];
+    (async () => {
+        const detect = _watchDetectSource(winner.url);
+        let sourceType = detect.sourceType;
+        let sourceMeta = detect.sourceMeta || {};
+        if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
+            const direct = await resolveDirectVideoUrlViaYtDlp(winner.url);
+            if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: winner.url, resolvedAt: Date.now() }; }
+            else if (sourceType === 'iframe') {
+                const unwrapped = await unwrapAggregatorEmbed(winner.url);
+                if (unwrapped) {
+                    const inner = await resolveDirectVideoUrlViaYtDlp(unwrapped);
+                    if (inner) { sourceType = 'video'; sourceMeta = { url: inner, originalUrl: winner.url, resolvedAt: Date.now() }; }
+                    else { sourceMeta = { url: unwrapped, originalUrl: winner.url }; }
+                }
+            }
+        }
+        const watchId = makeWatchRoomId();
+        const now = Date.now();
+        watchRooms.set(watchId, {
+            id: watchId, url: winner.url, sourceType, sourceMeta,
+            hostUsername: room.hostUsername, hostRole: room.hostRole,
+            createdAt: now, lastActivity: now,
+            state: { playing: false, position: 0, positionAt: now },
+            viewers: new Set(),
+        });
+        room.winnerWatchRoomId = watchId;
+        console.log(`[movienight] room ${room.id} decided: ${winner.title || winner.url} -> /watch/${watchId}`);
+        _mnBroadcast(room, { type: 'decided', winnerIdx, watchRoomId: watchId, room: _mnRoomPublic(room) });
+    })().catch(err => {
+        console.error('[movienight] finalize failed:', err.message);
+        _mnBroadcast(room, { type: 'error', error: 'Failed to create the winning room: ' + err.message });
+    });
+}
+
+function _mnSweep() {
+    const now = Date.now();
+    for (const [id, room] of movieNightRooms) {
+        if (now - room.lastActivity > MOVIENIGHT_TTL_MS && room.viewers.size === 0) {
+            movieNightRooms.delete(id);
+        }
+    }
+}
+setInterval(_mnSweep, 30 * 60 * 1000).unref?.();
+
 // Shared capture path used by both /clip (Discord slash) and the web UI's
 // Clip button. Returns { ok, meta?, error? } — callers translate to their
 // own reply/response shape.
@@ -3154,6 +3291,59 @@ async function handleWatchPostButton(interaction, roomId) {
         });
     } catch (err) {
         console.error('[watch] post-to-channel failed:', err.message);
+    }
+}
+
+async function handleMovieNightCommand(interaction) {
+    const caller = resolveDiscordCaller(interaction);
+    if (caller.disabledReason) {
+        return interaction.reply({ content: caller.disabledReason === 'link-disabled' ? 'Your linked account is disabled.' : 'Your linked soundboard account is disabled.', flags: MessageFlags.Ephemeral });
+    }
+    if (!getMovieNightEnabled(caller.role, caller.username)) {
+        return interaction.reply({ content: "You don't have permission to use `/movienight`.", flags: MessageFlags.Ephemeral });
+    }
+    const id = makeMovieNightRoomId();
+    const now = Date.now();
+    movieNightRooms.set(id, {
+        id, hostUsername: caller.username, hostRole: caller.role,
+        createdAt: now, lastActivity: now,
+        candidates: [],
+        phase: 'gathering',
+        vote: null,
+        winnerIdx: null,
+        winnerWatchRoomId: null,
+        viewers: new Set(),
+    });
+    const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
+    const joinUrl = `${publicBase}/movienight/${id}`;
+    console.log(`[movienight] room ${id} created via /movienight by ${caller.fallbackTag}`);
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`mn:post:${id}`).setLabel('📢 Post to channel').setStyle(ButtonStyle.Primary),
+    );
+    return interaction.reply({
+        content: `🎬 **Movie Night** — pick the night's feature together. Join ${joinUrl}, paste candidate URLs, then the host starts a 30-second vote and the winner auto-starts in Watch Together.`,
+        components: [row],
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+async function handleMovieNightPostButton(interaction, roomId) {
+    if (!MN_ID_RE.test(String(roomId || ''))) return interaction.reply({ content: 'Invalid room.', flags: MessageFlags.Ephemeral });
+    const room = movieNightRooms.get(roomId);
+    if (!room) return interaction.reply({ content: 'Room expired.', flags: MessageFlags.Ephemeral });
+    const caller = resolveDiscordCaller(interaction);
+    if (caller.username !== room.hostUsername && caller.role !== 'superadmin') {
+        return interaction.reply({ content: 'Only the host can post the link.', flags: MessageFlags.Ephemeral });
+    }
+    const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
+    const joinUrl = `${publicBase}/movienight/${roomId}`;
+    try {
+        await interaction.update({ components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('mn:posted').setLabel('✓ Posted').setStyle(ButtonStyle.Success).setDisabled(true),
+        )] });
+        await interaction.followUp({ content: `🎬 **Movie Night** — ${caller.fallbackTag} started a movie pick. Add candidates + vote: ${joinUrl}` });
+    } catch (err) {
+        console.error('[movienight] post-to-channel failed:', err.message);
     }
 }
 
@@ -8823,6 +9013,140 @@ app.post('/api/watch/rooms/:id/control', requireAuth, requireValidWatchRoomId, (
     res.json(_watchRoomPublic(room));
 });
 
+// ---------------------------------------------------------------------------
+// Movie Night routes
+// ---------------------------------------------------------------------------
+const MN_ID_RE = /^mn_[a-f0-9]{8}$/i;
+function requireValidMnRoomId(req, res, next) {
+    if (!MN_ID_RE.test(String(req.params.id || ''))) return res.status(400).json({ error: 'Invalid room id' });
+    next();
+}
+function requireMovieNightPermission(req, res, next) {
+    const role = req.session?.user?.role;
+    const username = req.session?.user?.username;
+    if (!role || !getMovieNightEnabled(role, username)) return res.status(403).json({ error: 'Movie Night is disabled for your account.' });
+    next();
+}
+
+app.post('/api/movienight/rooms', requireAuth, requireMovieNightPermission, (req, res) => {
+    const id = makeMovieNightRoomId();
+    const now = Date.now();
+    movieNightRooms.set(id, {
+        id, hostUsername: req.session.user.username, hostRole: req.session.user.role,
+        createdAt: now, lastActivity: now,
+        candidates: [],
+        phase: 'gathering', // gathering -> voting -> decided
+        vote: null,
+        winnerIdx: null,
+        winnerWatchRoomId: null,
+        viewers: new Set(),
+    });
+    console.log(`[movienight] room ${id} created by ${req.session.user.username}`);
+    res.json(_mnRoomPublic(movieNightRooms.get(id)));
+});
+
+app.get('/api/movienight/rooms/:id', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found or expired' });
+    res.json(_mnRoomPublic(room));
+});
+
+app.post('/api/movienight/rooms/:id/candidates', requireAuth, requireValidMnRoomId, requireMovieNightPermission, async (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.phase !== 'gathering') return res.status(400).json({ error: 'Candidates locked — vote already in progress' });
+    const url = String((req.body || {}).url || '').trim();
+    const detect = _watchDetectSource(url);
+    if (detect.sourceType === 'invalid') return res.status(400).json({ error: detect.error });
+    if (room.candidates.length >= MOVIENIGHT_MAX_CANDIDATES) return res.status(400).json({ error: 'Max ' + MOVIENIGHT_MAX_CANDIDATES + ' candidates' });
+    if (room.candidates.some(c => c.url === url)) return res.status(400).json({ error: 'Already in the list' });
+    const meta = await scrapeOgMeta(url).catch(() => null);
+    const candidate = {
+        url,
+        title: meta?.title || url,
+        poster: meta?.poster || null,
+        description: meta?.description || null,
+        sourceType: detect.sourceType,
+        addedBy: req.session.user.username,
+        addedAt: Date.now(),
+        drmBlocked: detect.sourceType === 'drm-blocked',
+    };
+    room.candidates.push(candidate);
+    room.lastActivity = Date.now();
+    _mnBroadcast(room, { type: 'candidates', candidates: room.candidates });
+    res.json({ ok: true, candidate, candidates: room.candidates });
+});
+
+app.delete('/api/movienight/rooms/:id/candidates/:idx', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.phase !== 'gathering') return res.status(400).json({ error: 'Vote in progress' });
+    const idx = parseInt(req.params.idx, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= room.candidates.length) return res.status(400).json({ error: 'Bad index' });
+    const cand = room.candidates[idx];
+    const un = req.session.user.username;
+    if (cand.addedBy !== un && un !== room.hostUsername && req.session.user.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only the candidate adder, host, or superadmin can remove it' });
+    }
+    room.candidates.splice(idx, 1);
+    room.lastActivity = Date.now();
+    _mnBroadcast(room, { type: 'candidates', candidates: room.candidates });
+    res.json({ ok: true, candidates: room.candidates });
+});
+
+app.post('/api/movienight/rooms/:id/start-vote', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.hostUsername !== req.session.user.username && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Host only' });
+    if (room.phase !== 'gathering') return res.status(400).json({ error: 'Vote already started or decided' });
+    if (room.candidates.length < 2) return res.status(400).json({ error: 'Need at least 2 candidates' });
+    const now = Date.now();
+    room.phase = 'voting';
+    room.vote = { startedAt: now, endsAt: now + MOVIENIGHT_VOTE_WINDOW_MS, byUser: new Map(), timer: null };
+    room.vote.timer = setTimeout(() => _mnFinalize(room), MOVIENIGHT_VOTE_WINDOW_MS);
+    room.lastActivity = now;
+    _mnBroadcast(room, { type: 'vote-started', room: _mnRoomPublic(room) });
+    res.json(_mnRoomPublic(room));
+});
+
+app.post('/api/movienight/rooms/:id/vote', requireAuth, requireValidMnRoomId, requireMovieNightPermission, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.phase !== 'voting' || !room.vote) return res.status(400).json({ error: 'Vote not in progress' });
+    if (Date.now() > room.vote.endsAt) return res.status(400).json({ error: 'Voting window closed' });
+    const idx = parseInt((req.body || {}).idx, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= room.candidates.length) return res.status(400).json({ error: 'Bad candidate index' });
+    room.vote.byUser.set(req.session.user.username, idx);
+    room.lastActivity = Date.now();
+    _mnBroadcast(room, { type: 'tally', tallies: _mnTallies(room) });
+    res.json({ ok: true });
+});
+
+app.post('/api/movienight/rooms/:id/end-vote', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.hostUsername !== req.session.user.username && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Host only' });
+    if (room.phase !== 'voting') return res.status(400).json({ error: 'Not in voting phase' });
+    _mnFinalize(room);
+    res.json(_mnRoomPublic(room));
+});
+
+app.delete('/api/movienight/rooms/:id', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.hostUsername !== req.session.user.username && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Host only' });
+    _mnBroadcast(room, { type: 'closed' });
+    for (const ws of room.viewers) { try { ws.close(); } catch {} }
+    if (room.vote?.timer) clearTimeout(room.vote.timer);
+    movieNightRooms.delete(req.params.id);
+    res.json({ ok: true });
+});
+
+app.get('/movienight/:id', (req, res) => {
+    if (!MN_ID_RE.test(String(req.params.id || ''))) return res.status(400).type('text/plain').send('Invalid room id');
+    res.sendFile(path.join(__dirname, 'public', 'movienight.html'));
+});
+
 app.delete('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res) => {
     const room = watchRooms.get(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -8966,7 +9290,6 @@ const watchWss = new WebSocketServer({ noServer: true });
 watchWss.on('connection', (ws, req, room, username) => {
     room.viewers.add(ws);
     room.lastActivity = Date.now();
-    // Send initial state on connect.
     try {
         ws.send(JSON.stringify({
             type: 'hello',
@@ -8974,12 +9297,33 @@ watchWss.on('connection', (ws, req, room, username) => {
             you: username,
         }));
     } catch {}
-    // Broadcast updated viewer count to everyone.
     _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
-    ws.on('message', () => { /* viewers don't send state — host uses HTTP control */ });
+    ws.on('message', () => {});
     const cleanup = () => {
         room.viewers.delete(ws);
         if (watchRooms.has(room.id)) _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    };
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+});
+
+// WebSocket upgrade for Movie Night rooms — same shape, different room map.
+const mnWss = new WebSocketServer({ noServer: true });
+mnWss.on('connection', (ws, req, room, username) => {
+    room.viewers.add(ws);
+    room.lastActivity = Date.now();
+    try {
+        ws.send(JSON.stringify({
+            type: 'hello',
+            room: _mnRoomPublic(room),
+            you: username,
+        }));
+    } catch {}
+    _mnBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    ws.on('message', () => {});
+    const cleanup = () => {
+        room.viewers.delete(ws);
+        if (movieNightRooms.has(room.id)) _mnBroadcast(room, { type: 'viewers', count: room.viewers.size });
     };
     ws.on('close', cleanup);
     ws.on('error', cleanup);
@@ -8989,6 +9333,20 @@ watchWss.on('connection', (ws, req, room, username) => {
 // upgrade using the same session cookie as the rest of the app, then pipes
 // bytes through to the localhost websockify.
 httpServer.on('upgrade', (req, socket, head) => {
+    // Movie Night rooms: /api/movienight/rooms/<id>/socket
+    const mnm = req.url && req.url.match(/^\/api\/movienight\/rooms\/(mn_[a-f0-9]{8})\/socket$/i);
+    if (mnm) {
+        const stubRes = { setHeader: () => {}, getHeader: () => undefined, writeHead: () => {}, end: () => {}, on: () => {}, once: () => {}, emit: () => {} };
+        sessionMiddleware(req, stubRes, () => {
+            const user = req.session?.user;
+            if (!user) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            if (!getMovieNightEnabled(user.role, user.username)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            const room = movieNightRooms.get(mnm[1]);
+            if (!room) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            mnWss.handleUpgrade(req, socket, head, (ws) => { mnWss.emit('connection', ws, req, room, user.username); });
+        });
+        return;
+    }
     // Watch Together rooms: /api/watch/rooms/<id>/socket
     const wm = req.url && req.url.match(/^\/api\/watch\/rooms\/(w_[a-f0-9]{8})\/socket$/i);
     if (wm) {
