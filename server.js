@@ -3074,6 +3074,16 @@ async function resolveWatchSource(url, forceStrategy) {
     let sourceType = detect.sourceType;
     let sourceMeta = detect.sourceMeta || {};
     if (strategy === 'iframe') return { sourceType, sourceMeta };
+    // YouTube / Vimeo / Twitch already have great in-browser player APIs
+    // with full programmatic sync. yt-dlp's resolved CDN URLs come with
+    // signed query params tied to the server's IP/UA, so the *browser*
+    // often can't play them — defeating the whole point. In 'auto' mode
+    // we therefore PREFER the iframe path for these. Users can still
+    // explicitly pick the 'ytdlp' strategy if iframe gets walled.
+    const IFRAME_API_SOURCES = new Set(['youtube', 'vimeo', 'twitch']);
+    if (strategy === 'auto' && IFRAME_API_SOURCES.has(sourceType)) {
+        return { sourceType, sourceMeta };
+    }
     if (strategy === 'auto' || strategy === 'ytdlp') {
         const direct = await resolveDirectVideoUrlViaYtDlp(url);
         if (direct) return { sourceType: 'video', sourceMeta: { url: direct, originalUrl: url, via: 'ytdlp', resolvedAt: Date.now() } };

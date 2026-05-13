@@ -267,7 +267,13 @@
         v.addEventListener('play', () => { if (!suppressEvents && isHost) sendControl('play', v.currentTime); });
         v.addEventListener('pause', () => { if (!suppressEvents && isHost) sendControl('pause', v.currentTime); });
         v.addEventListener('seeked', () => { if (!suppressEvents && isHost) sendControl('seek', v.currentTime); });
-        v.addEventListener('error', () => { showOverlay('Playback failed', '<p>The browser couldn\'t play this stream. yt-dlp resolved a URL, but it may be incompatible with this browser.</p>'); });
+        v.addEventListener('error', () => {
+            const via = room.sourceMeta && room.sourceMeta.via;
+            const hint = via === 'ytdlp' || via === 'ytdlp-unwrap'
+                ? '<p>yt-dlp resolved a CDN URL but its signed params are tied to the server\'s IP/UA, so your browser can\'t play it. Hit <strong>Pick another</strong> above to recreate the room — auto-mode now prefers iframe sync for sources like this.</p>'
+                : '<p>The browser couldn\'t play this stream. Try <strong>Pick another</strong> to recreate the room, or have a superadmin change <em>Watch Party → Sync strategy</em>.</p>';
+            showOverlay('Playback failed', hint);
+        });
 
         const src = room.sourceMeta.url;
         const isHls = /\.m3u8(\?|$)/i.test(src);
