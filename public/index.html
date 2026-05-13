@@ -4963,7 +4963,7 @@
             if (!caps.length) { wrap.innerHTML = '<div class="sa-field-help">No active capture proxies.</div>'; return; }
             const parts = ['<table style="width:100%; font-size:0.82rem; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding: 0.3rem;">ID</th><th style="text-align:left; padding: 0.3rem;">URL</th><th style="text-align:left; padding: 0.3rem;">Display</th><th style="text-align:left; padding: 0.3rem;">Procs</th><th style="text-align:left; padding: 0.3rem;">Age</th><th></th></tr></thead><tbody>'];
             for (const c of caps) {
-                const procs = [c.xvfbAlive ? 'Xvfb' : 'xvfb✗', c.chromiumAlive ? 'Chrome' : 'chrome✗', c.ffmpegAlive ? 'ffmpeg' : 'ffmpeg✗'].join(' ');
+                const procs = [c.xvfbAlive ? 'Xvfb' : 'xvfb✗', c.chromiumAlive ? 'Chrome' : 'chrome✗', c.ffmpegAlive ? 'ffmpeg' : 'ffmpeg✗', c.audio ? (c.pulseAlive ? '🔊pulse' : '🔊pulse✗') : '🔇no-audio'].join(' ');
                 parts.push('<tr><td style="padding:0.3rem; font-family: var(--font-mono, monospace);">' + _escapeHtml(c.captureId) + '</td>'
                     + '<td style="padding:0.3rem; max-width: 24rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + _escapeHtml(c.url) + '">' + _escapeHtml(c.url) + '</td>'
                     + '<td style="padding:0.3rem;">:' + c.display + '</td>'
@@ -4979,7 +4979,7 @@
             if (!wrap) return;
             const ok = (b) => b ? '<span style="color: var(--success, #4ade80);">✓ installed</span>' : '<span style="color: var(--danger, #ef4444);">✗ missing</span>';
             wrap.innerHTML =
-                'Xvfb: ' + ok(d.xvfb) + ' &nbsp; chromium: ' + ok(d.chromium) + ' &nbsp; ffmpeg: ' + ok(d.ffmpeg) + ' &nbsp; yt-dlp: ' + ok(d.ytDlp) + '<br>'
+                'Xvfb: ' + ok(d.xvfb) + ' &nbsp; chromium: ' + ok(d.chromium) + ' &nbsp; ffmpeg: ' + ok(d.ffmpeg) + ' &nbsp; pulseaudio: ' + ok(d.pulseaudio) + ' &nbsp; yt-dlp: ' + ok(d.ytDlp) + '<br>'
                 + 'YT cookies: ' + (d.ytCookiesEnabled ? '<span style="color: var(--success, #4ade80);">enabled</span>' : '<span style="color: var(--warning, #fbbf24);">not enabled</span>') + ' &nbsp; '
                 + 'strategy: <code>' + _escapeHtml(d.strategy) + '</code> &nbsp; '
                 + 'capture: ' + _escapeHtml(d.captureResolution) + ' @ ' + d.captureFramerate + 'fps &nbsp; '

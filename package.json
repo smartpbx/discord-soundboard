@@ -5,6 +5,7 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
+    "@napi-rs/canvas": "^1.0.0",
     "@noble/ciphers": "^1.0.0",
     "@snazzah/davey": "^0.1.6",
     "better-sqlite3": "^11.7.0",

@@ -19,6 +19,11 @@ if ! command -v claude >/dev/null 2>&1; then
     npm install -g @anthropic-ai/claude-code 2>&1 | tail -3 \
         || echo "[!] Claude Code install failed (Phase 10 Train new voice will be unavailable)"
 fi
+echo "[*] Ensuring pulseaudio is installed (Watch Together capture proxy audio mux)..."
+if ! command -v pulseaudio >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils 2>&1 | tail -3 \
+        || echo "[!] pulseaudio install failed (capture proxy will fall back to video-only)"
+fi
 echo "[*] Ensuring vosk speech-to-text model is present (voice triggers)..."
 VOSK_MODEL_DIR="$APP_DIR/models/vosk-en-us-small"
 VOSK_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"

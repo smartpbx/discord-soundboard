@@ -71,7 +71,9 @@ const { Readable } = require('stream');
 const express = require('express');
 const multer = require('multer');
 const { execSync, spawn } = require('child_process');
-const { Client, GatewayIntentBits, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
+let _wheelCanvas = null;
+try { _wheelCanvas = require('@napi-rs/canvas'); } catch (e) { console.warn('[wheel] @napi-rs/canvas not available — /wheel will be disabled:', e.message); }
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, getVoiceConnection, StreamType, AudioPlayerStatus, VoiceConnectionStatus, entersState, EndBehaviorType } = require('@discordjs/voice');
 const prism = require('prism-media');
 const { Transform } = require('stream');
@@ -2215,6 +2217,9 @@ async function registerSlashCommands() {
         new SlashCommandBuilder()
             .setName('movienight')
             .setDescription('Open a pre-watch room where everyone adds candidate URLs + votes on which to play'),
+        new SlashCommandBuilder()
+            .setName('wheel')
+            .setDescription('Spin a wheel for any decision — opens a modal where you type options'),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2302,6 +2307,7 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'play') return handlePlayCommand(interaction);
             if (interaction.commandName === 'watch') return handleWatchCommand(interaction);
             if (interaction.commandName === 'movienight') return handleMovieNightCommand(interaction);
+            if (interaction.commandName === 'wheel') return handleWheelCommand(interaction);
         } else if (interaction.isAutocomplete?.()) {
             if (interaction.commandName === 'play') return handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
@@ -2311,6 +2317,8 @@ client.on('interactionCreate', async (interaction) => {
             if (w) return handleWatchPostButton(interaction, w[1]);
             const mn = String(interaction.customId || '').match(/^mn:post:(mn_[a-f0-9]{8})$/i);
             if (mn) return handleMovieNightPostButton(interaction, mn[1]);
+        } else if (interaction.isModalSubmit?.()) {
+            if (interaction.customId === 'wheel:modal') return handleWheelModalSubmit(interaction);
         }
     } catch (err) {
         console.error('[voting] interaction error:', err);
@@ -3113,10 +3121,11 @@ function stopCaptureProxy(captureId) {
     const cap = captureProxies.get(captureId);
     if (!cap) return false;
     captureProxies.delete(captureId);
-    for (const p of [cap.ffmpeg, cap.chromium, cap.xvfb]) {
+    for (const p of [cap.ffmpeg, cap.chromium, cap.pulseaudio, cap.xvfb]) {
         try { if (p && !p.killed) p.kill('SIGKILL'); } catch {}
     }
     setTimeout(() => { try { fs.rmSync(cap.dir, { recursive: true, force: true }); } catch {} }, 2000);
+    if (cap.pulseRuntime) setTimeout(() => { try { fs.rmSync(cap.pulseRuntime, { recursive: true, force: true }); } catch {} }, 2000);
     console.log('[capture] stopped', captureId);
     return true;
 }
@@ -3140,14 +3149,71 @@ async function startCaptureProxyForUrl(url) {
     const preset = WATCH_CAPTURE_PRESETS[getWatchCaptureResolution()] || WATCH_CAPTURE_PRESETS['720p'];
     const { width, height } = preset;
     const framerate = getWatchCaptureFramerate();
+    // PulseAudio is optional — when present, we spawn a per-capture daemon
+    // backed by a null-sink so Chromium's audio is routed somewhere ffmpeg
+    // can grab it. When missing we fall through to video-only.
+    let pulseaudio = null;
+    let pulseRuntime = null;
+    let pulseSinkName = null;
+    let pulseAvailable = false;
+    try {
+        await new Promise((resolve, reject) => {
+            const p = spawn('which', ['pulseaudio'], { stdio: 'ignore' });
+            p.on('exit', (code) => code === 0 ? resolve() : reject());
+            p.on('error', reject);
+        });
+        pulseAvailable = true;
+    } catch { /* no pulseaudio — capture stays video-only */ }
     let xvfb, chromium, ffmpeg;
     try {
         xvfb = spawn('Xvfb', [`:${display}`, '-screen', '0', `${width}x${height}x24`, '-nolisten', 'tcp', '-ac', '+extension', 'RANDR'], { stdio: ['ignore', 'ignore', 'pipe'] });
     } catch (e) { console.warn('[capture] Xvfb spawn failed:', e.message); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} return null; }
     await new Promise((r) => setTimeout(r, 600)); // let Xvfb come up
+    // Spawn an isolated pulseaudio daemon for this capture so Chromium can
+    // output audio into a null-sink whose monitor ffmpeg pulls from. Each
+    // capture gets its own PULSE_RUNTIME_PATH so multiple proxies don't
+    // collide. If pulseaudio fails for any reason we fall back to video-only.
+    if (pulseAvailable) {
+        try {
+            pulseRuntime = `/tmp/pulse-${captureId}`;
+            pulseSinkName = `cap_${captureId.slice(4)}_sink`;
+            fs.mkdirSync(pulseRuntime, { recursive: true, mode: 0o700 });
+            const pulseEnv = { ...process.env, PULSE_RUNTIME_PATH: pulseRuntime, HOME: dir, XDG_RUNTIME_DIR: pulseRuntime };
+            pulseaudio = spawn('pulseaudio', [
+                '-n',                   // ignore default config
+                '--exit-idle-time=-1',  // never auto-exit
+                '--disallow-exit',
+                '--disallow-module-loading=no',
+                '--log-target=stderr',
+                '--log-level=error',
+                '-L', `module-native-protocol-unix socket=${pulseRuntime}/native`,
+                '-L', `module-null-sink sink_name=${pulseSinkName} sink_properties=device.description=CaptureSink`,
+                '-L', `set-default-sink ${pulseSinkName}`,
+            ], { stdio: ['ignore', 'ignore', 'pipe'], env: pulseEnv });
+            pulseaudio.stderr?.on('data', (d) => {
+                const s = d.toString().trim();
+                if (s) console.warn('[capture]', captureId, 'pulse:', s.slice(0, 200));
+            });
+            pulseaudio.on('exit', (code) => { if (code !== 0 && code !== null) console.warn('[capture]', captureId, 'pulseaudio exit', code); });
+            await new Promise((r) => setTimeout(r, 700)); // socket ready
+        } catch (e) {
+            console.warn('[capture] pulseaudio spawn failed; degrading to video-only:', e.message);
+            try { if (pulseaudio) pulseaudio.kill('SIGKILL'); } catch {}
+            try { if (pulseRuntime) fs.rmSync(pulseRuntime, { recursive: true, force: true }); } catch {}
+            pulseaudio = null;
+            pulseRuntime = null;
+            pulseSinkName = null;
+        }
+    }
     try {
         const profileDir = path.join(dir, 'chrome-profile');
         fs.mkdirSync(profileDir, { recursive: true });
+        const chromeEnv = { ...process.env, DISPLAY: `:${display}` };
+        if (pulseRuntime) {
+            chromeEnv.PULSE_RUNTIME_PATH = pulseRuntime;
+            chromeEnv.PULSE_SERVER = `unix:${pulseRuntime}/native`;
+            chromeEnv.XDG_RUNTIME_DIR = pulseRuntime;
+        }
         chromium = spawn('/usr/bin/chromium', [
             '--no-sandbox',
             '--kiosk',
@@ -3160,24 +3226,33 @@ async function startCaptureProxyForUrl(url) {
             `--user-data-dir=${profileDir}`,
             '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             url,
-        ], { stdio: 'ignore', env: { ...process.env, DISPLAY: `:${display}` } });
+        ], { stdio: 'ignore', env: chromeEnv });
     } catch (e) {
         console.warn('[capture] chromium spawn failed:', e.message);
         try { xvfb.kill('SIGKILL'); } catch {}
+        try { if (pulseaudio) pulseaudio.kill('SIGKILL'); } catch {}
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+        if (pulseRuntime) { try { fs.rmSync(pulseRuntime, { recursive: true, force: true }); } catch {} }
         return null;
     }
     await new Promise((r) => setTimeout(r, 2500)); // let chromium reach the page
     const playlistPath = path.join(dir, 'index.m3u8');
     const segPattern = path.join(dir, 'seg_%05d.ts');
     try {
-        ffmpeg = spawn('ffmpeg', [
+        const args = [
             '-loglevel', 'warning',
             '-f', 'x11grab',
             '-draw_mouse', '0',
             '-framerate', String(framerate),
             '-video_size', `${width}x${height}`,
             '-i', `:${display}.0`,
+        ];
+        if (pulseRuntime && pulseSinkName) {
+            args.push('-thread_queue_size', '512');
+            args.push('-f', 'pulse');
+            args.push('-i', `${pulseSinkName}.monitor`);
+        }
+        args.push(
             '-c:v', 'libx264',
             '-preset', 'veryfast',
             '-tune', 'zerolatency',
@@ -3186,18 +3261,32 @@ async function startCaptureProxyForUrl(url) {
             '-g', String(framerate * 2),
             '-sc_threshold', '0',
             '-pix_fmt', 'yuv420p',
+        );
+        if (pulseRuntime && pulseSinkName) {
+            args.push('-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2');
+        }
+        args.push(
             '-f', 'hls',
             '-hls_time', '2',
             '-hls_list_size', '6',
             '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
             '-hls_segment_filename', segPattern,
             playlistPath,
-        ], { stdio: ['ignore', 'ignore', 'pipe'] });
+        );
+        const ffmpegEnv = { ...process.env };
+        if (pulseRuntime) {
+            ffmpegEnv.PULSE_RUNTIME_PATH = pulseRuntime;
+            ffmpegEnv.PULSE_SERVER = `unix:${pulseRuntime}/native`;
+            ffmpegEnv.XDG_RUNTIME_DIR = pulseRuntime;
+        }
+        ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'], env: ffmpegEnv });
     } catch (e) {
         console.warn('[capture] ffmpeg spawn failed:', e.message);
         try { chromium.kill('SIGKILL'); } catch {}
+        try { if (pulseaudio) pulseaudio.kill('SIGKILL'); } catch {}
         try { xvfb.kill('SIGKILL'); } catch {}
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+        if (pulseRuntime) { try { fs.rmSync(pulseRuntime, { recursive: true, force: true }); } catch {} }
         return null;
     }
     ffmpeg.stderr?.on('data', (d) => {
@@ -3210,13 +3299,14 @@ async function startCaptureProxyForUrl(url) {
         try { fs.accessSync(playlistPath); break; } catch { await new Promise((r) => setTimeout(r, 300)); }
         if (i === 29) {
             console.warn('[capture]', captureId, 'playlist never materialized — aborting');
-            try { ffmpeg.kill('SIGKILL'); chromium.kill('SIGKILL'); xvfb.kill('SIGKILL'); } catch {}
+            try { ffmpeg.kill('SIGKILL'); chromium.kill('SIGKILL'); xvfb.kill('SIGKILL'); if (pulseaudio) pulseaudio.kill('SIGKILL'); } catch {}
             try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+            if (pulseRuntime) { try { fs.rmSync(pulseRuntime, { recursive: true, force: true }); } catch {} }
             return null;
         }
     }
-    captureProxies.set(captureId, { url, dir, display, xvfb, chromium, ffmpeg, startedAt: Date.now() });
-    console.log('[capture] started', captureId, 'for', url);
+    captureProxies.set(captureId, { url, dir, display, xvfb, chromium, ffmpeg, pulseaudio, pulseRuntime, pulseSinkName, audio: !!pulseaudio, startedAt: Date.now() });
+    console.log('[capture] started', captureId, 'for', url, 'audio:', !!pulseaudio);
     return { captureId, streamUrl: `/captures/${captureId}/index.m3u8` };
 }
 
@@ -3686,6 +3776,189 @@ async function handleMovieNightPostButton(interaction, roomId) {
         await interaction.followUp({ content: `🎬 **Movie Night** — ${caller.fallbackTag} started a movie pick. Add candidates + vote: ${joinUrl}` });
     } catch (err) {
         console.error('[movienight] post-to-channel failed:', err.message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// /wheel — Discord-native vote wheel. The slash command opens a modal where
+// the caller types a title + one option per line; the server picks a winner,
+// renders a spinning-wheel MP4 with @napi-rs/canvas + ffmpeg, and posts the
+// video as a Discord attachment so the animation plays inline for everyone.
+// ---------------------------------------------------------------------------
+const WHEEL_MAX_OPTIONS = 12;
+const WHEEL_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16', '#06b6d4', '#a855f7', '#eab308'];
+
+async function handleWheelCommand(interaction) {
+    if (!_wheelCanvas) {
+        return interaction.reply({ content: '`/wheel` is unavailable: the canvas renderer failed to load. Check server logs.', flags: MessageFlags.Ephemeral });
+    }
+    const modal = new ModalBuilder().setCustomId('wheel:modal').setTitle('Spin the wheel');
+    const titleInput = new TextInputBuilder()
+        .setCustomId('title')
+        .setLabel('Title (optional)')
+        .setPlaceholder('e.g. What\'s for dinner?')
+        .setStyle(TextInputStyle.Short)
+        .setMaxLength(80)
+        .setRequired(false);
+    const optsInput = new TextInputBuilder()
+        .setCustomId('options')
+        .setLabel(`Options (one per line, max ${WHEEL_MAX_OPTIONS})`)
+        .setPlaceholder('Pizza\nSushi\nTacos\nThai')
+        .setStyle(TextInputStyle.Paragraph)
+        .setMaxLength(600)
+        .setRequired(true);
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(titleInput),
+        new ActionRowBuilder().addComponents(optsInput),
+    );
+    await interaction.showModal(modal);
+}
+
+async function handleWheelModalSubmit(interaction) {
+    const title = String(interaction.fields.getTextInputValue('title') || '').trim();
+    const raw = String(interaction.fields.getTextInputValue('options') || '');
+    const options = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, WHEEL_MAX_OPTIONS);
+    if (options.length < 2) {
+        return interaction.reply({ content: 'Need at least 2 options (one per line).', flags: MessageFlags.Ephemeral });
+    }
+    const winnerIdx = Math.floor(Math.random() * options.length);
+    await interaction.deferReply();
+    const tmpPath = path.join(require('os').tmpdir(), `wheel_${crypto.randomBytes(6).toString('hex')}.mp4`);
+    try {
+        await renderWheelMp4({ title, options, winnerIdx, outPath: tmpPath });
+        const attach = new AttachmentBuilder(tmpPath, { name: 'wheel.mp4' });
+        const titleLine = title ? `**${title}**\n` : '';
+        const winnerLine = `🎉 **${options[winnerIdx]}** wins!`;
+        await interaction.editReply({ content: titleLine + winnerLine, files: [attach] });
+    } catch (err) {
+        console.error('[wheel] render failed:', err);
+        await interaction.editReply({ content: 'Wheel render failed: ' + (err.message || 'unknown error') });
+    } finally {
+        setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 30_000);
+    }
+}
+
+function renderWheelMp4({ title, options, winnerIdx, outPath }) {
+    const { createCanvas, GlobalFonts } = _wheelCanvas;
+    const W = 720, H = 720;
+    const FPS = 30;
+    const SPIN_SEC = 5;
+    const HOLD_SEC = 2;
+    const totalFrames = (SPIN_SEC + HOLD_SEC) * FPS;
+    const spinFrames = SPIN_SEC * FPS;
+    const slice = (Math.PI * 2) / options.length;
+    // Final rotation lands the winner's slice center at the top pointer
+    // (which is at angle -PI/2 in canvas coordinates).
+    const winnerCenter = winnerIdx * slice + slice / 2;
+    const TOTAL_SPINS = 6;
+    const finalRotation = TOTAL_SPINS * Math.PI * 2 + (-Math.PI / 2 - winnerCenter);
+    const ffmpeg = spawn('ffmpeg', [
+        '-y', '-loglevel', 'error',
+        '-f', 'rawvideo', '-pix_fmt', 'rgba',
+        '-s', `${W}x${H}`, '-framerate', String(FPS),
+        '-i', 'pipe:0',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+        '-preset', 'veryfast', '-crf', '23',
+        '-movflags', '+faststart',
+        outPath,
+    ], { stdio: ['pipe', 'ignore', 'pipe'] });
+    return new Promise((resolve, reject) => {
+        let stderrBuf = '';
+        ffmpeg.stderr?.on('data', (d) => { stderrBuf += d.toString(); });
+        ffmpeg.on('error', reject);
+        ffmpeg.on('exit', (code) => code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code + ': ' + stderrBuf.slice(-200))));
+        (async () => {
+            const canvas = createCanvas(W, H);
+            const ctx = canvas.getContext('2d');
+            for (let f = 0; f < totalFrames; f++) {
+                let rotation, showWinner = false;
+                if (f < spinFrames) {
+                    const t = f / spinFrames;
+                    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+                    rotation = finalRotation * eased;
+                } else {
+                    rotation = finalRotation;
+                    showWinner = true;
+                }
+                _drawWheelFrame(ctx, W, H, options, rotation, title, showWinner ? winnerIdx : null);
+                // @napi-rs/canvas has no toBuffer('raw'); pull pixels via
+                // getImageData and copy into a Node Buffer for ffmpeg.
+                const raw = Buffer.from(ctx.getImageData(0, 0, W, H).data.buffer);
+                if (!ffmpeg.stdin.write(raw)) {
+                    await new Promise((r) => ffmpeg.stdin.once('drain', r));
+                }
+            }
+            ffmpeg.stdin.end();
+        })().catch((e) => { try { ffmpeg.kill('SIGKILL'); } catch {} reject(e); });
+    });
+}
+
+function _drawWheelFrame(ctx, W, H, options, rotation, title, winnerIdx) {
+    ctx.fillStyle = '#0e1014';
+    ctx.fillRect(0, 0, W, H);
+    if (title) {
+        ctx.fillStyle = '#e6e6e6';
+        ctx.font = 'bold 30px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(title.length > 40 ? title.slice(0, 39) + '…' : title, W / 2, 18);
+    }
+    const cx = W / 2;
+    const cy = H / 2 + 24;
+    const radius = Math.min(W, H) / 2 - 80;
+    const slice = (Math.PI * 2) / options.length;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rotation);
+    for (let i = 0; i < options.length; i++) {
+        const start = i * slice;
+        ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, radius, start, start + slice);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#0e1014';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.save();
+        ctx.rotate(start + slice / 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        const txt = options[i].length > 18 ? options[i].slice(0, 17) + '…' : options[i];
+        ctx.fillText(txt, radius - 16, 0);
+        ctx.restore();
+    }
+    ctx.restore();
+    // Pointer (top, pointing down at the wheel)
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - radius + 6);
+    ctx.lineTo(cx - 18, cy - radius - 26);
+    ctx.lineTo(cx + 18, cy - radius - 26);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#0e1014';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Center hub
+    ctx.fillStyle = '#1a1d23';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 38, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Winner banner on hold frames
+    if (winnerIdx != null) {
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 34px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const txt = '🎉 ' + (options[winnerIdx].length > 28 ? options[winnerIdx].slice(0, 27) + '…' : options[winnerIdx]);
+        ctx.fillText(txt, W / 2, H - 18);
     }
 }
 
@@ -7109,22 +7382,24 @@ app.get('/api/admin/watch/state', requireSuperadmin, async (req, res) => {
             captureId: id,
             url: cap.url,
             display: cap.display,
+            audio: !!cap.audio,
             startedAt: cap.startedAt,
             ageMs: now - cap.startedAt,
             ffmpegAlive: !!(cap.ffmpeg && !cap.ffmpeg.killed && cap.ffmpeg.exitCode == null),
             chromiumAlive: !!(cap.chromium && !cap.chromium.killed && cap.chromium.exitCode == null),
             xvfbAlive: !!(cap.xvfb && !cap.xvfb.killed && cap.xvfb.exitCode == null),
+            pulseAlive: !!(cap.pulseaudio && !cap.pulseaudio.killed && cap.pulseaudio.exitCode == null),
         });
     }
-    const [xvfb, chromium, ffmpeg, ytDlp] = await Promise.all([
-        _execProbe('Xvfb'), _execProbe('chromium'), _execProbe('ffmpeg'), _execProbe('yt-dlp'),
+    const [xvfb, chromium, ffmpeg, ytDlp, pulseaudio] = await Promise.all([
+        _execProbe('Xvfb'), _execProbe('chromium'), _execProbe('ffmpeg'), _execProbe('yt-dlp'), _execProbe('pulseaudio'),
     ]);
     res.json({
         rooms,
         mnRooms,
         captures,
         diagnostics: {
-            xvfb, chromium, ffmpeg, ytDlp,
+            xvfb, chromium, ffmpeg, ytDlp, pulseaudio,
             ytCookiesEnabled: !!process.env.YTDLP_COOKIES_FROM_BROWSER,
             captureDir: CAPTURES_DIR,
             captureResolution: getWatchCaptureResolution(),
