@@ -668,6 +668,41 @@ function setVoiceTriggersAutoClipSec(sec) {
     saveGuestData(d);
 }
 
+// Pronunciation overrides — a phonetic map applied to TTS text *before* synth
+// so proper nouns, inside-joke names, and tech jargon ("nginx" -> "engine-x",
+// "Discord" -> "diss-cord") read correctly. Match is whole-word, case-
+// insensitive. Stored under guest-data so it doesn't leak into source.
+function getTtsPronunciationOverrides() {
+    const d = loadGuestData();
+    return d.ttsPronunciationOverrides && typeof d.ttsPronunciationOverrides === 'object' ? d.ttsPronunciationOverrides : {};
+}
+function setTtsPronunciationOverrides(obj) {
+    const d = loadGuestData();
+    const out = {};
+    if (obj && typeof obj === 'object') {
+        for (const [k, v] of Object.entries(obj)) {
+            const from = String(k).trim();
+            const to = String(v).trim();
+            if (from && to && from.length <= 100 && to.length <= 200) out[from] = to;
+        }
+    }
+    d.ttsPronunciationOverrides = out;
+    saveGuestData(d);
+    return out;
+}
+function applyTtsPronunciationOverrides(text) {
+    if (!text) return text;
+    const overrides = getTtsPronunciationOverrides();
+    const keys = Object.keys(overrides);
+    if (!keys.length) return text;
+    let out = text;
+    for (const from of keys) {
+        const re = new RegExp('\\b' + from.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&') + '\\b', 'gi');
+        out = out.replace(re, overrides[from]);
+    }
+    return out;
+}
+
 // --- Voting (kick/timeout via slash commands) ---
 const VOTE_DEFAULTS = {
     enabled: false,
@@ -3699,6 +3734,7 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.ttsMaxTextLength = { guest: getTtsMaxTextLength('guest'), user: getTtsMaxTextLength('user'), admin: getTtsMaxTextLength('admin'), superadmin: getTtsMaxTextLength('superadmin') };
         out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
         out.ttsDisabledVoices = getTtsDisabledVoices();
+        out.ttsPronunciationOverrides = getTtsPronunciationOverrides();
         out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides();
         out.ttsMaxQueueSize = getTtsMaxQueueSize();
         // Suno settings (superadmin)
@@ -3815,10 +3851,20 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
             out.ttsCooldownSec = { guest: getTtsCooldownSec('guest'), user: getTtsCooldownSec('user'), admin: getTtsCooldownSec('admin'), superadmin: getTtsCooldownSec('superadmin') };
         }
         // Voice management
-        const { ttsDisabledVoices, ttsVoiceRvcOverrides, ttsMaxQueueSize } = req.body;
+        const { ttsDisabledVoices, ttsVoiceRvcOverrides, ttsMaxQueueSize, ttsPronunciationOverrides } = req.body;
         if (Array.isArray(ttsDisabledVoices)) { setTtsDisabledVoices(ttsDisabledVoices); out.ttsDisabledVoices = getTtsDisabledVoices(); }
         if (ttsVoiceRvcOverrides && typeof ttsVoiceRvcOverrides === 'object' && !Array.isArray(ttsVoiceRvcOverrides)) { setTtsVoiceRvcOverrides(ttsVoiceRvcOverrides); out.ttsVoiceRvcOverrides = getTtsVoiceRvcOverrides(); }
         if (typeof ttsMaxQueueSize === 'number') { setTtsMaxQueueSize(ttsMaxQueueSize); out.ttsMaxQueueSize = getTtsMaxQueueSize(); }
+        if (ttsPronunciationOverrides && typeof ttsPronunciationOverrides === 'object' && !Array.isArray(ttsPronunciationOverrides)) {
+            out.ttsPronunciationOverrides = setTtsPronunciationOverrides(ttsPronunciationOverrides);
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.ttsPronunciation',
+                target: null,
+                details: { count: Object.keys(out.ttsPronunciationOverrides).length },
+            });
+        }
         // Suno settings
         const { sunoEnabled, sunoDailyLimit } = req.body;
         const sunoChanges = {};
@@ -6374,11 +6420,16 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     // overrides top-level exaggeration on the server side. Segments come from
     // lib/tts-expression.js which parses ALL CAPS / bracketed tags / ellipses /
     // !!! into emotion-tagged chunks; the TTS server maps each to a preset.
-    const synthPayload = { text: trimmed, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration };
+    // Pronunciation overrides run before synth + expression segmentation so
+    // the rewritten phonetic spellings still get tagged with the right
+    // emotion (the rewrite is just a string-substitution, no semantic
+    // change). Display / recents / cache keep the original `trimmed`.
+    const synthText = applyTtsPronunciationOverrides(trimmed);
+    const synthPayload = { text: synthText, voice_id: voiceId, use_rvc: getTtsVoiceRvcOverrides()[voiceId] ?? true, exaggeration };
     if (expressionEnabled) {
         try {
             const { segmentText } = require('./lib/tts-expression');
-            let segments = segmentText(trimmed, forcedEmotion ? { forcedEmotion } : {});
+            let segments = segmentText(synthText, forcedEmotion ? { forcedEmotion } : {});
             // LLM fallback: when the regex sees ONLY neutral and the text has
             // any real content (>=8 chars, ~3 words), give the configured LLM
             // a shot at detecting tone the regex missed (sarcasm, sadness,

@@ -1883,6 +1883,20 @@
             <div id="superadminPanelTtsVoices" class="superadmin-panel">
                 <div class="superadmin-section">
                     <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span>Pronunciation overrides</span>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="addTtsPronunciationRow()">+ Add</button>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.25rem 0 0.5rem;">Whole-word, case-insensitive find / replace applied to every TTS request right before synth. Use it for proper nouns, inside-joke names, brand names that the model mispronounces. <code>nginx</code> → <code>engine-x</code>.</p>
+                    <table id="ttsPronunciationTable" style="width:100%; font-size: 0.85rem; border-collapse: collapse;">
+                        <thead><tr style="text-align:left; font-size:0.78rem; color:var(--text-muted);"><th style="padding:0.3rem;">Match (word)</th><th style="padding:0.3rem;">Pronounced as</th><th style="padding:0.3rem; width:80px;"></th></tr></thead>
+                        <tbody id="ttsPronunciationBody"></tbody>
+                    </table>
+                    <div style="margin-top:0.6rem; display:flex; gap:0.4rem; justify-content:flex-end;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTtsPronunciation()">Save overrides</button>
+                    </div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
                         <span>TTS Queue</span>
                         <button type="button" class="btn btn-danger btn-sm" id="superadminTtsQueueClearBtn" onclick="clearTtsQueue()" title="Force-clear the queue and release the stuck-playing flag. Rarely needed — auto-recovery handles most cases.">Clear Queue</button>
                     </div>
@@ -4330,6 +4344,7 @@
                     const a = document.getElementById('ttsCooldownSecAdminInput'); if (a && d.ttsCooldownSec.admin !== undefined) a.value = d.ttsCooldownSec.admin;
                 }
                 if (d.ttsMaxQueueSize !== undefined) { const q = document.getElementById('ttsMaxQueueSizeInput'); if (q) q.value = d.ttsMaxQueueSize; }
+                if (d.ttsPronunciationOverrides !== undefined) renderTtsPronunciation(d.ttsPronunciationOverrides);
                 if (d.sunoEnabled !== undefined) { const s = document.getElementById('sunoEnabledToggle'); if (s) s.checked = d.sunoEnabled === true; }
                 if (d.sunoDailyLimit) {
                     for (const r of ['user', 'admin', 'superadmin']) {
@@ -4555,6 +4570,55 @@
             const obj = {}; obj[role] = Number(val);
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttsMaxTextLength: obj }) });
         }
+        function renderTtsPronunciation(obj) {
+            const tbody = document.getElementById('ttsPronunciationBody');
+            if (!tbody) return;
+            const entries = Object.entries(obj || {});
+            if (!entries.length) {
+                tbody.innerHTML = '<tr><td colspan="3" style="padding:0.5rem; color:var(--text-muted); font-style:italic; font-size:0.78rem;">No overrides yet — click + Add to create one.</td></tr>';
+                return;
+            }
+            const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+            tbody.innerHTML = entries.map(([from, to]) =>
+                '<tr>'
+                + '<td style="padding:0.25rem;"><input type="text" value="' + esc(from) + '" data-pron-from style="width:100%; padding:0.25rem 0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"></td>'
+                + '<td style="padding:0.25rem;"><input type="text" value="' + esc(to) + '" data-pron-to style="width:100%; padding:0.25rem 0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"></td>'
+                + '<td style="padding:0.25rem;"><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">Remove</button></td>'
+                + '</tr>'
+            ).join('');
+        }
+        function addTtsPronunciationRow() {
+            const tbody = document.getElementById('ttsPronunciationBody');
+            if (!tbody) return;
+            if (tbody.querySelector('td[colspan]')) tbody.innerHTML = '';
+            const tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td style="padding:0.25rem;"><input type="text" data-pron-from placeholder="nginx" style="width:100%; padding:0.25rem 0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"></td>'
+                + '<td style="padding:0.25rem;"><input type="text" data-pron-to placeholder="engine-x" style="width:100%; padding:0.25rem 0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"></td>'
+                + '<td style="padding:0.25rem;"><button type="button" class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+            tbody.appendChild(tr);
+            tr.querySelector('[data-pron-from]').focus();
+        }
+        async function saveTtsPronunciation() {
+            const tbody = document.getElementById('ttsPronunciationBody');
+            const obj = {};
+            tbody.querySelectorAll('tr').forEach(tr => {
+                const from = tr.querySelector('[data-pron-from]');
+                const to = tr.querySelector('[data-pron-to]');
+                if (!from || !to) return;
+                const k = String(from.value || '').trim();
+                const v = String(to.value || '').trim();
+                if (k && v) obj[k] = v;
+            });
+            const res = await api('/api/settings', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ttsPronunciationOverrides: obj }),
+            });
+            if (res && res.ok) { showToast('Saved.', 'success'); fetchSettings(); }
+            else { showToast('Failed to save pronunciations', 'error'); }
+        }
+
         async function setUrlStreamEnabledSetting(role, enabled) {
             const obj = {}; obj[role] = !!enabled;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamEnabled: obj }) });
