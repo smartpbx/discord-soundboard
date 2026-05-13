@@ -6,6 +6,10 @@ Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
 ## 2026-05-12
+- **Voice triggers fire faster and more accurately** — recognition now matches against vosk's partial (mid-utterance) transcripts, so a trigger fires within ~moments of the word being spoken instead of waiting for the speaker to finish the sentence + an 800 ms silence tail. The activity log's transcript field upgrades to the full sentence once recognition finalises.
+- **Word-boundary trigger matching** — phrases now match on whole-word boundaries instead of bare substring, so `wife` no longer fires on "delegate" or "midwife" and `bad` no longer fires inside "badger". Existing triggers keep working; configured phrases are still case-insensitive and whitespace-normalised.
+- **Voice connection stability** — bumped `@discordjs/voice` to 0.19.2 (upstream fix for the recent "every DAVE packet fails to decrypt" regression that caused choppy / missed triggers) and added auto-recovery on Discord disconnects and after a burst of audio-player "Premature close" errors. Discord.js bumped to 14.26.4.
+- **Quieter voice diagnostics** — per-packet `[DAVE] Failed to decrypt a packet` debug noise is rolled up into a single `decrypt failures last 30s: N` line so journald keeps months of real history instead of hours.
 - **Voting toggle in the Controls menu** — the top-bar ⚙ Controls popover gains a "Voting (/votekick · /votetimeout)" switch (superadmin-only), mirrored with the toggle in Superadmin → Voting.
 
 ## 2026-05-11

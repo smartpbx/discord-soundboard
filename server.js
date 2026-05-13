@@ -638,6 +638,16 @@ function saveVoiceTriggers(list) {
 function normalizeTriggerPhrase(s) {
     return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
+function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+// Word-boundary phrase match against an already-normalized transcript.
+// Avoids "delegate" firing the "wife" trigger via .includes() substring.
+function phraseMatchesTranscript(normalizedTranscript, phrase) {
+    if (!phrase) return false;
+    const re = new RegExp(`(?:^|\\W)${escapeRegExp(phrase)}(?:$|\\W)`);
+    return re.test(normalizedTranscript);
+}
 function makeTriggerId() {
     return 'vt_' + crypto.randomBytes(6).toString('hex');
 }
@@ -1865,10 +1875,12 @@ const VOICE_TRIGGER_LOG_MAX = 50;
 const voiceTriggerLog = []; // newest last; capped at VOICE_TRIGGER_LOG_MAX
 
 function recordVoiceTriggerEvent(entry) {
-    voiceTriggerLog.push({ when: Date.now(), ...entry });
+    const stored = { when: Date.now(), ...entry };
+    voiceTriggerLog.push(stored);
     if (voiceTriggerLog.length > VOICE_TRIGGER_LOG_MAX) {
         voiceTriggerLog.splice(0, voiceTriggerLog.length - VOICE_TRIGGER_LOG_MAX);
     }
+    return stored;
 }
 
 // Decimate 48k stereo s16le → 16k mono s16le (3:1 group, simple average).
@@ -1959,21 +1971,39 @@ function startVoiceTriggerCapture() {
             const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
             const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
             const downmix = new PcmStereo48ToMono16();
+            // Tracks trigger.id -> activity-log entry already fired for this
+            // speaking turn so vosk's partials can fire mid-sentence without
+            // double-firing when the final result arrives with the same text.
+            // The retained entry lets us upgrade the logged transcript to the
+            // full sentence once vosk emits its final.
+            const firedThisUtterance = new Map();
+            let lastPartial = '';
             opusStream.pipe(decoder).pipe(downmix);
             downmix.on('data', (chunk) => {
                 try {
                     if (recognizer.acceptWaveform(chunk)) {
                         const r = recognizer.result();
-                        if (r && r.text) handleSpeechResult(userId, r.text);
+                        if (r && r.text) handleSpeechResult(userId, r.text, firedThisUtterance);
+                        lastPartial = '';
+                    } else {
+                        const p = recognizer.partialResult();
+                        const partial = p && p.partial;
+                        if (partial && partial !== lastPartial) {
+                            lastPartial = partial;
+                            handleSpeechResult(userId, partial, firedThisUtterance);
+                        }
                     }
                 } catch (err) {
                     console.error('[voice-triggers] recognizer error:', err.message);
                 }
             });
+            let cleanedUp = false;
             const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
                 try {
                     const r = recognizer.finalResult();
-                    if (r && r.text) handleSpeechResult(userId, r.text);
+                    if (r && r.text) handleSpeechResult(userId, r.text, firedThisUtterance);
                 } catch {}
                 cleanupSpeakerEntry(voiceTriggerSpeakers.get(userId));
                 voiceTriggerSpeakers.delete(userId);
@@ -1994,7 +2024,7 @@ function stopVoiceTriggerCapture() {
     voiceTriggerSpeakers.clear();
 }
 
-function handleSpeechResult(userId, text) {
+function handleSpeechResult(userId, text, firedThisUtterance = null) {
     const normalized = normalizeTriggerPhrase(text);
     if (!normalized) return;
     const list = loadVoiceTriggers();
@@ -2004,7 +2034,14 @@ function handleSpeechResult(userId, text) {
     for (const trigger of list) {
         if (!trigger.enabled) continue;
         if (trigger.speakerUserId && trigger.speakerUserId !== String(userId)) continue;
-        if (!normalized.includes(trigger.phrase)) continue;
+        if (!phraseMatchesTranscript(normalized, trigger.phrase)) continue;
+        if (firedThisUtterance && firedThisUtterance.has(trigger.id)) {
+            // Already fired on a partial earlier in this utterance — upgrade
+            // the recorded transcript to the final, fuller sentence.
+            const prev = firedThisUtterance.get(trigger.id);
+            if (prev) prev.transcript = text;
+            continue;
+        }
         const baseEvent = {
             speakerUserId: String(userId),
             triggerId: trigger.id,
@@ -2024,7 +2061,8 @@ function handleSpeechResult(userId, text) {
         }
         voiceTriggerLastFired.set(trigger.id, now);
         voiceTriggerGlobalLastFired = now;
-        recordVoiceTriggerEvent({ ...baseEvent, status: 'fired' });
+        const logEntry = recordVoiceTriggerEvent({ ...baseEvent, status: 'fired' });
+        if (firedThisUtterance) firedThisUtterance.set(trigger.id, logEntry);
         console.log(`[voice-triggers] fired '${trigger.phrase}' for ${userId} (heard "${text}")`);
         playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'superadmin' })
             .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
@@ -2034,36 +2072,100 @@ function handleSpeechResult(userId, text) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Voice connection lifecycle helpers
+// ---------------------------------------------------------------------------
+// DAVE (Discord E2EE voice) per-packet decrypt failures are emitted by the
+// library on the connection 'debug' channel — at our volume that's ~2/sec of
+// pure noise that drowns out real signal and churns through journald history.
+// Drop them at the source and emit a 30s rollup with the count instead so
+// you can still spot a sustained problem.
+let daveDecryptFailCount = 0;
+let daveDecryptFlushTimer = null;
+function recordDaveDecryptFail() {
+    daveDecryptFailCount++;
+    if (daveDecryptFlushTimer) return;
+    daveDecryptFlushTimer = setTimeout(() => {
+        const n = daveDecryptFailCount;
+        daveDecryptFailCount = 0;
+        daveDecryptFlushTimer = null;
+        if (n > 0) console.log(`[DIAG] voice.dave decrypt failures last 30s: ${n}`);
+    }, 30_000);
+    if (daveDecryptFlushTimer.unref) daveDecryptFlushTimer.unref();
+}
+
+let prematureCloseTimestamps = [];
+function scheduleRejoin(reason) {
+    if (!lastChannelId) return;
+    const channel = client.channels.cache.get(lastChannelId);
+    if (!channel?.isVoiceBased()) return;
+    console.warn(`[DIAG] voice.rejoin reason=${reason} channel=${lastChannelId}`);
+    leaveVoiceChannel();
+    setTimeout(() => {
+        try { joinChannelById(channel); } catch (err) { console.error('[DIAG] voice.rejoin failed:', err.message); }
+    }, 1000);
+}
+
+function attachVoiceConnectionListeners(conn) {
+    conn.on('error', err => {
+        console.error('Voice connection error:', err.message);
+        console.log('[DIAG] voice.connectionError', err.message);
+        leaveVoiceChannel();
+    });
+    conn.on('close', code => { console.log('[DIAG] voice.close code=', code); });
+    conn.on('debug', msg => {
+        if (msg && typeof msg === 'string' && msg.includes('Failed to decrypt a packet')) {
+            recordDaveDecryptFail();
+            return;
+        }
+        console.log('[DIAG] voice.debug', msg);
+    });
+    conn.on('stateChange', (o, n) => {
+        const rejoin = conn?.rejoinAttempts ?? '?';
+        const nwCode = n.networking?.state?.code ?? '?';
+        console.log('[DIAG] voice.stateChange', o.status, '->', n.status, 'rejoinAttempts=', rejoin, 'networkingCode=', nwCode);
+    });
+    conn.on(VoiceConnectionStatus.Disconnected, async () => {
+        // Standard discord.js voice pattern: race Signalling vs Connecting to
+        // see whether the library is recovering on its own; if neither lands
+        // within 5s the connection is truly gone and we force-rejoin.
+        try {
+            await Promise.race([
+                entersState(conn, VoiceConnectionStatus.Signalling, 5_000),
+                entersState(conn, VoiceConnectionStatus.Connecting, 5_000),
+            ]);
+            console.log('[DIAG] voice.disconnect recovering');
+        } catch {
+            scheduleRejoin('disconnected');
+        }
+    });
+}
+
+function joinChannelById(channel) {
+    activeGuildId = channel.guild.id;
+    currentConnection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: channel.guild.id,
+        adapterCreator: channel.guild.voiceAdapterCreator,
+        daveEncryption: true,
+        debug: true,
+        selfDeaf: false,
+        selfMute: false,
+    });
+    attachVoiceConnectionListeners(currentConnection);
+    currentConnection.subscribe(player);
+    startVoiceTriggerCapture();
+    return currentConnection;
+}
+
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
     registerVoteSlashCommands().catch(err => console.error('[voting] registration failed:', err.message));
     if (lastChannelId) {
         const channel = client.channels.cache.get(lastChannelId);
         if (channel?.isVoiceBased()) {
-            activeGuildId = channel.guild.id;
-            currentConnection = joinVoiceChannel({
-                channelId: channel.id,
-                guildId: channel.guild.id,
-                adapterCreator: channel.guild.voiceAdapterCreator,
-                daveEncryption: true,
-                debug: true,
-                selfDeaf: false,
-                selfMute: false,
-            });
-            currentConnection.on('error', err => {
-                console.error('Voice connection error:', err.message);
-                leaveVoiceChannel();
-            });
-            currentConnection.on('close', code => { console.log('[DIAG] voice.close code=', code); });
-            currentConnection.on('debug', msg => { console.log('[DIAG] voice.debug', msg); });
-            currentConnection.on('stateChange', (o, n) => {
-                const rejoin = currentConnection?.rejoinAttempts ?? '?';
-                const nwCode = n.networking?.state?.code ?? '?';
-                console.log('[DIAG] voice.stateChange', o.status, '->', n.status, 'rejoinAttempts=', rejoin, 'networkingCode=', nwCode);
-            });
-            currentConnection.subscribe(player);
+            joinChannelById(channel);
             console.log(`🔊 Auto-joined ${channel.name}`);
-            startVoiceTriggerCapture();
         }
     }
 });
@@ -2196,6 +2298,18 @@ player.on('error', error => {
     activeTracks.clear();
     ttsIsPlaying = false;
     processTtsQueue();
+    // 3 "Premature close" errors inside 30s usually means the underlying voice
+    // connection is flaky beyond what the library will self-heal — force a
+    // leave+rejoin.
+    if (error.message && error.message.includes('Premature close') && lastChannelId && activeGuildId) {
+        const now = Date.now();
+        prematureCloseTimestamps = prematureCloseTimestamps.filter(t => now - t < 30_000);
+        prematureCloseTimestamps.push(now);
+        if (prematureCloseTimestamps.length >= 3) {
+            prematureCloseTimestamps = [];
+            scheduleRejoin('premature-close-burst');
+        }
+    }
 });
 
 player.on('stateChange', (oldState, newState) => {
@@ -2308,33 +2422,10 @@ app.post('/api/join', requireAdmin, (req, res) => {
     // Leave current channel before joining a new one
     leaveVoiceChannel();
 
-    activeGuildId = channel.guild.id;
-    currentConnection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: channel.guild.id,
-        adapterCreator: channel.guild.voiceAdapterCreator,
-        daveEncryption: true,
-        debug: true,
-        selfDeaf: false,
-        selfMute: false,
-    });
-    currentConnection.on('error', err => {
-        console.error('Voice connection error:', err.message);
-        console.log('[DIAG] voice.connectionError', err.message);
-        leaveVoiceChannel();
-    });
-    currentConnection.on('close', code => { console.log('[DIAG] voice.close code=', code); });
-    currentConnection.on('debug', msg => { console.log('[DIAG] voice.debug', msg); });
-    currentConnection.on('stateChange', (o, n) => {
-        const rejoin = currentConnection?.rejoinAttempts ?? '?';
-        const nwCode = n.networking?.state?.code ?? '?';
-        console.log('[DIAG] voice.stateChange', o.status, '->', n.status, 'rejoinAttempts=', rejoin, 'networkingCode=', nwCode);
-    });
-    currentConnection.subscribe(player);
+    joinChannelById(channel);
     console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
     saveServerState({ lastChannelId });
-    startVoiceTriggerCapture();
     res.send(`Joined ${channel.name}`);
 });
 
