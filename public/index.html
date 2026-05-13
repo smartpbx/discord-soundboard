@@ -176,7 +176,11 @@
         .whats-new-modal {
             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
             padding: 1.5rem; max-width: 620px; width: 100%;
-            max-height: calc(100vh - 4rem); overflow-y: auto;
+            /* dvh accounts for the mobile keyboard / browser chrome shrinking
+               the visible viewport; falls back to vh on older browsers. */
+            max-height: calc(100vh - 4rem);
+            max-height: calc(100dvh - 4rem);
+            overflow-y: auto;
             box-shadow: var(--shadow);
         }
         .whats-new-modal h3 {
@@ -294,7 +298,7 @@
            hiding behind it. */
         .voice-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
         .voice-modal-overlay.hidden { display: none !important; }
-        .voice-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; width: 560px; max-width: 95vw; max-height: 92vh; overflow-y: auto; }
+        .voice-modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; width: 560px; max-width: 95vw; max-height: 92vh; max-height: 92dvh; overflow-y: auto; }
         .voice-modal h3 { margin: 0 0 1rem; font-size: 1rem; }
         .voice-modal .field { margin-bottom: 0.75rem; }
         .voice-modal label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
@@ -469,7 +473,13 @@
         .sound-btn:active:not(:disabled) { transform: scale(0.98); }
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
-        .sound-item:hover .sound-item-actions { opacity: 1; pointer-events: auto; }
+        .sound-item:hover .sound-item-actions,
+        .sound-item:focus-within .sound-item-actions { opacity: 1; pointer-events: auto; }
+        /* Touch devices don't fire hover — show actions persistently so the
+           edit/preview controls aren't undiscoverable on phones. */
+        @media (hover: none) {
+            .sound-item-actions { opacity: 1; pointer-events: auto; }
+        }
         /* Preview button: shows play arrow normally, swaps to stop square
            while the local preview is active so a second click is obviously
            "stop". Both SVGs live in the markup; CSS toggles which is visible. */
@@ -671,7 +681,7 @@
         .top-bar-voice .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
         .sound-panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 1rem; }
         .sound-panel-overlay.hidden { display: none !important; }
-        .sound-panel { padding: 1.5rem; background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); max-width: 700px; width: 100%; box-shadow: var(--shadow); max-height: 90vh; overflow-y: auto; }
+        .sound-panel { padding: 1.5rem; background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); max-width: 700px; width: 100%; box-shadow: var(--shadow); max-height: 90vh; max-height: 90dvh; overflow-y: auto; }
         .sound-panel .row { margin-bottom: 0.5rem; }
         .sound-panel label { font-size: 0.85rem; color: var(--text-muted); min-width: 5rem; }
         .sound-panel input, .sound-panel select { flex: 1; padding: 0.4rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.9rem; }
@@ -5873,7 +5883,7 @@
                     <div class="sound-item${selected}${favorited}" data-filename="${filename}" data-index="${idx}">
                         ${colorDot}
                         <span class="sound-drag-handle" data-filename="${filename}" title="Drag to reorder">⋮⋮</span>
-                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${(activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : ''}${hmClass}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'disabled' : ''} title="${title}${hmTitle}" onclick="playSound(this.dataset.filename)">
+                        <button type="button" class="sound-btn ${disabled ? 'disabled' : ''}${(activePlayingFilenames.has(s.filename) || (playback.filename === s.filename && playback.status !== 'idle')) ? ' is-playing' : ''}${hmClass}" data-filename="${filename}" data-displayname="${name}" data-duration="${dur != null ? dur : ''}" data-tags="${esc((s.tags || []).join(', '))}" ${disabled ? 'aria-disabled="true"' : ''} title="${title}${hmTitle}" onclick="playSound(this.dataset.filename)">
                             <span class="sound-btn-label">${name}</span>
                             <span class="sound-btn-duration">${dur != null ? formatTime(dur) : '—'}</span>
                         </button>
@@ -6805,6 +6815,18 @@
 
         async function playSound(filename, startTime, opts) {
             opts = opts || {};
+            // Tap-on-disabled feedback for mobile (where there's no tooltip).
+            // Native `disabled` swallows clicks entirely, so the renderer now
+            // uses `aria-disabled` + the `.disabled` visual class — meaning
+            // playSound still fires on tap. Surface the cooldown title as a
+            // toast and bail before issuing the request.
+            if (!opts.absurdCaptchaToken && !opts.isScrub) {
+                const btn = document.querySelector('.sound-btn[data-filename="' + (window.CSS && CSS.escape ? CSS.escape(filename) : filename) + '"]');
+                if (btn && btn.classList.contains('disabled')) {
+                    showToast(btn.title || 'On cooldown — try again in a moment.', 'info');
+                    return;
+                }
+            }
             const isScrub = !!(opts && opts.isScrub) && filename === playback.filename;
             // For scrubs, preserve the sound's configured trim window for display;
             // the server reports only the remaining slice after the seek.
