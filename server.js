@@ -2860,6 +2860,170 @@ function _watchSweep() {
 }
 setInterval(_watchSweep, 30 * 60 * 1000).unref?.();
 
+// Watch Together resolution strategy — which extractors / proxies to try
+// when creating a room. 'auto' tries each in order (ytdlp → cdp → capture);
+// the others constrain to a single approach so the superadmin can A/B them.
+const WATCH_STRATEGIES = ['auto', 'ytdlp', 'cdp', 'capture', 'iframe'];
+function getWatchStrategy() {
+    const v = loadGuestData().watchSyncStrategy;
+    return WATCH_STRATEGIES.includes(v) ? v : 'auto';
+}
+function setWatchStrategy(v) {
+    if (!WATCH_STRATEGIES.includes(v)) return false;
+    const d = loadGuestData();
+    d.watchSyncStrategy = v;
+    saveGuestData(d);
+    return true;
+}
+
+// CDP-based stream sniffer: spawns headless Chromium, navigates to the URL,
+// listens for Network.requestWillBeSent events, returns the first HLS/MP4
+// URL the page fetches. Useful for sources like weflix → vidsrcme →
+// cloudnestra where yt-dlp has no extractor but the underlying stream is
+// loaded via plain HTTP from a JS player.
+function resolveViaCdpSniffer(targetUrl, timeoutMs = 25000) {
+    return new Promise((resolve) => {
+        const profileDir = `/tmp/cdp-sniff-${crypto.randomBytes(4).toString('hex')}`;
+        try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+        let chromium;
+        try {
+            chromium = spawn('/usr/bin/chromium', [
+                '--headless=new',
+                '--no-sandbox',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--remote-debugging-port=0',
+                `--user-data-dir=${profileDir}`,
+                '--autoplay-policy=no-user-gesture-required',
+                '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                targetUrl,
+            ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e) { resolve(null); return; }
+        let ws = null;
+        let resolved = false;
+        const seen = new Set();
+        const timer = setTimeout(() => done(null), timeoutMs);
+        function done(result) {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            try { if (ws) ws.close(); } catch {}
+            try { chromium.kill('SIGKILL'); } catch {}
+            setTimeout(() => { try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {} }, 1000);
+            if (result) console.log('[cdp-sniff]', targetUrl, '->', result);
+            else console.warn('[cdp-sniff]', targetUrl, '-> no stream URL found in', timeoutMs, 'ms');
+            resolve(result);
+        }
+        chromium.on('error', (err) => { console.warn('[cdp-sniff] chromium spawn error:', err.message); done(null); });
+        chromium.on('exit', () => { if (!resolved) setTimeout(() => done(null), 500); });
+        let bufferedStderr = '';
+        chromium.stderr.on('data', (d) => {
+            bufferedStderr += d.toString();
+            if (ws) return;
+            const m = bufferedStderr.match(/DevTools listening on ws:\/\/(\S+)/);
+            if (m) {
+                const wsUrl = 'ws://' + m[1];
+                attachToPage(wsUrl);
+            }
+        });
+        async function attachToPage(initialWsUrl) {
+            // The startup ws-url is the browser target; we need a page target,
+            // which appears once Chromium has loaded the URL we passed on the
+            // command line. Poll /json briefly.
+            try {
+                const u = new URL(initialWsUrl);
+                const httpUrl = `http://${u.host}/json`;
+                let attempts = 0;
+                const find = async () => {
+                    if (resolved) return;
+                    if (attempts++ > 25) { done(null); return; }
+                    try {
+                        const r = await fetch(httpUrl);
+                        const targets = await r.json();
+                        const page = targets.find(t => t.type === 'page');
+                        if (page && page.webSocketDebuggerUrl) attach(page.webSocketDebuggerUrl);
+                        else setTimeout(find, 200);
+                    } catch { setTimeout(find, 200); }
+                };
+                find();
+            } catch { done(null); }
+        }
+        function attach(pageWsUrl) {
+            const W = require('ws');
+            try { ws = new W(pageWsUrl); } catch { done(null); return; }
+            let msgId = 0;
+            ws.on('open', () => {
+                try { ws.send(JSON.stringify({ id: ++msgId, method: 'Network.enable' })); } catch {}
+            });
+            ws.on('message', (data) => {
+                if (resolved) return;
+                try {
+                    const msg = JSON.parse(data.toString());
+                    if (msg.method === 'Network.requestWillBeSent') {
+                        const u = msg.params?.request?.url || '';
+                        if (!u || seen.has(u)) return;
+                        seen.add(u);
+                        // HLS playlists are the strongest signal; .mpd is DASH
+                        // (which our HTML5 path doesn't handle); .mp4/.webm
+                        // direct files are great but watch out for ad files.
+                        if (/\.(m3u8)(\?|$)/i.test(u)) return done(u);
+                        if (/\.(mp4|webm)(\?|$)/i.test(u) && !/\/(?:thumbnail|preview|sprite|ads?\/|track\/)/i.test(u) && msg.params?.type !== 'XHR') {
+                            // Only accept .mp4 if it's a media-typed request.
+                            const resType = String(msg.params?.type || '').toLowerCase();
+                            if (resType === 'media' || resType === 'video') return done(u);
+                        }
+                    }
+                } catch {}
+            });
+            ws.on('error', () => {});
+            ws.on('close', () => { if (!resolved) setTimeout(() => done(null), 300); });
+        }
+    });
+}
+
+// Centralised "resolve a watch URL → playable source" — honors the configured
+// strategy and falls back through the chain on 'auto'.
+async function resolveWatchSource(url, forceStrategy) {
+    const strategy = forceStrategy || getWatchStrategy();
+    const detect = _watchDetectSource(url);
+    if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') return { ...detect };
+    let sourceType = detect.sourceType;
+    let sourceMeta = detect.sourceMeta || {};
+    if (strategy === 'iframe') return { sourceType, sourceMeta };
+    if (strategy === 'auto' || strategy === 'ytdlp') {
+        const direct = await resolveDirectVideoUrlViaYtDlp(url);
+        if (direct) return { sourceType: 'video', sourceMeta: { url: direct, originalUrl: url, via: 'ytdlp', resolvedAt: Date.now() } };
+        if (detect.sourceType === 'iframe') {
+            const unwrapped = await unwrapAggregatorEmbed(url);
+            if (unwrapped) {
+                const inner = await resolveDirectVideoUrlViaYtDlp(unwrapped);
+                if (inner) return { sourceType: 'video', sourceMeta: { url: inner, originalUrl: url, via: 'ytdlp-unwrap', resolvedAt: Date.now() } };
+                sourceMeta = { url: unwrapped, originalUrl: url };
+            }
+        }
+        if (strategy === 'ytdlp') return { sourceType, sourceMeta };
+    }
+    if (strategy === 'auto' || strategy === 'cdp') {
+        const cdpUrl = await resolveViaCdpSniffer(sourceMeta.url || url);
+        if (cdpUrl) return { sourceType: 'video', sourceMeta: { url: cdpUrl, originalUrl: url, via: 'cdp', resolvedAt: Date.now() } };
+        if (strategy === 'cdp') return { sourceType, sourceMeta };
+    }
+    if (strategy === 'auto' || strategy === 'capture') {
+        const cap = await startCaptureProxyForUrl(url).catch(() => null);
+        if (cap) return { sourceType: 'video', sourceMeta: { url: cap.streamUrl, originalUrl: url, via: 'capture', captureId: cap.captureId, resolvedAt: Date.now() } };
+    }
+    return { sourceType, sourceMeta };
+}
+
+// Screen-capture proxy — renders the URL in a virtual Chromium and re-encodes
+// the rendered pixels as HLS for viewers. Required for DRM/iframe sources
+// that the CDP sniffer can't crack. Not yet implemented; ships next commit.
+async function startCaptureProxyForUrl(url) {
+    console.warn('[capture] not yet implemented; falling back. url:', url);
+    return null;
+}
+
 function getWatchPartyEnabled(role, username) {
     const ov = getUserOverride(username, 'watchPartyEnabled');
     if (typeof ov === 'boolean') return ov;
@@ -2969,25 +3133,16 @@ function _mnFinalize(room) {
     // Create the corresponding watch room.
     const winner = room.candidates[winnerIdx];
     (async () => {
-        const detect = _watchDetectSource(winner.url);
-        let sourceType = detect.sourceType;
-        let sourceMeta = detect.sourceMeta || {};
-        if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
-            const direct = await resolveDirectVideoUrlViaYtDlp(winner.url);
-            if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: winner.url, resolvedAt: Date.now() }; }
-            else if (sourceType === 'iframe') {
-                const unwrapped = await unwrapAggregatorEmbed(winner.url);
-                if (unwrapped) {
-                    const inner = await resolveDirectVideoUrlViaYtDlp(unwrapped);
-                    if (inner) { sourceType = 'video'; sourceMeta = { url: inner, originalUrl: winner.url, resolvedAt: Date.now() }; }
-                    else { sourceMeta = { url: unwrapped, originalUrl: winner.url }; }
-                }
-            }
+        const resolved = await resolveWatchSource(winner.url);
+        if (resolved.sourceType === 'invalid' || resolved.sourceType === 'drm-blocked') {
+            throw new Error(resolved.error || 'Could not resolve the winning URL.');
         }
         const watchId = makeWatchRoomId();
         const now = Date.now();
         watchRooms.set(watchId, {
-            id: watchId, url: winner.url, sourceType, sourceMeta,
+            id: watchId, url: winner.url,
+            sourceType: resolved.sourceType,
+            sourceMeta: resolved.sourceMeta || {},
             hostUsername: room.hostUsername, hostRole: room.hostRole,
             createdAt: now, lastActivity: now,
             state: { playing: false, position: 0, positionAt: now },
@@ -3220,35 +3375,18 @@ async function handleWatchCommand(interaction) {
         return interaction.reply({ content: "You don't have permission to use `/watch`.", flags: MessageFlags.Ephemeral });
     }
     const url = String(interaction.options.getString('url') || '').trim();
-    const detect = _watchDetectSource(url);
-    if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
-        return interaction.reply({ content: detect.error || 'Could not start a watch room.', flags: MessageFlags.Ephemeral });
-    }
-    // yt-dlp probe can take a few seconds, so defer the slash reply early.
     const wantPublic = interaction.options.getBoolean('public') === true;
     await interaction.deferReply({ flags: wantPublic ? 0 : MessageFlags.Ephemeral });
-    let sourceType = detect.sourceType;
-    let sourceMeta = detect.sourceMeta || {};
-    // Two-step resolution: (a) try yt-dlp on the original URL to grab a
-    // direct CDN stream; (b) if that fails AND the URL is a known aggregator
-    // wrapper, parse out the embedded player iframe and use that as a
-    // narrower iframe target (so users don't see the host site's chrome).
-    if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
-        const direct = await resolveDirectVideoUrlViaYtDlp(url);
-        if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: url, resolvedAt: Date.now() }; }
-        else if (sourceType === 'iframe') {
-            const unwrapped = await unwrapAggregatorEmbed(url);
-            if (unwrapped) {
-                const directInner = await resolveDirectVideoUrlViaYtDlp(unwrapped);
-                if (directInner) { sourceType = 'video'; sourceMeta = { url: directInner, originalUrl: url, resolvedAt: Date.now() }; }
-                else { sourceMeta = { url: unwrapped, originalUrl: url }; }
-            }
-        }
+    const resolved = await resolveWatchSource(url);
+    if (resolved.sourceType === 'invalid' || resolved.sourceType === 'drm-blocked') {
+        return interaction.editReply({ content: resolved.error || 'Could not start a watch room.' });
     }
     const id = makeWatchRoomId();
     const now = Date.now();
     const room = {
-        id, url, sourceType, sourceMeta,
+        id, url,
+        sourceType: resolved.sourceType,
+        sourceMeta: resolved.sourceMeta || {},
         hostUsername: caller.username,
         hostRole: caller.role,
         createdAt: now, lastActivity: now,
@@ -4433,6 +4571,8 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
         out.clipEnabled = { guest: getClipEnabled('guest'), user: getClipEnabled('user'), admin: getClipEnabled('admin'), superadmin: getClipEnabled('superadmin') };
         out.playQueueEnabled = { guest: getPlayQueueEnabled('guest'), user: getPlayQueueEnabled('user'), admin: getPlayQueueEnabled('admin'), superadmin: getPlayQueueEnabled('superadmin') };
+        out.watchSyncStrategy = getWatchStrategy();
+        out.watchSyncStrategies = WATCH_STRATEGIES.slice();
     }
     out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
     out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
@@ -4596,6 +4736,18 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
                 target: null,
                 details: out.playQueueEnabled,
             });
+        }
+        if (typeof req.body.watchSyncStrategy === 'string') {
+            if (setWatchStrategy(req.body.watchSyncStrategy)) {
+                out.watchSyncStrategy = getWatchStrategy();
+                statsDb.recordAdminAction({
+                    actor: req.session.user.username,
+                    actorRole: req.session.user.role,
+                    action: 'settings.watchSyncStrategy',
+                    target: null,
+                    details: { strategy: out.watchSyncStrategy },
+                });
+            }
         }
         const { soundDeleteEnabled } = req.body;
         if (soundDeleteEnabled && typeof soundDeleteEnabled === 'object') {
@@ -8947,26 +9099,17 @@ function requireWatchPartyPermission(req, res, next) {
 
 app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (req, res) => {
     const url = String((req.body || {}).url || '').trim();
-    const detect = _watchDetectSource(url);
-    if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
-        return res.status(400).json({ error: detect.error });
-    }
-    // YouTube: try to upgrade to a direct CDN URL via yt-dlp + the signed-in
-    // cookies so the viewer never hits YouTube's "are you a bot" iframe wall
-    // AND we get full HTML5 video sync instead of the player API.
-    let sourceType = detect.sourceType;
-    let sourceMeta = detect.sourceMeta || {};
-    // Try yt-dlp for every non-direct source. If it resolves to a CDN URL,
-    // we get full HTML5 video sync AND sidestep iframe limitations + bot
-    // walls. Falls back to the original sourceType on failure.
-    if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
-        const direct = await resolveDirectVideoUrlViaYtDlp(url);
-        if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: url, resolvedAt: Date.now() }; }
+    const strategy = req.body?.strategy && WATCH_STRATEGIES.includes(req.body.strategy) ? req.body.strategy : undefined;
+    const resolved = await resolveWatchSource(url, strategy);
+    if (resolved.sourceType === 'invalid' || resolved.sourceType === 'drm-blocked') {
+        return res.status(400).json({ error: resolved.error });
     }
     const id = makeWatchRoomId();
     const now = Date.now();
     const room = {
-        id, url, sourceType, sourceMeta,
+        id, url,
+        sourceType: resolved.sourceType,
+        sourceMeta: resolved.sourceMeta || {},
         hostUsername: req.session.user.username,
         hostRole: req.session.user.role,
         createdAt: now, lastActivity: now,
@@ -8974,7 +9117,7 @@ app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (re
         viewers: new Set(),
     };
     watchRooms.set(id, room);
-    console.log(`[watch] room ${id} created by ${room.hostUsername} (${room.sourceType}) -> ${url}`);
+    console.log(`[watch] room ${id} created by ${room.hostUsername} (${room.sourceType}, via=${room.sourceMeta.via || 'detect'}) -> ${url}`);
     res.json(_watchRoomPublic(room));
 });
 

@@ -1795,6 +1795,12 @@
                 </div>
 
                 <div class="superadmin-section">
+                    <div class="superadmin-section-title">Watch Together — sync strategy</div>
+                    <div class="sa-field-help" style="margin-bottom:0.6rem;">When you start a Watch Together room, the server tries to resolve the URL into a directly-playable stream so all viewers stay in sync. Different sites need different approaches — switch this if a source isn't working. <strong>Auto</strong> tries them in order. <strong>Iframe-only</strong> skips resolution and uses a click-to-start embed (no sync, but lowest-latency for the host).</div>
+                    <div id="watchSyncStrategyOpts" style="display:flex; flex-direction:column; gap:0.35rem;"></div>
+                </div>
+
+                <div class="superadmin-section">
                     <div class="superadmin-section-title">
                         YouTube Cookie Session
                         <span class="sa-title-meta" id="ytSessionStatusBadge">—</span>
@@ -4480,6 +4486,7 @@
                         if (el && d.playQueueEnabled[r] !== undefined) el.checked = d.playQueueEnabled[r] === true;
                     }
                 }
+                renderWatchSyncStrategy(d.watchSyncStrategies, d.watchSyncStrategy);
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -4747,6 +4754,36 @@
         async function setUrlStreamMaxDurSetting(role, val) {
             const obj = {}; obj[role] = Number(val);
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamMaxDurationSec: obj }) });
+        }
+        const WATCH_STRATEGY_DOCS = {
+            auto:    { label: 'Auto (try each in order)',          hint: 'Best default. Tries yt-dlp → CDP sniffer → screen-capture, falls back to iframe if nothing direct can be resolved.' },
+            ytdlp:   { label: 'yt-dlp only',                        hint: 'Use just yt-dlp to pull a direct CDN URL (YouTube / Vimeo / most sites). Cheapest. Fails on aggregators like weflix.' },
+            cdp:     { label: 'CDP sniffer (headless Chromium)',    hint: 'Launches a hidden Chromium and watches network requests for the first HLS / MP4 the page loads. Works on weflix / vidsrcme; cannot beat DRM.' },
+            capture: { label: 'Screen capture proxy',               hint: 'Plays the URL in a virtual Chromium and re-encodes the rendered video as an HLS stream all viewers pull. Heaviest. Required for DRM-only sources where the page renders pixels we can re-capture.' },
+            iframe:  { label: 'Iframe only (no sync)',              hint: 'Just embeds the source URL on the watch page. Lowest latency for the host; no playback sync between viewers.' },
+        };
+        function renderWatchSyncStrategy(list, current) {
+            const wrap = document.getElementById('watchSyncStrategyOpts');
+            if (!wrap) return;
+            const opts = (Array.isArray(list) && list.length) ? list : ['auto', 'ytdlp', 'cdp', 'capture', 'iframe'];
+            const cur = typeof current === 'string' ? current : 'auto';
+            wrap.innerHTML = '';
+            for (const opt of opts) {
+                const doc = WATCH_STRATEGY_DOCS[opt] || { label: opt, hint: '' };
+                const row = document.createElement('label');
+                row.style.cssText = 'display:flex; align-items:flex-start; gap:0.55rem; cursor:pointer;';
+                row.innerHTML = '<input type="radio" name="watchSyncStrategy" value="' + opt + '" style="margin-top:0.2rem;"'
+                    + (opt === cur ? ' checked' : '') + '>'
+                    + '<span><strong>' + doc.label + '</strong>'
+                    + '<div class="sa-field-help" style="margin:0.1rem 0 0; font-weight:normal;">' + doc.hint + '</div></span>';
+                const input = row.querySelector('input');
+                input.addEventListener('change', () => setWatchSyncStrategy(opt));
+                wrap.appendChild(row);
+            }
+        }
+        async function setWatchSyncStrategy(strategy) {
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ watchSyncStrategy: strategy }) });
+            fetchSettings();
         }
 
         // ---------------- YouTube cookie session (Tier-1 bot-wall bypass) ----------------
