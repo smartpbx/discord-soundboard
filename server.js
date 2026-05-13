@@ -1564,9 +1564,9 @@ class AudioMixer extends Readable {
         this.FRAME_SIZE = 3840; // 20ms of s16le stereo 48kHz (960 samples × 2ch × 2 bytes)
     }
 
-    addTrack(pcmStream, metadata) {
+    addTrack(pcmStream, metadata, ffmpegProc) {
         const id = this.nextTrackId++;
-        const track = { id, stream: pcmStream, chunks: [], chunkBytes: 0, ended: false, metadata };
+        const track = { id, stream: pcmStream, chunks: [], chunkBytes: 0, ended: false, metadata, ffmpegProc: ffmpegProc || null };
         pcmStream.on('data', chunk => { track.chunks.push(chunk); track.chunkBytes += chunk.length; });
         pcmStream.on('end', () => { track.ended = true; });
         pcmStream.on('error', () => { track.ended = true; });
@@ -1590,6 +1590,12 @@ class AudioMixer extends Readable {
         const track = this.tracks.get(id);
         if (track) {
             if (track.stream && !track.stream.destroyed) track.stream.destroy();
+            // SIGPIPE on stdout would eventually kill ffmpeg anyway, but
+            // rapid Stop/Play storms can leave several zombies for a few
+            // seconds. Explicit SIGKILL avoids that.
+            if (track.ffmpegProc && !track.ffmpegProc.killed) {
+                try { track.ffmpegProc.kill('SIGKILL'); } catch {}
+            }
             this.tracks.delete(id);
         }
     }
@@ -1597,6 +1603,9 @@ class AudioMixer extends Readable {
     removeAllTracks() {
         for (const [, track] of this.tracks) {
             if (track.stream && !track.stream.destroyed) track.stream.destroy();
+            if (track.ffmpegProc && !track.ffmpegProc.killed) {
+                try { track.ffmpegProc.kill('SIGKILL'); } catch {}
+            }
         }
         this.tracks.clear();
     }
@@ -2058,6 +2067,7 @@ let voskModel = null;
 let voskModelLoadAttempted = false;
 let voskLib = null;
 let voiceTriggerAttachedReceiver = null;
+let voiceTriggerSpeakingListener = null; // so we can detach on teardown
 const voiceTriggerSpeakers = new Map(); // userId -> { recognizer, opusStream, decoder, downmix }
 const voiceTriggerLastFired = new Map(); // triggerId -> ms timestamp
 let voiceTriggerGlobalLastFired = 0;     // ms timestamp of last fire across all triggers
@@ -2131,6 +2141,8 @@ function cleanupSpeakerEntry(entry) {
 }
 
 function rebuildVoiceTriggerGrammar() {
+    // Snapshot keys before iterating because the body deletes from the same
+    // Map. Works under V8 today but the spec doesn't guarantee it.
     // Open-vocabulary recognition so the activity log can show the full
     // transcribed sentence (a grammar-restricted recognizer can only emit
     // configured phrases). Substring matching against the full transcript
@@ -2138,8 +2150,9 @@ function rebuildVoiceTriggerGrammar() {
     // empty-list short-circuit avoids running vosk for nothing.
     const phrases = loadVoiceTriggers().filter(t => t.enabled).map(t => t.phrase);
     voiceTriggerActivePhrases = [...new Set(phrases)];
-    for (const [userId, entry] of voiceTriggerSpeakers) {
-        cleanupSpeakerEntry(entry);
+    const userIds = [...voiceTriggerSpeakers.keys()];
+    for (const userId of userIds) {
+        cleanupSpeakerEntry(voiceTriggerSpeakers.get(userId));
         voiceTriggerSpeakers.delete(userId);
     }
 }
@@ -2153,15 +2166,16 @@ function startVoiceTriggerCapture() {
     voiceTriggerAttachedReceiver = receiver;
     if (voiceTriggerActivePhrases.length === 0) rebuildVoiceTriggerGrammar();
 
-    receiver.speaking.on('start', (userId) => {
+    const onSpeakingStart = (userId) => {
         if (voiceTriggerAttachedReceiver !== receiver) return;
         if (voiceTriggerSpeakers.has(userId)) return;
         if (voiceTriggerActivePhrases.length === 0) return;
+        let recognizer = null, opusStream = null, decoder = null, downmix = null;
         try {
-            const recognizer = new voskLib.Recognizer({ model: voskModel, sampleRate: 16000 });
-            const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
-            const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-            const downmix = new PcmStereo48ToMono16();
+            recognizer = new voskLib.Recognizer({ model: voskModel, sampleRate: 16000 });
+            opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
+            decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+            downmix = new PcmStereo48ToMono16();
             // Tracks trigger.id -> activity-log entry already fired for this
             // speaking turn so vosk's partials can fire mid-sentence without
             // double-firing when the final result arrives with the same text.
@@ -2203,13 +2217,26 @@ function startVoiceTriggerCapture() {
             opusStream.on('error', cleanup);
             voiceTriggerSpeakers.set(userId, { recognizer, opusStream, decoder, downmix });
         } catch (err) {
+            // Anything thrown between alloc and the speakers.set() above
+            // leaves orphaned streams/recognizers. Clean up the locals on
+            // the failure path so we don't leak across rejoins.
             console.error('[voice-triggers] failed to spin up recognizer:', err.message);
+            try { recognizer?.free?.(); } catch {}
+            try { opusStream?.destroy?.(); } catch {}
+            try { decoder?.destroy?.(); } catch {}
+            try { downmix?.destroy?.(); } catch {}
         }
-    });
+    };
+    receiver.speaking.on('start', onSpeakingStart);
+    voiceTriggerSpeakingListener = onSpeakingStart;
     console.log('[voice-triggers] capture attached to receiver');
 }
 
 function stopVoiceTriggerCapture() {
+    if (voiceTriggerAttachedReceiver && voiceTriggerSpeakingListener) {
+        try { voiceTriggerAttachedReceiver.speaking.off('start', voiceTriggerSpeakingListener); } catch {}
+    }
+    voiceTriggerSpeakingListener = null;
     voiceTriggerAttachedReceiver = null;
     for (const [, entry] of voiceTriggerSpeakers) cleanupSpeakerEntry(entry);
     voiceTriggerSpeakers.clear();
@@ -2237,6 +2264,7 @@ try { fs.mkdirSync(CLIPS_DIR, { recursive: true }); } catch {}
 const clipBuffers = new Map();           // userId -> { chunks: [{pcm, ts}], totalBytes }
 const clipCaptureSpeakers = new Map();   // userId -> { opusStream, decoder }
 let clipCaptureAttachedReceiver = null;
+let clipCaptureSpeakingListener = null;
 
 function appendClipChunk(userId, pcm) {
     let buf = clipBuffers.get(userId);
@@ -2319,12 +2347,13 @@ function startClipCapture() {
     const receiver = currentConnection.receiver;
     if (clipCaptureAttachedReceiver === receiver) return;
     clipCaptureAttachedReceiver = receiver;
-    receiver.speaking.on('start', (userId) => {
+    const onSpeakingStart = (userId) => {
         if (clipCaptureAttachedReceiver !== receiver) return;
         if (clipCaptureSpeakers.has(userId)) return;
+        let opusStream = null, decoder = null;
         try {
-            const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
-            const decoder = new prism.opus.Decoder({ rate: CLIP_SAMPLE_RATE, channels: CLIP_CHANNELS, frameSize: 960 });
+            opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
+            decoder = new prism.opus.Decoder({ rate: CLIP_SAMPLE_RATE, channels: CLIP_CHANNELS, frameSize: 960 });
             opusStream.pipe(decoder);
             decoder.on('data', (chunk) => { try { appendClipChunk(userId, Buffer.from(chunk)); } catch {} });
             let cleanedUp = false;
@@ -2340,12 +2369,20 @@ function startClipCapture() {
             clipCaptureSpeakers.set(userId, { opusStream, decoder });
         } catch (err) {
             console.error('[clip] capture attach failed for', userId, err.message);
+            try { opusStream?.destroy?.(); } catch {}
+            try { decoder?.destroy?.(); } catch {}
         }
-    });
+    };
+    receiver.speaking.on('start', onSpeakingStart);
+    clipCaptureSpeakingListener = onSpeakingStart;
     console.log('[clip] capture attached to receiver');
 }
 
 function stopClipCapture() {
+    if (clipCaptureAttachedReceiver && clipCaptureSpeakingListener) {
+        try { clipCaptureAttachedReceiver.speaking.off('start', clipCaptureSpeakingListener); } catch {}
+    }
+    clipCaptureSpeakingListener = null;
     clipCaptureAttachedReceiver = null;
     for (const [, entry] of clipCaptureSpeakers) {
         try { entry.opusStream?.destroy?.(); } catch {}
@@ -2791,13 +2828,17 @@ function playTtsBuffer(item) {
             ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
             ff.on('close', () => { ttsIsPlaying = false; processTtsQueue(); });
             Readable.from(wavBuffer).pipe(ff.stdin);
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName });
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName }, ff);
             activeTracks.set(trackId, { filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy });
             playbackState = { status: 'playing', filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
         } else {
             const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
             ff.stderr.on('data', () => {});
             ff.on('error', (err) => console.error('[TTS] ffmpeg error', err));
+            // Self-heal: if ffmpeg dies before the player reaches Playing,
+            // ttsIsPlaying never clears because the Idle handler won't fire.
+            // Mirror the multi-play branch's close handler.
+            ff.on('close', () => { if (ttsIsPlaying) { ttsIsPlaying = false; processTtsQueue(); } });
             Readable.from(wavBuffer).pipe(ff.stdin);
             const resource = createAudioResource(ff.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true, metadata: { filename: 'tts', displayName } });
             resource.volume.setVolume(Math.max(0, Math.min(2, currentVolume * ttsVolume)));
@@ -2834,6 +2875,9 @@ function leaveVoiceChannel() {
     if (activeGuildId) {
         stopVoiceTriggerCapture();
         stopClipCapture();
+        // Carrying premature-close timestamps across a leave can falsely
+        // trip the 3-in-30s rejoin guard the moment we reconnect.
+        prematureCloseTimestamps = [];
         player.stop();
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
@@ -4560,7 +4604,7 @@ async function playSoundAsLinkedUser(filename, startedBy) {
                 resource.volume.setVolume(currentVolume);
                 player.play(resource);
             }
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName });
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff);
             activeTracks.set(trackId, {
                 filename: safeFilename, displayName,
                 startTime: Date.now(), startTimeOffset: startTime,
@@ -4799,7 +4843,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
                 player.play(resource);
             }
 
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName });
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff);
             activeTracks.set(trackId, {
                 filename: safeFilename,
                 displayName,
