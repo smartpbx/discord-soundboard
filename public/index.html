@@ -710,8 +710,12 @@
         .sound-panel-preview-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
         .sound-panel-volume-row { display: flex; align-items: center; gap: 0.5rem; }
         .sound-panel-volume-row input[type="range"] { flex: 1; min-width: 100px; }
-        .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 20px; color: var(--text-muted); font-size: 0.9rem; user-select: none; }
-        .sound-grid.reorder-mode .sound-drag-handle { display: block; }
+        /* touch-action: none prevents the browser from claiming the gesture
+           as a scroll/zoom, so our pointermove handler keeps firing while
+           the user drags a tile. */
+        .sound-drag-handle { display: none; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 22px; height: 32px; color: var(--text-muted); font-size: 0.9rem; user-select: none; touch-action: none; cursor: grab; align-items: center; justify-content: center; }
+        .sound-drag-handle:active { cursor: grabbing; }
+        .sound-grid.reorder-mode .sound-drag-handle { display: flex; }
         .sound-item-selected { outline: 2px solid var(--accent); outline-offset: 2px; }
         .superadmin-only { }
         .guest-history-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
@@ -5803,16 +5807,63 @@
                 const toWrap = e.target.closest('.sound-item-wrap');
                 grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
                 if (!fromFilename || !toWrap) return;
-                const wraps = [...grid.querySelectorAll('.sound-item-wrap')];
-                const fromIdx = wraps.findIndex(w => w.dataset.filename === fromFilename);
-                const toIdx = wraps.findIndex(w => w === toWrap);
-                if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
-                const order = wraps.map(w => w.dataset.filename);
-                const [removed] = order.splice(fromIdx, 1);
-                order.splice(toIdx, 0, removed);
-                const res = await api('/api/sounds/order', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
-                if (res && res.ok) fetchSounds();
+                await _commitReorder(grid, fromFilename, toWrap);
             });
+
+            // ---- Pointer-based reorder (works on touch) ----
+            // HTML5 DnD doesn't fire on mobile browsers; this parallel path
+            // uses Pointer Events so reorder works on phones too. Triggered
+            // from the explicit drag handle so a plain tile-tap inside
+            // reorder mode doesn't accidentally pick anything up.
+            let _ptr = null;
+            grid.addEventListener('pointerdown', (e) => {
+                if (!reorderMode) return;
+                const handle = e.target.closest('.sound-drag-handle');
+                if (!handle) return;
+                const wrap = handle.closest('.sound-item-wrap');
+                if (!wrap) return;
+                e.preventDefault();
+                _ptr = {
+                    fromFilename: wrap.dataset.filename || '',
+                    fromWrap: wrap,
+                    pointerId: e.pointerId,
+                };
+                wrap.classList.add('dragging');
+                try { handle.setPointerCapture(e.pointerId); } catch {}
+            });
+            grid.addEventListener('pointermove', (e) => {
+                if (!_ptr || e.pointerId !== _ptr.pointerId) return;
+                const overEl = document.elementFromPoint(e.clientX, e.clientY);
+                const targetWrap = overEl && overEl.closest && overEl.closest('.sound-item-wrap');
+                grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
+                if (targetWrap && targetWrap !== _ptr.fromWrap) targetWrap.classList.add('drag-over');
+            });
+            const pointerEnd = async (e) => {
+                if (!_ptr || e.pointerId !== _ptr.pointerId) return;
+                const overEl = document.elementFromPoint(e.clientX, e.clientY);
+                const targetWrap = overEl && overEl.closest && overEl.closest('.sound-item-wrap');
+                _ptr.fromWrap.classList.remove('dragging');
+                grid.querySelectorAll('.sound-item-wrap').forEach(el => el.classList.remove('drag-over'));
+                const fromFilename = _ptr.fromFilename;
+                _ptr = null;
+                if (!fromFilename || !targetWrap) return;
+                if (targetWrap === _ptr?.fromWrap) return;
+                await _commitReorder(grid, fromFilename, targetWrap);
+            };
+            grid.addEventListener('pointerup', pointerEnd);
+            grid.addEventListener('pointercancel', pointerEnd);
+        }
+
+        async function _commitReorder(grid, fromFilename, toWrap) {
+            const wraps = [...grid.querySelectorAll('.sound-item-wrap')];
+            const fromIdx = wraps.findIndex(w => w.dataset.filename === fromFilename);
+            const toIdx = wraps.findIndex(w => w === toWrap);
+            if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+            const order = wraps.map(w => w.dataset.filename);
+            const [removed] = order.splice(fromIdx, 1);
+            order.splice(toIdx, 0, removed);
+            const res = await api('/api/sounds/order', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+            if (res && res.ok) fetchSounds();
         }
 
         async function fetchTags() {
