@@ -129,8 +129,15 @@
         ws.onmessage = (evt) => {
             let msg; try { msg = JSON.parse(evt.data); } catch { return; }
             if (msg.type === 'hello') {
-                me = msg.you; isHost = (me === room.hostUsername);
-                document.getElementById('roleBadge').style.display = isHost ? 'inline-block' : 'none';
+                me = msg.you;
+                const isSuperadmin = msg.yourRole === 'superadmin';
+                isHost = (me === room.hostUsername) || isSuperadmin;
+                const badge = document.getElementById('roleBadge');
+                badge.style.display = isHost ? 'inline-block' : 'none';
+                if (isSuperadmin && me !== room.hostUsername) {
+                    badge.textContent = 'Superadmin';
+                    badge.title = 'Superadmin override — you have full host controls.';
+                }
                 room = msg.room; renderAll();
             } else if (msg.type === 'candidates') {
                 room.candidates = msg.candidates; renderCandidates();

@@ -10127,7 +10127,7 @@ const httpServer = app.listen(PORT, () => {
 // WebSocket upgrade for Watch Together rooms.
 const { WebSocketServer } = require('ws');
 const watchWss = new WebSocketServer({ noServer: true });
-watchWss.on('connection', (ws, req, room, username) => {
+watchWss.on('connection', (ws, req, room, username, role) => {
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10135,6 +10135,7 @@ watchWss.on('connection', (ws, req, room, username) => {
             type: 'hello',
             room: _watchRoomPublic(room),
             you: username,
+            yourRole: role || null,
         }));
     } catch {}
     _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
@@ -10149,7 +10150,7 @@ watchWss.on('connection', (ws, req, room, username) => {
 
 // WebSocket upgrade for Movie Night rooms — same shape, different room map.
 const mnWss = new WebSocketServer({ noServer: true });
-mnWss.on('connection', (ws, req, room, username) => {
+mnWss.on('connection', (ws, req, room, username, role) => {
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10157,6 +10158,7 @@ mnWss.on('connection', (ws, req, room, username) => {
             type: 'hello',
             room: _mnRoomPublic(room),
             you: username,
+            yourRole: role || null,
         }));
     } catch {}
     _mnBroadcast(room, { type: 'viewers', count: room.viewers.size });
@@ -10183,7 +10185,7 @@ httpServer.on('upgrade', (req, socket, head) => {
             if (!getMovieNightEnabled(user.role, user.username)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); try { socket.destroy(); } catch {} return; }
             const room = movieNightRooms.get(mnm[1]);
             if (!room) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); try { socket.destroy(); } catch {} return; }
-            mnWss.handleUpgrade(req, socket, head, (ws) => { mnWss.emit('connection', ws, req, room, user.username); });
+            mnWss.handleUpgrade(req, socket, head, (ws) => { mnWss.emit('connection', ws, req, room, user.username, user.role); });
         });
         return;
     }
@@ -10199,7 +10201,7 @@ httpServer.on('upgrade', (req, socket, head) => {
             if (!room) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); try { socket.destroy(); } catch {} return; }
             if (room.viewers.size >= WATCH_ROOM_MAX_VIEWERS) { socket.write('HTTP/1.1 503 Too Many Viewers\r\n\r\n'); try { socket.destroy(); } catch {} return; }
             watchWss.handleUpgrade(req, socket, head, (ws) => {
-                watchWss.emit('connection', ws, req, room, user.username);
+                watchWss.emit('connection', ws, req, room, user.username, user.role);
             });
         });
         return;

@@ -148,13 +148,24 @@
             let msg; try { msg = JSON.parse(evt.data); } catch { return; }
             if (msg.type === 'hello') {
                 me = msg.you;
-                isHost = (me === room.hostUsername);
-                // Show controls, set badge — also clear the "Connecting…"
-                // placeholder so the user sees their resolved role.
+                const trueHost = (me === room.hostUsername);
+                const isSuperadmin = msg.yourRole === 'superadmin';
+                // Superadmin gets the host UI in any room (so they can drive
+                // playback / Pick another / close as operator).
+                isHost = trueHost || isSuperadmin;
                 CONTROLS.classList.toggle('hidden', !isHost);
-                ROLE_BADGE.textContent = isHost ? 'Host' : 'Viewer';
-                ROLE_BADGE.className = 'watch-badge ' + (isHost ? 'host' : 'viewer');
-                ROLE_BADGE.title = '';
+                if (trueHost) {
+                    ROLE_BADGE.textContent = 'Host';
+                    ROLE_BADGE.className = 'watch-badge host';
+                } else if (isSuperadmin) {
+                    ROLE_BADGE.textContent = 'Superadmin';
+                    ROLE_BADGE.className = 'watch-badge host';
+                    ROLE_BADGE.title = 'You\'re using host controls as a superadmin override.';
+                } else {
+                    ROLE_BADGE.textContent = 'Viewer';
+                    ROLE_BADGE.className = 'watch-badge viewer';
+                    ROLE_BADGE.title = '';
+                }
                 applyState(msg.room.state);
             } else if (msg.type === 'state') {
                 applyState(msg.state);
