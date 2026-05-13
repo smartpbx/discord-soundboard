@@ -2560,12 +2560,44 @@ async function handleClipCommand(interaction) {
 // Looks up a sound by exact display-name match, exact filename match, then
 // case-insensitive substring on either. Falls back to a friendly "not found"
 // reply. Plays through whatever voice channel the bot is currently in.
+//
+// Permission model: when the invoking Discord user is linked to a soundboard
+// account (and the global Discord-link toggle is on), /play inherits that
+// account's role + per-user override values. Otherwise the invocation runs
+// as a plain `user` and obeys the user-tier cooldown / max-duration /
+// admin-only / superadmin-only / playback-locked gates the web UI uses.
 async function handlePlayCommand(interaction) {
     if (!activeGuildId || !currentConnection) {
         return interaction.reply({ content: "I'm not in a voice channel right now. Use `/rejoin` first.", flags: MessageFlags.Ephemeral });
     }
     const raw = String(interaction.options.getString('sound') || '').trim();
     if (!raw) return interaction.reply({ content: 'Pick a sound name.', flags: MessageFlags.Ephemeral });
+
+    // Resolve Discord user -> soundboard account if linked.
+    const fallbackTag = interaction.user?.tag || interaction.user?.username || 'discord-user';
+    let username = `discord:${fallbackTag}`;
+    let role = 'user';
+    let linkedVia = 'fallback';
+    if (getDiscordLinkGlobalEnabled()) {
+        const linkedUn = findUsernameByDiscordId(interaction.user?.id);
+        if (linkedUn) {
+            const link = getDiscordLinkForUser(linkedUn);
+            if (link && link.disabled === true) {
+                return interaction.reply({ content: 'Your linked account is disabled for soundboard playback.', flags: MessageFlags.Ephemeral });
+            }
+            const entry = USERS.get(linkedUn.toLowerCase());
+            if (entry && entry.disabled === true) {
+                return interaction.reply({ content: 'Your linked soundboard account is disabled.', flags: MessageFlags.Ephemeral });
+            }
+            if (entry && entry.role) {
+                username = linkedUn;
+                role = entry.role;
+                linkedVia = 'linked';
+            }
+        }
+    }
+
+    // Resolve the sound from the meta index.
     const meta = loadSoundsMeta();
     const files = Object.keys(meta);
     const q = raw.toLowerCase();
@@ -2576,13 +2608,58 @@ async function handlePlayCommand(interaction) {
         files.find(f => f.toLowerCase().includes(q) || nameOf(f).includes(q));
     if (!match) return interaction.reply({ content: `No sound matching \`${raw}\`.`, flags: MessageFlags.Ephemeral });
     const displayName = (meta[match] && meta[match].displayName) || match;
-    const username = interaction.user?.tag || interaction.user?.username || 'discord-user';
-    const result = await playSoundAsLinkedUser(match, { username, role: 'user' });
+
+    // Per-user cooldown + max-duration (only enforced on plain users; admin
+    // and superadmin bypass these the same way they do on the web UI).
+    if (role === 'user') {
+        const cooldownSec = getUserCooldownSec(username);
+        const lastPlay = userLastPlayByUsername.get(username);
+        if (lastPlay != null && cooldownSec > 0) {
+            const elapsed = (Date.now() - lastPlay) / 1000;
+            if (elapsed < cooldownSec) {
+                return interaction.reply({ content: `Wait ${Math.ceil(cooldownSec - elapsed)}s before playing again.`, flags: MessageFlags.Ephemeral });
+            }
+        }
+        let dur = getDuration(meta, match);
+        if (dur == null) {
+            try { dur = await probeDurationAsync(path.join(SOUNDS_DIR, match)); } catch {}
+            if (dur != null) setSoundMeta(match, { duration: dur });
+        }
+        const metaStart = getSoundStartTime(meta, match);
+        const metaEnd = getSoundEndTime(meta, match);
+        let effectiveDur = dur;
+        if (dur != null && (metaStart != null || metaEnd != null)) {
+            const s = metaStart != null ? metaStart : 0;
+            const e = metaEnd != null && metaEnd <= dur ? metaEnd : dur;
+            effectiveDur = Math.max(0, e - s);
+        }
+        const maxDur = getUserMaxDuration(username);
+        if (effectiveDur != null && effectiveDur > maxDur) {
+            return interaction.reply({ content: `Only sounds ${maxDur}s or shorter are allowed. This one is ${Math.ceil(effectiveDur)}s.`, flags: MessageFlags.Ephemeral });
+        }
+    }
+
+    // Hand off to the shared play path. playSoundAsLinkedUser also enforces
+    // superadmin-only / admin-only locks + the single/multi-play role
+    // hierarchy, so /play is fully aligned with /api/play's gating.
+    const result = await playSoundAsLinkedUser(match, { username, role });
     if (result && result.ok) {
-        console.log(`[slash] /play by ${username} -> ${match}`);
+        if (role === 'user') userLastPlayByUsername.set(username, Date.now());
+        console.log(`[slash] /play by ${fallbackTag} (${linkedVia}=${username}, role=${role}) -> ${match}`);
         return interaction.reply({ content: `Playing **${displayName}**.`, flags: MessageFlags.Ephemeral });
     }
-    return interaction.reply({ content: `Failed to play: ${(result && result.reason) || 'unknown error'}`, flags: MessageFlags.Ephemeral });
+    // Friendlier wording for the failure reasons playSoundAsLinkedUser emits.
+    const friendly = {
+        'no-voice': "I'm not in a voice channel.",
+        'missing-file': 'That sound file is missing on disk.',
+        'invalid-path': 'Invalid sound path.',
+        'superadmin-only': 'Only superadmin can play right now.',
+        'locked': 'Playback is locked.',
+        'lower-role': "A higher-role user is currently playing — you can't override them right now.",
+        'voice-not-ready': "Voice connection isn't ready yet — try again in a moment.",
+    };
+    const reason = (result && result.reason) || 'unknown';
+    return interaction.reply({ content: `Can't play: ${friendly[reason] || reason}`, flags: MessageFlags.Ephemeral });
 }
 
 async function handlePlayAutocomplete(interaction) {
