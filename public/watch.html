@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Watch Together</title>
+    <style>
+        :root {
+            --bg: #0f0f12;
+            --surface: #18181c;
+            --surface-hover: #1f1f24;
+            --text: #e4e4e7;
+            --text-muted: #a1a1aa;
+            --border: #2a2a30;
+            --accent: #7c3aed;
+            --danger: #dc2626;
+            --radius: 10px;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .watch-shell { display: flex; flex-direction: column; height: 100dvh; }
+        .watch-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+        .watch-title { font-weight: 600; font-size: 0.95rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .watch-meta { font-size: 0.8rem; color: var(--text-muted); }
+        .watch-badge { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+        .watch-badge.host { background: rgba(124,58,237,0.2); color: var(--accent); border: 1px solid var(--accent); }
+        .watch-badge.viewer { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+        .watch-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: black; position: relative; }
+        .watch-stage > .player-frame { width: 100%; height: 100%; border: 0; }
+        .watch-stage video { width: 100%; height: 100%; background: black; }
+        .watch-stage .overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 1rem;
+            background: rgba(0,0,0,0.65); color: white; text-align: center; padding: 1rem;
+        }
+        .watch-stage .overlay.hidden { display: none; }
+        .watch-stage .overlay h2 { margin: 0; font-size: 1.2rem; }
+        .watch-stage .overlay p { margin: 0; color: rgba(255,255,255,0.85); max-width: 480px; }
+        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+        .btn.danger { background: var(--danger); border-color: var(--danger); color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .controls { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+        .controls.hidden { display: none; }
+        .status-line { font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 1rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.75rem; flex-wrap: wrap; }
+        .status-line .sep { color: var(--border); }
+        .toast {
+            position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+            background: var(--accent); color: white; padding: 0.5rem 1rem;
+            border-radius: 6px; font-size: 0.85rem; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100;
+        }
+        .toast.visible { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="watch-shell">
+        <div class="watch-bar">
+            <span class="watch-title" id="watchTitle">Loading room…</span>
+            <span class="watch-meta" id="watchMeta"></span>
+            <span class="watch-badge viewer" id="watchRoleBadge">Viewer</span>
+            <div class="controls hidden" id="watchControls">
+                <button type="button" class="btn primary" id="btnPlay">▶ Play</button>
+                <button type="button" class="btn" id="btnPause">⏸ Pause</button>
+                <button type="button" class="btn" id="btnSync">↻ Resync</button>
+                <button type="button" class="btn danger" id="btnClose">✕ Close room</button>
+            </div>
+        </div>
+        <div class="watch-stage" id="watchStage">
+            <div class="overlay" id="watchOverlay">
+                <h2 id="overlayTitle">Connecting…</h2>
+                <p id="overlayBody">Waiting for the host to start playback.</p>
+            </div>
+        </div>
+        <div class="status-line">
+            <span id="statusState">—</span>
+            <span class="sep">·</span>
+            <span id="statusViewers">0 viewers</span>
+            <span class="sep">·</span>
+            <span id="statusSource">source: ?</span>
+        </div>
+    </div>
+    <div id="toast" class="toast"></div>
+
+<script>
+(function() {
+    const m = window.location.pathname.match(/^\/watch\/(w_[a-f0-9]{8})$/i);
+    if (!m) { document.getElementById('watchTitle').textContent = 'Invalid room URL'; return; }
+    const ROOM_ID = m[1];
+    const STAGE = document.getElementById('watchStage');
+    const OVERLAY = document.getElementById('watchOverlay');
+    const TITLE = document.getElementById('overlayTitle');
+    const BODY = document.getElementById('overlayBody');
+    const CONTROLS = document.getElementById('watchControls');
+    const ROLE_BADGE = document.getElementById('watchRoleBadge');
+    const STATUS_STATE = document.getElementById('statusState');
+    const STATUS_VIEWERS = document.getElementById('statusViewers');
+    const STATUS_SOURCE = document.getElementById('statusSource');
+    const TOAST = document.getElementById('toast');
+
+    let room = null;
+    let me = null;
+    let isHost = false;
+    let player = null;          // generic player handle (varies by sourceType)
+    let videoEl = null;         // when sourceType === 'video'
+    let suppressEvents = false; // skip re-broadcasting events we're applying remotely
+    let ws = null;
+
+    function showToast(msg, ms) {
+        TOAST.textContent = msg;
+        TOAST.classList.add('visible');
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => TOAST.classList.remove('visible'), ms || 2000);
+    }
+    function showOverlay(title, body) {
+        TITLE.textContent = title;
+        BODY.innerHTML = body || '';
+        OVERLAY.classList.remove('hidden');
+    }
+    function hideOverlay() { OVERLAY.classList.add('hidden'); }
+    function fmtTime(s) {
+        s = Math.max(0, Math.round(s || 0));
+        const m = Math.floor(s / 60); const ss = s - m * 60;
+        return m + ':' + (ss < 10 ? '0' : '') + ss;
+    }
+
+    async function init() {
+        let res;
+        try { res = await fetch('/api/watch/rooms/' + ROOM_ID, { credentials: 'same-origin' }); }
+        catch (e) { showOverlay('Cannot reach the soundboard', '<p>' + e.message + '</p>'); return; }
+        if (res.status === 401) { showOverlay('Sign in required', '<p>Open the soundboard and log in, then refresh this page.</p>'); return; }
+        if (res.status === 403) { showOverlay('Watch Together is disabled for your account', '<p>Ask a superadmin.</p>'); return; }
+        if (res.status === 404) { showOverlay('Room not found or expired', '<p>The host may have closed it.</p>'); return; }
+        if (!res.ok) { showOverlay('Failed to load room', '<p>HTTP ' + res.status + '</p>'); return; }
+        room = await res.json();
+        document.getElementById('watchTitle').textContent = room.url;
+        document.getElementById('watchMeta').textContent = 'host: ' + room.hostUsername;
+        STATUS_SOURCE.textContent = 'source: ' + room.sourceType;
+        renderPlayer();
+        connectWs();
+    }
+
+    function connectWs() {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + window.location.host + '/api/watch/rooms/' + ROOM_ID + '/socket');
+        ws.onmessage = (evt) => {
+            let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+            if (msg.type === 'hello') {
+                me = msg.you;
+                isHost = (me === room.hostUsername);
+                CONTROLS.classList.toggle('hidden', !isHost);
+                ROLE_BADGE.textContent = isHost ? 'Host' : 'Viewer';
+                ROLE_BADGE.className = 'watch-badge ' + (isHost ? 'host' : 'viewer');
+                applyState(msg.room.state);
+            } else if (msg.type === 'state') {
+                applyState(msg.state);
+            } else if (msg.type === 'viewers') {
+                STATUS_VIEWERS.textContent = msg.count + ' viewer' + (msg.count === 1 ? '' : 's');
+            } else if (msg.type === 'closed') {
+                showOverlay('Room closed', '<p>The host has ended this watch party.</p>');
+                CONTROLS.classList.add('hidden');
+            }
+        };
+        ws.onclose = () => { setTimeout(connectWs, 2000); };
+        ws.onerror = () => {};
+    }
+
+    function applyState(state) {
+        if (!state || !player) return;
+        STATUS_STATE.textContent = (state.playing ? '▶ playing' : '⏸ paused') + ' · ' + fmtTime(state.position) + (room.sourceType === 'iframe' ? ' (sync limited)' : '');
+        suppressEvents = true;
+        try {
+            if (player.kind === 'youtube') {
+                const cur = player.api.getCurrentTime ? player.api.getCurrentTime() : 0;
+                if (Math.abs(cur - state.position) > 1.5) player.api.seekTo(state.position, true);
+                if (state.playing) player.api.playVideo();
+                else player.api.pauseVideo();
+            } else if (player.kind === 'video') {
+                if (Math.abs(videoEl.currentTime - state.position) > 1.0) videoEl.currentTime = state.position;
+                if (state.playing && videoEl.paused) videoEl.play().catch(() => {});
+                else if (!state.playing && !videoEl.paused) videoEl.pause();
+            } else if (player.kind === 'iframe') {
+                // No programmatic control — just nudge the user.
+                if (state.playing) hideOverlay();
+                else showOverlay('Host paused', '<p>Press play in the embedded player when the host resumes.</p>');
+            }
+        } catch {}
+        setTimeout(() => { suppressEvents = false; }, 200);
+    }
+
+    function renderPlayer() {
+        STAGE.innerHTML = '';
+        STAGE.appendChild(OVERLAY);
+        if (room.sourceType === 'youtube') return renderYouTube();
+        if (room.sourceType === 'video')   return renderVideo();
+        if (room.sourceType === 'vimeo' || room.sourceType === 'twitch' || room.sourceType === 'iframe') return renderIframe();
+        showOverlay('Unsupported source', '<p>' + room.sourceType + '</p>');
+    }
+
+    function renderYouTube() {
+        const div = document.createElement('div');
+        div.id = '__ytplayer';
+        div.style.width = '100%'; div.style.height = '100%';
+        STAGE.appendChild(div);
+        STAGE.appendChild(OVERLAY);
+        const load = () => {
+            // eslint-disable-next-line no-undef
+            const api = new YT.Player('__ytplayer', {
+                width: '100%', height: '100%',
+                videoId: room.sourceMeta.videoId,
+                playerVars: { enablejsapi: 1, modestbranding: 1, rel: 0, playsinline: 1 },
+                events: {
+                    onReady: () => { hideOverlay(); player = { kind: 'youtube', api }; if (room.state) applyState(room.state); },
+                    onStateChange: (e) => {
+                        if (suppressEvents || !isHost) return;
+                        // YT.PlayerState.PLAYING=1, PAUSED=2
+                        if (e.data === 1) sendControl('play', api.getCurrentTime());
+                        else if (e.data === 2) sendControl('pause', api.getCurrentTime());
+                    },
+                },
+            });
+        };
+        if (window.YT && window.YT.Player) load();
+        else {
+            const s = document.createElement('script');
+            s.src = 'https://www.youtube.com/iframe_api';
+            document.head.appendChild(s);
+            window.onYouTubeIframeAPIReady = load;
+        }
+    }
+
+    function renderVideo() {
+        const v = document.createElement('video');
+        v.controls = isHost;
+        v.src = room.sourceMeta.url;
+        v.preload = 'metadata';
+        STAGE.appendChild(v);
+        STAGE.appendChild(OVERLAY);
+        videoEl = v; player = { kind: 'video' };
+        v.addEventListener('loadedmetadata', () => { hideOverlay(); if (room.state) applyState(room.state); });
+        v.addEventListener('play', () => { if (!suppressEvents && isHost) sendControl('play', v.currentTime); });
+        v.addEventListener('pause', () => { if (!suppressEvents && isHost) sendControl('pause', v.currentTime); });
+        v.addEventListener('seeked', () => { if (!suppressEvents && isHost) sendControl('seek', v.currentTime); });
+    }
+
+    function renderIframe() {
+        let src = room.url;
+        if (room.sourceType === 'vimeo') src = 'https://player.vimeo.com/video/' + room.sourceMeta.videoId;
+        else if (room.sourceType === 'twitch') src = room.sourceMeta.kind === 'video'
+            ? 'https://player.twitch.tv/?video=v' + room.sourceMeta.id + '&parent=' + window.location.hostname
+            : 'https://player.twitch.tv/?channel=' + room.sourceMeta.id + '&parent=' + window.location.hostname;
+        const ifr = document.createElement('iframe');
+        ifr.className = 'player-frame';
+        ifr.src = src;
+        ifr.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+        ifr.referrerPolicy = 'no-referrer';
+        STAGE.appendChild(ifr);
+        STAGE.appendChild(OVERLAY);
+        player = { kind: 'iframe' };
+        if (room.sourceType === 'iframe') showOverlay('Click-to-start sync', '<p>This source\'s player doesn\'t expose programmatic controls — the host can fire a "go now" event but everyone still has to press play in the embedded player. Use Resync to nudge everyone to the same time.</p>');
+        else hideOverlay();
+    }
+
+    async function sendControl(action, position) {
+        if (!isHost) return;
+        try {
+            const res = await fetch('/api/watch/rooms/' + ROOM_ID + '/control', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, position }),
+            });
+            if (!res.ok) showToast('Control failed: ' + res.status);
+        } catch (e) { showToast(e.message); }
+    }
+
+    document.getElementById('btnPlay').addEventListener('click', () => {
+        if (player && player.kind === 'youtube') player.api.playVideo();
+        else if (player && player.kind === 'video') videoEl.play().catch(() => {});
+        else sendControl('play', 0);
+    });
+    document.getElementById('btnPause').addEventListener('click', () => {
+        if (player && player.kind === 'youtube') player.api.pauseVideo();
+        else if (player && player.kind === 'video') videoEl.pause();
+        else sendControl('pause', 0);
+    });
+    document.getElementById('btnSync').addEventListener('click', async () => {
+        const r = await fetch('/api/watch/rooms/' + ROOM_ID, { credentials: 'same-origin' });
+        if (!r.ok) return;
+        const d = await r.json();
+        applyState(d.state);
+        showToast('Resynced.');
+    });
+    document.getElementById('btnClose').addEventListener('click', async () => {
+        if (!confirm('Close this watch room for everyone?')) return;
+        const r = await fetch('/api/watch/rooms/' + ROOM_ID, { method: 'DELETE', credentials: 'same-origin' });
+        if (r.ok) showOverlay('Room closed', '<p>You\'ve ended this watch party.</p>');
+    });
+
+    init();
+})();
+</script>
+</body>
+</html>

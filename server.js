@@ -2190,6 +2190,10 @@ async function registerSlashCommands() {
             .setName('play')
             .setDescription('Play a soundboard sound through the bot')
             .addStringOption(o => o.setName('sound').setDescription('Sound name (autocompletes)').setRequired(true).setAutocomplete(true)),
+        new SlashCommandBuilder()
+            .setName('watch')
+            .setDescription('Start a synced Watch Together room around a video URL')
+            .addStringOption(o => o.setName('url').setDescription('YouTube / Vimeo / Twitch / direct video / weflix URL').setRequired(true)),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2275,6 +2279,7 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'rejoin') return handleRejoinCommand(interaction);
             if (interaction.commandName === 'clip') return handleClipCommand(interaction);
             if (interaction.commandName === 'play') return handlePlayCommand(interaction);
+            if (interaction.commandName === 'watch') return handleWatchCommand(interaction);
         } else if (interaction.isAutocomplete?.()) {
             if (interaction.commandName === 'play') return handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
@@ -2670,6 +2675,142 @@ function stopClipCapture() {
     clipBuffers.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Watch Together — synced video rooms.
+// Bot creates a short-lived room around a video URL; viewers open
+// /watch/<id> and the player keeps everyone roughly in lockstep via a
+// WebSocket broadcast of host play / pause / seek events. Supports four
+// sourceType paths:
+//   youtube  — full sync via the YouTube iframe Player API
+//   video    — direct .mp4 / .m3u8 → HTML5 <video> with full sync
+//   vimeo    — Vimeo Player API (full sync)
+//   twitch   — Twitch Embed Player API (full sync, best-effort on live)
+//   iframe   — generic embed (weflix.org etc.) — click-to-start sync only;
+//              host's "play now" event fires a synchronized resume but the
+//              embedded player won't accept further programmatic control.
+// ---------------------------------------------------------------------------
+const WATCH_ROOM_TTL_MS = 6 * 60 * 60 * 1000;  // 6h idle
+const WATCH_ROOM_MAX_VIEWERS = 50;
+const watchRooms = new Map(); // id -> { id, url, sourceType, sourceMeta, hostUsername, hostRole, createdAt, lastActivity, state, viewers: Set<ws> }
+
+function _watchExtractYouTubeId(u) {
+    try {
+        const url = new URL(u);
+        if (/(^|\.)youtube\.com$/.test(url.hostname)) {
+            const v = url.searchParams.get('v');
+            if (v && /^[A-Za-z0-9_-]{6,20}$/.test(v)) return v;
+            const m = url.pathname.match(/^\/(?:embed|shorts|v)\/([A-Za-z0-9_-]+)/);
+            if (m) return m[1];
+        }
+        if (/(^|\.)youtu\.be$/.test(url.hostname)) {
+            const m = url.pathname.match(/^\/([A-Za-z0-9_-]+)/);
+            if (m) return m[1];
+        }
+    } catch {}
+    return null;
+}
+function _watchExtractVimeoId(u) {
+    try {
+        const url = new URL(u);
+        if (!/(^|\.)vimeo\.com$/.test(url.hostname)) return null;
+        const m = url.pathname.match(/^\/(\d{6,})/);
+        return m ? m[1] : null;
+    } catch { return null; }
+}
+function _watchExtractTwitch(u) {
+    try {
+        const url = new URL(u);
+        if (!/(^|\.)twitch\.tv$/.test(url.hostname)) return null;
+        // VOD: /videos/<id>; live: /<channel>
+        const vod = url.pathname.match(/^\/videos\/(\d+)/);
+        if (vod) return { kind: 'video', id: vod[1] };
+        const ch = url.pathname.match(/^\/([A-Za-z0-9_]+)$/);
+        if (ch && !['videos', 'directory'].includes(ch[1])) return { kind: 'channel', id: ch[1] };
+        return null;
+    } catch { return null; }
+}
+function _watchDetectSource(url) {
+    const u = String(url || '').trim();
+    if (!u) return { sourceType: 'invalid', error: 'URL required' };
+    if (!/^https?:\/\//i.test(u)) return { sourceType: 'invalid', error: 'URL must start with http(s)://' };
+    // DRM-locked services we know upfront won't work in an iframe.
+    const drm = /(^|\.)(netflix\.com|disneyplus\.com|max\.com|hbomax\.com|hulu\.com|primevideo\.com|amazon\.com\/.*\bdp\b|paramountplus\.com|peacocktv\.com|appletv\.com|apple\.com\/tv)/i;
+    try {
+        const parsed = new URL(u);
+        if (drm.test(parsed.hostname + parsed.pathname)) {
+            return { sourceType: 'drm-blocked', error: 'This service uses DRM that browsers block from iframe embedding. Watch Together can\'t play it.' };
+        }
+    } catch {}
+    const yt = _watchExtractYouTubeId(u);
+    if (yt) return { sourceType: 'youtube', sourceMeta: { videoId: yt } };
+    const vi = _watchExtractVimeoId(u);
+    if (vi) return { sourceType: 'vimeo', sourceMeta: { videoId: vi } };
+    const tw = _watchExtractTwitch(u);
+    if (tw) return { sourceType: 'twitch', sourceMeta: tw };
+    // Direct video file?
+    if (/\.(mp4|webm|m3u8|ogg|ogv)(\?|$)/i.test(u)) return { sourceType: 'video', sourceMeta: { url: u } };
+    // Generic iframe fallback (weflix.org, vidsrcme, custom embed sites…).
+    return { sourceType: 'iframe', sourceMeta: { url: u } };
+}
+
+function makeWatchRoomId() { return 'w_' + crypto.randomBytes(4).toString('hex'); }
+
+function _watchBroadcast(room, payload) {
+    const json = JSON.stringify(payload);
+    for (const ws of room.viewers) {
+        if (ws.readyState === 1) {
+            try { ws.send(json); } catch {}
+        }
+    }
+}
+
+function _watchCurrentPosition(room) {
+    if (!room.state.playing) return room.state.position;
+    return room.state.position + (Date.now() - room.state.positionAt) / 1000;
+}
+
+function _watchRoomPublic(room) {
+    return {
+        id: room.id,
+        url: room.url,
+        sourceType: room.sourceType,
+        sourceMeta: room.sourceMeta,
+        hostUsername: room.hostUsername,
+        hostRole: room.hostRole,
+        createdAt: room.createdAt,
+        viewerCount: room.viewers.size,
+        state: {
+            playing: room.state.playing,
+            position: _watchCurrentPosition(room),
+            updatedAt: Date.now(),
+        },
+    };
+}
+
+function _watchSweep() {
+    const now = Date.now();
+    for (const [id, room] of watchRooms) {
+        if (now - room.lastActivity > WATCH_ROOM_TTL_MS && room.viewers.size === 0) {
+            watchRooms.delete(id);
+        }
+    }
+}
+setInterval(_watchSweep, 30 * 60 * 1000).unref?.();
+
+function getWatchPartyEnabled(role, username) {
+    const ov = getUserOverride(username, 'watchPartyEnabled');
+    if (typeof ov === 'boolean') return ov;
+    const d = loadGuestData();
+    const defaults = { guest: false, user: true, admin: true, superadmin: true };
+    const key = 'watchPartyEnabled_' + role;
+    return typeof d[key] === 'boolean' ? d[key] : !!defaults[role];
+}
+function setWatchPartyEnabled(role, v) {
+    const d = loadGuestData();
+    d['watchPartyEnabled_' + role] = v === true;
+    saveGuestData(d);
+}
+
 // Shared capture path used by both /clip (Discord slash) and the web UI's
 // Clip button. Returns { ok, meta?, error? } — callers translate to their
 // own reply/response shape.
@@ -2867,6 +3008,42 @@ async function handlePlayCommand(interaction) {
     };
     const reason = (result && result.reason) || 'unknown';
     return interaction.reply({ content: `Can't play: ${friendly[reason] || reason}`, flags: MessageFlags.Ephemeral });
+}
+
+async function handleWatchCommand(interaction) {
+    const caller = resolveDiscordCaller(interaction);
+    if (caller.disabledReason) {
+        return interaction.reply({ content: caller.disabledReason === 'link-disabled' ? 'Your linked account is disabled.' : 'Your linked soundboard account is disabled.', flags: MessageFlags.Ephemeral });
+    }
+    if (!getWatchPartyEnabled(caller.role, caller.username)) {
+        return interaction.reply({ content: "You don't have permission to use `/watch`.", flags: MessageFlags.Ephemeral });
+    }
+    const url = String(interaction.options.getString('url') || '').trim();
+    const detect = _watchDetectSource(url);
+    if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
+        return interaction.reply({ content: detect.error || 'Could not start a watch room.', flags: MessageFlags.Ephemeral });
+    }
+    const id = makeWatchRoomId();
+    const now = Date.now();
+    const room = {
+        id, url,
+        sourceType: detect.sourceType,
+        sourceMeta: detect.sourceMeta || {},
+        hostUsername: caller.username,
+        hostRole: caller.role,
+        createdAt: now,
+        lastActivity: now,
+        state: { playing: false, position: 0, positionAt: now },
+        viewers: new Set(),
+    };
+    watchRooms.set(id, room);
+    const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
+    const joinUrl = `${publicBase}/watch/${id}`;
+    console.log(`[watch] room ${id} created via /watch by ${caller.fallbackTag} (${room.sourceType})`);
+    return interaction.reply({
+        content: `🎬 **Watch Together** — ${room.sourceType.toUpperCase()} room ready. Open ${joinUrl} to join. The host (you) controls play / pause / seek.`,
+        flags: MessageFlags.Ephemeral,
+    });
 }
 
 async function handlePlayAutocomplete(interaction) {
@@ -8440,6 +8617,105 @@ app.post('/api/clips/:id/save-as-sound', requireAuth, requireClipPermission, req
     res.json({ ok: true, filename: outName, displayName, duration });
 });
 
+// Watch Together page — same static SPA for every room id. The page reads
+// the id from window.location and uses /api/watch/rooms/:id + the WS upgrade
+// to drive the player.
+app.get('/watch/:id', (req, res) => {
+    if (!WATCH_ID_RE.test(String(req.params.id || ''))) return res.status(400).type('text/plain').send('Invalid room id');
+    res.sendFile(path.join(__dirname, 'public', 'watch.html'));
+});
+
+// ---------------------------------------------------------------------------
+// Watch Together — room CRUD + control
+// ---------------------------------------------------------------------------
+function requireWatchPartyPermission(req, res, next) {
+    const role = req.session?.user?.role;
+    const username = req.session?.user?.username;
+    if (!role || !getWatchPartyEnabled(role, username)) {
+        return res.status(403).json({ error: 'Watch Together is disabled for your account. Ask a superadmin.' });
+    }
+    next();
+}
+
+app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, (req, res) => {
+    const url = String((req.body || {}).url || '').trim();
+    const detect = _watchDetectSource(url);
+    if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
+        return res.status(400).json({ error: detect.error });
+    }
+    const id = makeWatchRoomId();
+    const now = Date.now();
+    const room = {
+        id,
+        url,
+        sourceType: detect.sourceType,
+        sourceMeta: detect.sourceMeta || {},
+        hostUsername: req.session.user.username,
+        hostRole: req.session.user.role,
+        createdAt: now,
+        lastActivity: now,
+        state: { playing: false, position: 0, positionAt: now },
+        viewers: new Set(),
+    };
+    watchRooms.set(id, room);
+    console.log(`[watch] room ${id} created by ${room.hostUsername} (${room.sourceType}) -> ${url}`);
+    res.json(_watchRoomPublic(room));
+});
+
+const WATCH_ID_RE = /^w_[a-f0-9]{8}$/i;
+function requireValidWatchRoomId(req, res, next) {
+    if (!WATCH_ID_RE.test(String(req.params.id || ''))) return res.status(400).json({ error: 'Invalid room id' });
+    next();
+}
+
+app.get('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res) => {
+    const room = watchRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found or expired' });
+    res.json(_watchRoomPublic(room));
+});
+
+app.post('/api/watch/rooms/:id/control', requireAuth, requireValidWatchRoomId, (req, res) => {
+    const room = watchRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found or expired' });
+    // Only the host can drive playback. Superadmin can also override.
+    const un = req.session.user.username;
+    const role = req.session.user.role;
+    if (un !== room.hostUsername && role !== 'superadmin') return res.status(403).json({ error: 'Only the host can control playback.' });
+    const body = req.body || {};
+    const action = String(body.action || '');
+    const position = Number.isFinite(body.position) ? Math.max(0, Number(body.position)) : null;
+    const now = Date.now();
+    if (action === 'play') {
+        room.state.playing = true;
+        if (position != null) room.state.position = position;
+        room.state.positionAt = now;
+    } else if (action === 'pause') {
+        room.state.position = _watchCurrentPosition(room);
+        room.state.positionAt = now;
+        room.state.playing = false;
+    } else if (action === 'seek' && position != null) {
+        room.state.position = position;
+        room.state.positionAt = now;
+    } else {
+        return res.status(400).json({ error: 'action must be play / pause / seek (with position)' });
+    }
+    room.lastActivity = now;
+    _watchBroadcast(room, { type: 'state', state: { playing: room.state.playing, position: room.state.position, positionAt: room.state.positionAt } });
+    res.json(_watchRoomPublic(room));
+});
+
+app.delete('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res) => {
+    const room = watchRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    const un = req.session.user.username;
+    if (un !== room.hostUsername && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Only the host can close the room.' });
+    _watchBroadcast(room, { type: 'closed' });
+    for (const ws of room.viewers) { try { ws.close(); } catch {} }
+    watchRooms.delete(req.params.id);
+    console.log(`[watch] room ${req.params.id} closed by ${un}`);
+    res.json({ ok: true });
+});
+
 // Full suno metadata for one saved sound (used by the "regenerate" flow).
 app.get('/api/suno/sound/:filename', requireAuth, (req, res) => {
     const safe = path.basename(req.params.filename);
@@ -8565,10 +8841,52 @@ const httpServer = app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);
 });
 
+// WebSocket upgrade for Watch Together rooms.
+const { WebSocketServer } = require('ws');
+const watchWss = new WebSocketServer({ noServer: true });
+watchWss.on('connection', (ws, req, room, username) => {
+    room.viewers.add(ws);
+    room.lastActivity = Date.now();
+    // Send initial state on connect.
+    try {
+        ws.send(JSON.stringify({
+            type: 'hello',
+            room: _watchRoomPublic(room),
+            you: username,
+        }));
+    } catch {}
+    // Broadcast updated viewer count to everyone.
+    _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    ws.on('message', () => { /* viewers don't send state — host uses HTTP control */ });
+    const cleanup = () => {
+        room.viewers.delete(ws);
+        if (watchRooms.has(room.id)) _watchBroadcast(room, { type: 'viewers', count: room.viewers.size });
+    };
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+});
+
 // WebSocket upgrade tunnel for the yt-session noVNC proxy. Authenticates the
 // upgrade using the same session cookie as the rest of the app, then pipes
 // bytes through to the localhost websockify.
 httpServer.on('upgrade', (req, socket, head) => {
+    // Watch Together rooms: /api/watch/rooms/<id>/socket
+    const wm = req.url && req.url.match(/^\/api\/watch\/rooms\/(w_[a-f0-9]{8})\/socket$/i);
+    if (wm) {
+        const stubRes = { setHeader: () => {}, getHeader: () => undefined, writeHead: () => {}, end: () => {}, on: () => {}, once: () => {}, emit: () => {} };
+        sessionMiddleware(req, stubRes, () => {
+            const user = req.session?.user;
+            if (!user) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            if (!getWatchPartyEnabled(user.role, user.username)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            const room = watchRooms.get(wm[1]);
+            if (!room) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            if (room.viewers.size >= WATCH_ROOM_MAX_VIEWERS) { socket.write('HTTP/1.1 503 Too Many Viewers\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            watchWss.handleUpgrade(req, socket, head, (ws) => {
+                watchWss.emit('connection', ws, req, room, user.username);
+            });
+        });
+        return;
+    }
     if (!req.url || !req.url.startsWith(YT_VNC_PROXY_PREFIX + '/')) return;
     // express-session expects a Response-shaped object for setHeader / on('header').
     // We never send a response on this code path — we hijack the socket directly —
