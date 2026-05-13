@@ -558,6 +558,22 @@ function setUrlStreamEnabled(role, v) {
     d['urlStreamEnabled_' + role] = v === true;
     saveGuestData(d);
 }
+// Voice-channel clipping: capture + save the last N seconds of audio.
+// Defaults: admin + superadmin + user on (it's a fun feature), guests off
+// because they aren't authenticated long-term.
+function getClipEnabled(role, username) {
+    const ov = getUserOverride(username, 'clipEnabled');
+    if (typeof ov === 'boolean') return ov;
+    const d = loadGuestData();
+    const defaults = { guest: false, user: true, admin: true, superadmin: true };
+    const key = 'clipEnabled_' + role;
+    return typeof d[key] === 'boolean' ? d[key] : !!defaults[role];
+}
+function setClipEnabled(role, v) {
+    const d = loadGuestData();
+    d['clipEnabled_' + role] = v === true;
+    saveGuestData(d);
+}
 function getUrlStreamMaxDurationSec(role, username) {
     const ov = Number(getUserOverride(username, 'urlStreamMaxDurationSec'));
     if (Number.isFinite(ov) && ov >= 0) return ov;
@@ -2556,12 +2572,45 @@ async function captureClip(seconds, byContext) {
     }
 }
 
+// Resolve a Discord interaction.user to a soundboard role + username, the
+// same way /play does — used to enforce per-role + per-user permissions on
+// slash commands. Returns { username, role, fallbackTag, disabledReason }.
+function resolveDiscordCaller(interaction) {
+    const fallbackTag = interaction.user?.tag || interaction.user?.username || 'discord-user';
+    let username = `discord:${fallbackTag}`;
+    let role = 'user';
+    if (getDiscordLinkGlobalEnabled()) {
+        const linkedUn = findUsernameByDiscordId(interaction.user?.id);
+        if (linkedUn) {
+            const link = getDiscordLinkForUser(linkedUn);
+            if (link && link.disabled === true) return { username, role, fallbackTag, disabledReason: 'link-disabled' };
+            const entry = USERS.get(linkedUn.toLowerCase());
+            if (entry && entry.disabled === true) return { username, role, fallbackTag, disabledReason: 'account-disabled' };
+            if (entry && entry.role) {
+                username = linkedUn;
+                role = entry.role;
+            }
+        }
+    }
+    return { username, role, fallbackTag };
+}
+
 async function handleClipCommand(interaction) {
+    const caller = resolveDiscordCaller(interaction);
+    if (caller.disabledReason) {
+        return interaction.reply({
+            content: caller.disabledReason === 'link-disabled' ? 'Your linked account is disabled.' : 'Your linked soundboard account is disabled.',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+    if (!getClipEnabled(caller.role, caller.username)) {
+        return interaction.reply({ content: "You don't have permission to use `/clip`. Ask a superadmin.", flags: MessageFlags.Ephemeral });
+    }
     const requested = interaction.options.getInteger('seconds') ?? CLIP_DEFAULT_REQUEST_SEC;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const result = await captureClip(requested, {
-        userId: interaction.user?.id,
-        userTag: interaction.user?.tag,
+        userId: caller.username,
+        userTag: caller.fallbackTag,
         guildId: interaction.guildId,
         source: 'slash',
     });
@@ -3561,9 +3610,11 @@ app.get('/api/settings', requireAuth, (req, res) => {
     if (req.session.user.role === 'superadmin') {
         out.urlStreamEnabled = { guest: getUrlStreamEnabled('guest'), user: getUrlStreamEnabled('user'), admin: getUrlStreamEnabled('admin'), superadmin: getUrlStreamEnabled('superadmin') };
         out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
+        out.clipEnabled = { guest: getClipEnabled('guest'), user: getClipEnabled('user'), admin: getClipEnabled('admin'), superadmin: getClipEnabled('superadmin') };
     }
     out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
     out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
+    out.clipEnabled_self = getClipEnabled(role, username);
     if (role === 'admin' || role === 'user' || role === 'superadmin') {
         out.soundDeleteEnabled_self = getSoundDeleteEnabled(role, username);
     }
@@ -3684,6 +3735,20 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
                 if (typeof urlStreamMaxDurationSec[r] === 'number' && urlStreamMaxDurationSec[r] >= 0) setUrlStreamMaxDurationSec(r, urlStreamMaxDurationSec[r]);
             }
             out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
+        }
+        const { clipEnabled } = req.body;
+        if (clipEnabled && typeof clipEnabled === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof clipEnabled[r] === 'boolean') setClipEnabled(r, clipEnabled[r]);
+            }
+            out.clipEnabled = { guest: getClipEnabled('guest'), user: getClipEnabled('user'), admin: getClipEnabled('admin'), superadmin: getClipEnabled('superadmin') };
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.clipEnabled',
+                target: null,
+                details: out.clipEnabled,
+            });
         }
         const { soundDeleteEnabled } = req.body;
         if (soundDeleteEnabled && typeof soundDeleteEnabled === 'object') {
@@ -7868,14 +7933,26 @@ function requireValidClipId(req, res, next) {
     next();
 }
 
-app.get('/api/clips', requireAuth, (req, res) => {
+// Enforce the per-role / per-user clip permission. Gates list, capture, and
+// save-as-sound — anyone in the guild can still discard their own clips via
+// /api/clips/:id (deleting your own bad capture shouldn't need permission).
+function requireClipPermission(req, res, next) {
+    const role = req.session?.user?.role;
+    const username = req.session?.user?.username;
+    if (!role || !getClipEnabled(role, username)) {
+        return res.status(403).json({ error: 'Clipping is disabled for your account. Ask a superadmin.' });
+    }
+    next();
+}
+
+app.get('/api/clips', requireAuth, requireClipPermission, (req, res) => {
     res.json(loadClipsIndex());
 });
 
 // Web-UI equivalent of `/clip` — captures the last N seconds of voice-channel
 // audio into the rolling-clip index. Returns the new clip's metadata so the
 // frontend can scroll the Clips modal to it.
-app.post('/api/clip/capture', requireAuth, async (req, res) => {
+app.post('/api/clip/capture', requireAuth, requireClipPermission, async (req, res) => {
     const requested = Number((req.body || {}).seconds);
     if (!Number.isFinite(requested)) {
         return res.status(400).json({ error: 'seconds (number) required' });
@@ -7920,7 +7997,7 @@ app.delete('/api/clips/:id', requireAuth, requireValidClipId, (req, res) => {
 // Uses ffmpeg to copy/re-encode the source MP3 into the soundboard sounds
 // directory with the requested trim window; falls back to the full clip
 // duration if start/end are omitted.
-app.post('/api/clips/:id/save-as-sound', requireAuth, requireValidClipId, async (req, res) => {
+app.post('/api/clips/:id/save-as-sound', requireAuth, requireClipPermission, requireValidClipId, async (req, res) => {
     const id = req.params.id;
     const arr = loadClipsIndex();
     const clip = arr.find(c => c.id === id);

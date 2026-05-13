@@ -1633,6 +1633,27 @@
                     <div class="sa-field-help">Generate full songs (with lyrics + cover art) via the Suno API. Each generation costs ~12 credits (~$0.06) against your sunoapi.org pool. Set a daily limit to 0 to disable for that role. Guests never have access. Requires <code>SUNO_API_KEY</code> in server env.</div>
                 </div>
                 <div class="superadmin-section">
+                    <div class="superadmin-section-title">Voice clipping</div>
+                    <div class="sa-toggle-group" style="margin-bottom: 0.8rem;">
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="clipEnabledUser" onchange="setClipEnabledSetting('user', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow users</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="clipEnabledAdmin" onchange="setClipEnabledSetting('admin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow admins</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="clipEnabledSuperadmin" onchange="setClipEnabledSetting('superadmin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow superadmin</span>
+                        </label>
+                    </div>
+                    <div class="sa-field-help">Controls who can capture the last N seconds of voice-channel audio (📎 Clip button + <code>/clip</code> slash command) and who can save those clips to the soundboard. Guests never have access. Per-user overrides on Superadmin → Users.</div>
+                </div>
+                <div class="superadmin-section">
                     <div class="superadmin-section-title">URL Streaming (YouTube / TikTok / etc.)</div>
                     <div class="sa-toggle-group" style="margin-bottom: 0.8rem;">
                         <label class="sa-toggle">
@@ -4320,6 +4341,12 @@
                         if (el && d.urlStreamMaxDurationSec[r] !== undefined) el.value = d.urlStreamMaxDurationSec[r];
                     }
                 }
+                if (d.clipEnabled) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('clipEnabled' + r.charAt(0).toUpperCase() + r.slice(1));
+                        if (el && d.clipEnabled[r] !== undefined) el.checked = d.clipEnabled[r] === true;
+                    }
+                }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -4327,6 +4354,11 @@
             applyVolumeExpanded();
             const urlBtn = document.getElementById('urlStreamToggleBtn');
             if (urlBtn) urlBtn.classList.toggle('hidden', !(d.urlStreamEnabled_self === true));
+            const clipBtnEl = document.getElementById('clipBtn');
+            const clipMenuWrap = clipBtnEl && clipBtnEl.closest('.clip-menu-wrap');
+            if (clipMenuWrap) clipMenuWrap.style.display = (d.clipEnabled_self === true) ? '' : 'none';
+            const clipsHamburger = document.querySelector('.header-menu-item[onclick*="openClips"]');
+            if (clipsHamburger) clipsHamburger.style.display = (d.clipEnabled_self === true) ? '' : 'none';
             _urlStreamMaxDurSelf = Number(d.urlStreamMaxDurationSec_self) || 0;
             const urlInfo = document.getElementById('urlStreamInfo');
             if (urlInfo && !urlInfo.dataset.dirty) {
@@ -4516,6 +4548,11 @@
         async function setUrlStreamEnabledSetting(role, enabled) {
             const obj = {}; obj[role] = !!enabled;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamEnabled: obj }) });
+            fetchSettings();
+        }
+        async function setClipEnabledSetting(role, enabled) {
+            const obj = {}; obj[role] = !!enabled;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clipEnabled: obj }) });
             fetchSettings();
         }
         async function setUrlStreamMaxDurSetting(role, val) {
@@ -5370,6 +5407,7 @@
             { key: 'ttsCooldownSec',          type: 'num',  label: 'TTS cooldown (s)',         hint: 'Seconds between TTS requests.' },
             { key: 'sunoDailyLimit',          type: 'num',  label: 'Suno daily limit',         hint: 'Songs per day. 0 disables.' },
             { key: 'urlStreamEnabled',        type: 'bool', label: 'URL streaming enabled',    hint: 'Allow streaming YouTube/TikTok/etc. URLs.' },
+            { key: 'clipEnabled',             type: 'bool', label: 'Voice clipping enabled',   hint: 'Allow capturing the last N seconds of voice-channel audio (📎 Clip + /clip) and saving clips to the soundboard.' },
             { key: 'urlStreamMaxDurationSec', type: 'num',  label: 'URL stream max (s)',       hint: 'Max playable duration for URL streams.' },
             { key: 'userMaxDuration',         type: 'num',  label: 'Playback max (s)',         hint: 'Max length a single sound can play.' },
             { key: 'userCooldownSec',         type: 'num',  label: 'Playback cooldown (s)',    hint: 'Seconds between plays.' },
@@ -5412,6 +5450,7 @@
                 sunoDailyLimit: (settings.sunoDailyLimit || {})[role],
                 urlStreamEnabled: (settings.urlStreamEnabled || {})[role],
                 urlStreamMaxDurationSec: (settings.urlStreamMaxDurationSec || {})[role],
+                clipEnabled: (settings.clipEnabled || {})[role],
                 userMaxDuration: settings.userMaxDuration,
                 userCooldownSec: settings.userCooldownSec,
                 userUploadEnabled: settings.userUploadEnabled,
