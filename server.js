@@ -2,6 +2,24 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { monitorEventLoopDelay } = require('perf_hooks');
+
+// Continuous event-loop lag histogram — surfaces sync FS hits, big
+// JSON.parses, and synchronous FFI on the audio path as drift in the p99.
+// Exposed via /api/diag/perf for the superadmin diagnostics panel and
+// alerting from outside.
+const _elDelay = monitorEventLoopDelay({ resolution: 20 });
+_elDelay.enable();
+function getEventLoopLag() {
+    return {
+        mean_ms: _elDelay.mean / 1e6,
+        p50_ms: _elDelay.percentile(50) / 1e6,
+        p95_ms: _elDelay.percentile(95) / 1e6,
+        p99_ms: _elDelay.percentile(99) / 1e6,
+        max_ms: _elDelay.max / 1e6,
+        samples: _elDelay.exceeds,
+    };
+}
 
 // Errors we never want to crash on. EPIPE/ECONNRESET/ECONNABORTED come from
 // client-initiated aborts (closing the tab mid-download, hitting Stop on a
@@ -1137,6 +1155,23 @@ app.get('/api/version', (req, res) => {
     res.json(VERSION_INFO);
 });
 
+// Performance diagnostics — event-loop lag histogram + process RSS / uptime.
+// Gated behind requireSuperadmin since it's purely an operator/debug surface.
+app.get('/api/diag/perf', (req, res, next) => {
+    if (!req.session?.user || req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin only' });
+    const mem = process.memoryUsage();
+    res.json({
+        eventLoop: getEventLoopLag(),
+        rss_mb: mem.rss / (1024 * 1024),
+        heap_used_mb: mem.heapUsed / (1024 * 1024),
+        heap_total_mb: mem.heapTotal / (1024 * 1024),
+        uptime_sec: process.uptime(),
+        pid: process.pid,
+        startedAt: VERSION_INFO.startedAt,
+        nodeVersion: process.version,
+    });
+});
+
 // Raw CHANGELOG.md so the frontend can parse + render the "What's New"
 // modal. Kept unauthenticated for the same reason as /api/version.
 app.get('/api/changelog', (req, res) => {
@@ -1651,12 +1686,27 @@ class AudioMixer extends Readable {
 
     _consumeFrame(track) {
         if (track.chunkBytes < this.FRAME_SIZE) return null;
-        // Consolidate chunks into a single buffer and slice a frame
-        const buf = Buffer.concat(track.chunks);
-        const frame = buf.subarray(0, this.FRAME_SIZE);
-        const rest = buf.subarray(this.FRAME_SIZE);
-        track.chunks = rest.length > 0 ? [rest] : [];
-        track.chunkBytes = rest.length;
+        // Walk chunks and copy into a single FRAME_SIZE buffer instead of
+        // Buffer.concat(all) + slice. With many small inbound chunks per
+        // tick (ffmpeg emits ~256-byte stdout chunks) the old path allocated
+        // O(N*FRAME_SIZE) per 20 ms tick per track — pretty wasteful.
+        const frame = Buffer.allocUnsafe(this.FRAME_SIZE);
+        let copied = 0;
+        while (copied < this.FRAME_SIZE && track.chunks.length > 0) {
+            const c = track.chunks[0];
+            const need = this.FRAME_SIZE - copied;
+            if (c.length <= need) {
+                c.copy(frame, copied);
+                copied += c.length;
+                track.chunks.shift();
+                track.chunkBytes -= c.length;
+            } else {
+                c.copy(frame, copied, 0, need);
+                copied += need;
+                track.chunks[0] = c.subarray(need);
+                track.chunkBytes -= need;
+            }
+        }
         return frame;
     }
 
@@ -3349,7 +3399,10 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
     const etag = `"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
     res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'no-cache');
+    // Sound files are content-addressed by mtime via the ETag. 5 minutes of
+    // browser-level caching covers most repeat plays without per-tap network
+    // hits; normalize changes mtime so the new ETag invalidates.
+    res.setHeader('Cache-Control', 'private, max-age=300');
     if (req.headers['if-none-match'] === etag) return res.status(304).end();
     const start = typeof req.query.start === 'string' ? parseFloat(req.query.start) : null;
     const end = typeof req.query.end === 'string' ? parseFloat(req.query.end) : null;
