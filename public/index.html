@@ -1199,8 +1199,9 @@
             </div>
             <div id="ttsConvBlock" class="hidden">
                 <div id="ttsConvList" class="tts-conv-list"></div>
-                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem;">
+                <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.5rem; flex-wrap:wrap;">
                     <button type="button" class="tts-conv-addbtn" onclick="ttsConvAddLine()">+ Add line</button>
+                    <button type="button" class="tts-conv-addbtn" onclick="ttsConvAutoCastPrompt()" title="Paste a script with 'Alice: hi / Bob: hey' and the system parses the speakers + assigns voices automatically">📜 Paste script (auto-cast)</button>
                     <span style="font-size:0.7rem; color:var(--text-muted);">Up to 12 lines · tag chips below insert into the last-focused line.</span>
                 </div>
             </div>
@@ -8449,6 +8450,66 @@
             if (lbl) lbl.textContent = ms + 'ms';
             ttsConvSave();
         }
+        // Auto-cast: paste a script ("Alice: hi\nBob: hey") and the system
+        // parses Speaker: text lines, assigns one voice per unique speaker
+        // (round-robin across enabled voices, biased toward keeping the
+        // currently-selected voice for the first speaker so it feels
+        // intentional), and populates ttsConvLines.
+        async function ttsConvAutoCastPrompt() {
+            const script = await promptModal(
+                'Paste your script. One line per speaker, prefixed "Name:" or "Name —":\n\nAlice: Hey, what\'s up?\nBob: Not much. You?',
+                '',
+                { okText: 'Cast' }
+            );
+            if (script == null) return;
+            const lines = String(script).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            if (!lines.length) { showToast('Empty script', 'error'); return; }
+            const parsed = [];
+            for (const line of lines) {
+                const m = line.match(/^([^:—–-]{1,40})\s*[:\-—–]\s*(.+)$/);
+                if (m) parsed.push({ speaker: m[1].trim(), text: m[2].trim() });
+                else if (parsed.length) parsed[parsed.length - 1].text += ' ' + line; // continuation of previous speaker
+                else parsed.push({ speaker: 'Narrator', text: line });
+            }
+            if (parsed.length > 12) { showToast('Trimmed to first 12 lines.', 'info'); parsed.length = 12; }
+            // Voice pool: prefer voices not currently in TTS_DISABLED.
+            const voices = Array.isArray(ttsVoices) ? ttsVoices.filter(v => !v.disabled) : [];
+            if (!voices.length) { showToast('No voices available to cast.', 'error'); return; }
+            const speakers = [...new Set(parsed.map(p => p.speaker.toLowerCase()))];
+            const speakerVoice = new Map();
+            // Bias: first speaker gets the currently-selected voice (if any),
+            // remaining speakers round-robin across the rest.
+            const currentVoice = document.getElementById('ttsVoiceSelect')?.value || null;
+            let cursor = 0;
+            for (const sp of speakers) {
+                if (!speakerVoice.has(sp)) {
+                    if (sp === speakers[0] && currentVoice && voices.find(v => v.id === currentVoice)) {
+                        speakerVoice.set(sp, currentVoice);
+                    } else {
+                        // pick a voice not already used if possible
+                        let candidate = null;
+                        for (let i = 0; i < voices.length; i++) {
+                            const v = voices[(cursor + i) % voices.length];
+                            if (![...speakerVoice.values()].includes(v.id)) { candidate = v; cursor = cursor + i + 1; break; }
+                        }
+                        speakerVoice.set(sp, (candidate || voices[cursor % voices.length]).id);
+                        cursor++;
+                    }
+                }
+            }
+            ttsConvLines = parsed.map((p, i) => ({
+                voiceId: speakerVoice.get(p.speaker.toLowerCase()) || voices[0].id,
+                text: p.text,
+                pauseMs: i === 0 ? 0 : 400,
+                humanize: false,
+                emotion: '',
+            }));
+            ttsConvSave();
+            ttsConvRender();
+            showToast('Cast ' + speakers.length + ' speaker' + (speakers.length === 1 ? '' : 's') + ' across ' + parsed.length + ' lines.', 'success');
+        }
+        window.ttsConvAutoCastPrompt = ttsConvAutoCastPrompt;
+
         function ttsConvAddLine() {
             if (ttsConvLines.length >= 12) { showToast('Max 12 lines per conversation.', 'error'); return; }
             // Seed next line with a 400ms default pause — this is the "natural
