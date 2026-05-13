@@ -1813,7 +1813,7 @@ async function handleVoteButton(interaction, voteId, choice) {
     await refreshVoteMessage(vote);
 }
 
-async function registerVoteSlashCommands() {
+async function registerSlashCommands() {
     const commands = [
         new SlashCommandBuilder()
             .setName('votekick')
@@ -1826,14 +1826,35 @@ async function registerVoteSlashCommands() {
             .addUserOption(o => o.setName('user').setDescription('User to timeout').setRequired(true))
             .addIntegerOption(o => o.setName('minutes').setDescription('Minutes (1-40320)').setRequired(true).setMinValue(1).setMaxValue(40320))
             .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)),
+        new SlashCommandBuilder()
+            .setName('rejoin')
+            .setDescription("Move the soundboard into your current voice channel (or bounce it if it's stuck)"),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
             await guild.commands.set(commands);
-            console.log(`[voting] slash commands registered in ${guild.name}`);
+            console.log(`[slash] commands registered in ${guild.name}`);
         } catch (err) {
-            console.error('[voting] failed to register commands in', guild.id, err.message);
+            console.error('[slash] failed to register commands in', guild.id, err.message);
         }
+    }
+}
+
+async function handleRejoinCommand(interaction) {
+    const channel = interaction.member?.voice?.channel;
+    if (!channel || !channel.isVoiceBased?.()) {
+        return interaction.reply({ content: 'Join a voice channel first, then run `/rejoin` again.', flags: MessageFlags.Ephemeral });
+    }
+    try {
+        leaveVoiceChannel();
+        joinChannelById(channel);
+        lastChannelId = channel.id;
+        saveServerState({ lastChannelId });
+        console.log(`[slash] /rejoin by ${interaction.user?.tag ?? interaction.user?.id} -> #${channel.name}`);
+        return interaction.reply({ content: `Joined **${channel.name}**.`, flags: MessageFlags.Ephemeral });
+    } catch (err) {
+        console.error('[slash] /rejoin failed:', err);
+        return interaction.reply({ content: `Failed to join: ${err.message || 'unknown error'}`, flags: MessageFlags.Ephemeral });
     }
 }
 
@@ -1842,6 +1863,7 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.isChatInputCommand?.()) {
             if (interaction.commandName === 'votekick') return handleVoteStart(interaction, 'kick');
             if (interaction.commandName === 'votetimeout') return handleVoteStart(interaction, 'timeout');
+            if (interaction.commandName === 'rejoin') return handleRejoinCommand(interaction);
         } else if (interaction.isButton?.()) {
             const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
             if (m) return handleVoteButton(interaction, m[1], m[2]);
@@ -2160,7 +2182,7 @@ function joinChannelById(channel) {
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
-    registerVoteSlashCommands().catch(err => console.error('[voting] registration failed:', err.message));
+    registerSlashCommands().catch(err => console.error('[slash] registration failed:', err.message));
     if (lastChannelId) {
         const channel = client.channels.cache.get(lastChannelId);
         if (channel?.isVoiceBased()) {
