@@ -1,0 +1,16 @@
+[Unit]
+Description=bgutil-ytdlp-pot-provider (PO-token sidecar for yt-dlp)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bgutil-pot-server/server
+Environment=NODE_ENV=production
+# Default port 4416, bound to localhost; the yt-dlp plugin auto-detects it there.
+ExecStart=/usr/bin/node /opt/bgutil-pot-server/server/build/main.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
