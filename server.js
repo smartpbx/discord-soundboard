@@ -592,6 +592,23 @@ function setClipEnabled(role, v) {
     d['clipEnabled_' + role] = v === true;
     saveGuestData(d);
 }
+
+// Play-all queue: spams the soundboard sequentially. Defaults: admin +
+// superadmin on, user + guest off — letting plain users fire a 50-sound
+// queue is a recipe for the bot getting kicked.
+function getPlayQueueEnabled(role, username) {
+    const ov = getUserOverride(username, 'playQueueEnabled');
+    if (typeof ov === 'boolean') return ov;
+    const d = loadGuestData();
+    const defaults = { guest: false, user: false, admin: true, superadmin: true };
+    const key = 'playQueueEnabled_' + role;
+    return typeof d[key] === 'boolean' ? d[key] : !!defaults[role];
+}
+function setPlayQueueEnabled(role, v) {
+    const d = loadGuestData();
+    d['playQueueEnabled_' + role] = v === true;
+    saveGuestData(d);
+}
 function getUrlStreamMaxDurationSec(role, username) {
     const ov = Number(getUserOverride(username, 'urlStreamMaxDurationSec'));
     if (Number.isFinite(ov) && ov >= 0) return ov;
@@ -3930,10 +3947,12 @@ app.get('/api/settings', requireAuth, (req, res) => {
         out.urlStreamEnabled = { guest: getUrlStreamEnabled('guest'), user: getUrlStreamEnabled('user'), admin: getUrlStreamEnabled('admin'), superadmin: getUrlStreamEnabled('superadmin') };
         out.urlStreamMaxDurationSec = { guest: getUrlStreamMaxDurationSec('guest'), user: getUrlStreamMaxDurationSec('user'), admin: getUrlStreamMaxDurationSec('admin'), superadmin: getUrlStreamMaxDurationSec('superadmin') };
         out.clipEnabled = { guest: getClipEnabled('guest'), user: getClipEnabled('user'), admin: getClipEnabled('admin'), superadmin: getClipEnabled('superadmin') };
+        out.playQueueEnabled = { guest: getPlayQueueEnabled('guest'), user: getPlayQueueEnabled('user'), admin: getPlayQueueEnabled('admin'), superadmin: getPlayQueueEnabled('superadmin') };
     }
     out.urlStreamEnabled_self = getUrlStreamEnabled(role, username);
     out.urlStreamMaxDurationSec_self = getUrlStreamMaxDurationSec(role, username);
     out.clipEnabled_self = getClipEnabled(role, username);
+    out.playQueueEnabled_self = getPlayQueueEnabled(role, username);
     if (role === 'admin' || role === 'user' || role === 'superadmin') {
         out.soundDeleteEnabled_self = getSoundDeleteEnabled(role, username);
     }
@@ -4077,6 +4096,20 @@ app.patch('/api/settings', requireAdmin, (req, res) => {
                 action: 'settings.clipEnabled',
                 target: null,
                 details: out.clipEnabled,
+            });
+        }
+        const { playQueueEnabled } = req.body;
+        if (playQueueEnabled && typeof playQueueEnabled === 'object') {
+            for (const r of ['guest', 'user', 'admin', 'superadmin']) {
+                if (typeof playQueueEnabled[r] === 'boolean') setPlayQueueEnabled(r, playQueueEnabled[r]);
+            }
+            out.playQueueEnabled = { guest: getPlayQueueEnabled('guest'), user: getPlayQueueEnabled('user'), admin: getPlayQueueEnabled('admin'), superadmin: getPlayQueueEnabled('superadmin') };
+            statsDb.recordAdminAction({
+                actor: req.session.user.username,
+                actorRole: req.session.user.role,
+                action: 'settings.playQueueEnabled',
+                target: null,
+                details: out.playQueueEnabled,
             });
         }
         const { soundDeleteEnabled } = req.body;

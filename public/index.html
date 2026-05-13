@@ -1362,6 +1362,7 @@
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-actions">
+                    <button type="button" class="tts-toggle-btn" id="playQueueBtn" onclick="togglePlayQueue()" title="Play every currently-visible sound in order with a short gap between each. Click again to stop.">▶ Play all</button>
                     <div class="clip-menu-wrap" style="position:relative; display:inline-flex;">
                         <button type="button" class="tts-toggle-btn" id="clipBtn" onclick="toggleClipMenu()" title="Save the last N seconds of voice-channel audio">📎 Clip</button>
                         <div class="volume-menu hidden" id="clipMenu" style="min-width: 180px; right: 0; left: auto;">
@@ -1412,7 +1413,6 @@
                     <option value="plays-asc">Least played</option>
                 </select>
                 <label title="Only show sounds nobody has played yet"><input type="checkbox" id="filterZeroPlays" onchange="setZeroPlaysFilter(this.checked)"> 0 plays only</label>
-                <button type="button" id="playQueueBtn" class="btn btn-ghost btn-sm" onclick="togglePlayQueue()" title="Play every currently-visible sound in order, with a short pause between each. Click again to stop the queue." style="margin-left:auto;">▶ Play all</button>
                 <button type="button" class="tag-row-toggle" id="tagRowToggle" onclick="toggleTagRow()">▾ more</button>
             </div>
             <div class="sounds-tag-row-wrap">
@@ -1716,6 +1716,27 @@
                         </label>
                     </div>
                     <div class="sa-field-help">Controls who can capture the last N seconds of voice-channel audio (📎 Clip button + <code>/clip</code> slash command) and who can save those clips to the soundboard. Guests never have access. Per-user overrides on Superadmin → Users.</div>
+                </div>
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">Play-all queue</div>
+                    <div class="sa-toggle-group" style="margin-bottom: 0.8rem;">
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="playQueueEnabledUser" onchange="setPlayQueueEnabledSetting('user', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow users</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="playQueueEnabledAdmin" onchange="setPlayQueueEnabledSetting('admin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow admins</span>
+                        </label>
+                        <label class="sa-toggle">
+                            <input type="checkbox" id="playQueueEnabledSuperadmin" onchange="setPlayQueueEnabledSetting('superadmin', this.checked)">
+                            <span class="sa-toggle-track"></span>
+                            <span class="sa-toggle-label-text">Allow superadmin</span>
+                        </label>
+                    </div>
+                    <div class="sa-field-help">Who can use the ▶ Play all button (queues every visible sound and plays them sequentially with a 350 ms gap). Defaults: off for users (a 50-sound queue from a regular member is a fast way to get the bot kicked); on for admins / superadmin. Per-user overrides on Superadmin → Users.</div>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title">URL Streaming (YouTube / TikTok / etc.)</div>
@@ -4431,6 +4452,12 @@
                         if (el && d.clipEnabled[r] !== undefined) el.checked = d.clipEnabled[r] === true;
                     }
                 }
+                if (d.playQueueEnabled) {
+                    for (const r of ['user', 'admin', 'superadmin']) {
+                        const el = document.getElementById('playQueueEnabled' + r.charAt(0).toUpperCase() + r.slice(1));
+                        if (el && d.playQueueEnabled[r] !== undefined) el.checked = d.playQueueEnabled[r] === true;
+                    }
+                }
             }
             if (d.volume !== undefined && Number.isFinite(d.volume)) {
                 setVolume(String(Math.max(0, Math.min(1, d.volume))));
@@ -4443,6 +4470,8 @@
             if (clipMenuWrap) clipMenuWrap.style.display = (d.clipEnabled_self === true) ? '' : 'none';
             const clipsHamburger = document.querySelector('.header-menu-item[onclick*="openClips"]');
             if (clipsHamburger) clipsHamburger.style.display = (d.clipEnabled_self === true) ? '' : 'none';
+            const playQueueBtnEl = document.getElementById('playQueueBtn');
+            if (playQueueBtnEl) playQueueBtnEl.style.display = (d.playQueueEnabled_self === true) ? '' : 'none';
             _urlStreamMaxDurSelf = Number(d.urlStreamMaxDurationSec_self) || 0;
             const urlInfo = document.getElementById('urlStreamInfo');
             if (urlInfo && !urlInfo.dataset.dirty) {
@@ -4686,6 +4715,11 @@
         async function setClipEnabledSetting(role, enabled) {
             const obj = {}; obj[role] = !!enabled;
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clipEnabled: obj }) });
+            fetchSettings();
+        }
+        async function setPlayQueueEnabledSetting(role, enabled) {
+            const obj = {}; obj[role] = !!enabled;
+            await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playQueueEnabled: obj }) });
             fetchSettings();
         }
         async function setUrlStreamMaxDurSetting(role, val) {
@@ -5541,6 +5575,7 @@
             { key: 'sunoDailyLimit',          type: 'num',  label: 'Suno daily limit',         hint: 'Songs per day. 0 disables.' },
             { key: 'urlStreamEnabled',        type: 'bool', label: 'URL streaming enabled',    hint: 'Allow streaming YouTube/TikTok/etc. URLs.' },
             { key: 'clipEnabled',             type: 'bool', label: 'Voice clipping enabled',   hint: 'Allow capturing the last N seconds of voice-channel audio (📎 Clip + /clip) and saving clips to the soundboard.' },
+            { key: 'playQueueEnabled',        type: 'bool', label: 'Play-all queue enabled',   hint: 'Allow using the ▶ Play all button that queues every visible sound and plays them sequentially.' },
             { key: 'urlStreamMaxDurationSec', type: 'num',  label: 'URL stream max (s)',       hint: 'Max playable duration for URL streams.' },
             { key: 'userMaxDuration',         type: 'num',  label: 'Playback max (s)',         hint: 'Max length a single sound can play.' },
             { key: 'userCooldownSec',         type: 'num',  label: 'Playback cooldown (s)',    hint: 'Seconds between plays.' },
@@ -5584,6 +5619,7 @@
                 urlStreamEnabled: (settings.urlStreamEnabled || {})[role],
                 urlStreamMaxDurationSec: (settings.urlStreamMaxDurationSec || {})[role],
                 clipEnabled: (settings.clipEnabled || {})[role],
+                playQueueEnabled: (settings.playQueueEnabled || {})[role],
                 userMaxDuration: settings.userMaxDuration,
                 userCooldownSec: settings.userCooldownSec,
                 userUploadEnabled: settings.userUploadEnabled,
