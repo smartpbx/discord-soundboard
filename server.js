@@ -3786,6 +3786,8 @@ async function handleMovieNightPostButton(interaction, roomId) {
 // video as a Discord attachment so the animation plays inline for everyone.
 // ---------------------------------------------------------------------------
 const WHEEL_MAX_OPTIONS = 12;
+const WHEEL_SPIN_SEC = 5;
+const WHEEL_HOLD_SEC = 2;
 const WHEEL_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16', '#06b6d4', '#a855f7', '#eab308'];
 
 async function handleWheelCommand(interaction) {
@@ -3827,12 +3829,24 @@ async function handleWheelModalSubmit(interaction) {
     try {
         await renderWheelMp4({ title, options, winnerIdx, outPath: tmpPath });
         const attach = new AttachmentBuilder(tmpPath, { name: 'wheel.mp4' });
-        const titleLine = title ? `**${title}**\n` : '';
-        const winnerLine = `🎉 **${options[winnerIdx]}** wins!`;
-        await interaction.editReply({ content: titleLine + winnerLine, files: [attach] });
+        // Don't spoil the winner up front — Discord auto-plays the attached
+        // video on viewers' screens, so everyone watches the spin together.
+        // The winner reveal is sent as a follow-up timed to land roughly when
+        // the wheel itself lands on the winning slice (~5s + small delivery
+        // buffer).
+        const spinningLine = title ? `🎡 **${title}** — spinning the wheel…` : '🎡 **Spinning the wheel…**';
+        await interaction.editReply({ content: spinningLine, files: [attach] });
+        const SPIN_DELAY_MS = WHEEL_SPIN_SEC * 1000 + 400;
+        setTimeout(async () => {
+            try {
+                await interaction.followUp({ content: `🎉 **${options[winnerIdx]}** wins!` });
+            } catch (e) {
+                console.error('[wheel] winner follow-up failed:', e.message);
+            }
+        }, SPIN_DELAY_MS);
     } catch (err) {
         console.error('[wheel] render failed:', err);
-        await interaction.editReply({ content: 'Wheel render failed: ' + (err.message || 'unknown error') });
+        try { await interaction.editReply({ content: 'Wheel render failed: ' + (err.message || 'unknown error') }); } catch {}
     } finally {
         setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 30_000);
     }
@@ -3842,10 +3856,8 @@ function renderWheelMp4({ title, options, winnerIdx, outPath }) {
     const { createCanvas, GlobalFonts } = _wheelCanvas;
     const W = 720, H = 720;
     const FPS = 30;
-    const SPIN_SEC = 5;
-    const HOLD_SEC = 2;
-    const totalFrames = (SPIN_SEC + HOLD_SEC) * FPS;
-    const spinFrames = SPIN_SEC * FPS;
+    const totalFrames = (WHEEL_SPIN_SEC + WHEEL_HOLD_SEC) * FPS;
+    const spinFrames = WHEEL_SPIN_SEC * FPS;
     const slice = (Math.PI * 2) / options.length;
     // Final rotation lands the winner's slice center at the top pointer
     // (which is at angle -PI/2 in canvas coordinates).
