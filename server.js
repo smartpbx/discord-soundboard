@@ -3824,16 +3824,19 @@ async function handleWheelModalSubmit(interaction) {
         return interaction.reply({ content: 'Need at least 2 options (one per line).', flags: MessageFlags.Ephemeral });
     }
     const winnerIdx = Math.floor(Math.random() * options.length);
+    // Random landing position within the winning slice (15–85% from the
+    // slice start) so the pointer doesn't land dead-center every time and
+    // the result reads as genuinely random.
+    const sliceFrac = 0.15 + Math.random() * 0.70;
     await interaction.deferReply();
-    const tmpPath = path.join(require('os').tmpdir(), `wheel_${crypto.randomBytes(6).toString('hex')}.mp4`);
+    const tmpPath = path.join(require('os').tmpdir(), `wheel_${crypto.randomBytes(6).toString('hex')}.gif`);
     try {
-        await renderWheelMp4({ title, options, winnerIdx, outPath: tmpPath });
-        const attach = new AttachmentBuilder(tmpPath, { name: 'wheel.mp4' });
-        // Don't spoil the winner up front — Discord auto-plays the attached
-        // video on viewers' screens, so everyone watches the spin together.
+        await renderWheelGif({ title, options, winnerIdx, sliceFrac, outPath: tmpPath });
+        const attach = new AttachmentBuilder(tmpPath, { name: 'wheel.gif' });
+        // Don't spoil the winner up front — Discord auto-plays GIFs as soon
+        // as they come into view, so everyone watches the spin together.
         // The winner reveal is sent as a follow-up timed to land roughly when
-        // the wheel itself lands on the winning slice (~5s + small delivery
-        // buffer).
+        // the wheel itself lands on the winning slice.
         const spinningLine = title ? `🎡 **${title}** — spinning the wheel…` : '🎡 **Spinning the wheel…**';
         await interaction.editReply({ content: spinningLine, files: [attach] });
         const SPIN_DELAY_MS = WHEEL_SPIN_SEC * 1000 + 400;
@@ -3852,57 +3855,51 @@ async function handleWheelModalSubmit(interaction) {
     }
 }
 
-function renderWheelMp4({ title, options, winnerIdx, outPath }) {
-    const { createCanvas, GlobalFonts } = _wheelCanvas;
+async function renderWheelGif({ title, options, winnerIdx, sliceFrac, outPath }) {
+    const { createCanvas, GifEncoder } = _wheelCanvas;
     const W = 720, H = 720;
-    const FPS = 30;
-    const totalFrames = (WHEEL_SPIN_SEC + WHEEL_HOLD_SEC) * FPS;
+    const FPS = 15; // GIFs balloon quickly above 15 fps; 15 is the sweet spot
+    const FRAME_DELAY_MS = Math.round(1000 / FPS);
     const spinFrames = WHEEL_SPIN_SEC * FPS;
+    const holdFrames = WHEEL_HOLD_SEC * FPS;
     const slice = (Math.PI * 2) / options.length;
-    // Final rotation lands the winner's slice center at the top pointer
-    // (which is at angle -PI/2 in canvas coordinates).
-    const winnerCenter = winnerIdx * slice + slice / 2;
+    // Random offset within the winning slice (15–85% from the slice start);
+    // makes the result read as genuinely random instead of dead-center.
+    const winnerLanding = winnerIdx * slice + (typeof sliceFrac === 'number' ? sliceFrac : 0.5) * slice;
     const TOTAL_SPINS = 6;
-    const finalRotation = TOTAL_SPINS * Math.PI * 2 + (-Math.PI / 2 - winnerCenter);
-    const ffmpeg = spawn('ffmpeg', [
-        '-y', '-loglevel', 'error',
-        '-f', 'rawvideo', '-pix_fmt', 'rgba',
-        '-s', `${W}x${H}`, '-framerate', String(FPS),
-        '-i', 'pipe:0',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-preset', 'veryfast', '-crf', '23',
-        '-movflags', '+faststart',
-        outPath,
-    ], { stdio: ['pipe', 'ignore', 'pipe'] });
-    return new Promise((resolve, reject) => {
-        let stderrBuf = '';
-        ffmpeg.stderr?.on('data', (d) => { stderrBuf += d.toString(); });
-        ffmpeg.on('error', reject);
-        ffmpeg.on('exit', (code) => code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code + ': ' + stderrBuf.slice(-200))));
-        (async () => {
-            const canvas = createCanvas(W, H);
-            const ctx = canvas.getContext('2d');
-            for (let f = 0; f < totalFrames; f++) {
-                let rotation, showWinner = false;
-                if (f < spinFrames) {
-                    const t = f / spinFrames;
-                    const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
-                    rotation = finalRotation * eased;
-                } else {
-                    rotation = finalRotation;
-                    showWinner = true;
-                }
-                _drawWheelFrame(ctx, W, H, options, rotation, title, showWinner ? winnerIdx : null);
-                // @napi-rs/canvas has no toBuffer('raw'); pull pixels via
-                // getImageData and copy into a Node Buffer for ffmpeg.
-                const raw = Buffer.from(ctx.getImageData(0, 0, W, H).data.buffer);
-                if (!ffmpeg.stdin.write(raw)) {
-                    await new Promise((r) => ffmpeg.stdin.once('drain', r));
-                }
-            }
-            ffmpeg.stdin.end();
-        })().catch((e) => { try { ffmpeg.kill('SIGKILL'); } catch {} reject(e); });
-    });
+    const finalRotation = TOTAL_SPINS * Math.PI * 2 + (-Math.PI / 2 - winnerLanding);
+    // @napi-rs/canvas treats `repeat: 0` as "loop forever" and positive
+    // values as "loop N extra times after the first play". Neither is the
+    // "play once and freeze" behavior we want. Workaround: set repeat=0 +
+    // give the LAST frame a 60-second delay, so the winner banner sits for
+    // a full minute before the GIF eventually re-loops (by which time the
+    // chat moment is long over).
+    const TAIL_DELAY_MS = 60_000;
+    const enc = new GifEncoder(W, H, { repeat: 0, quality: 10 });
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
+    const renderFrame = (f) => {
+        let rotation, showWinner = false;
+        if (f < spinFrames) {
+            const t = f / spinFrames;
+            const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+            rotation = finalRotation * eased;
+        } else {
+            rotation = finalRotation;
+            showWinner = true;
+        }
+        _drawWheelFrame(ctx, W, H, options, rotation, title, showWinner ? winnerIdx : null);
+        return new Uint8Array(ctx.getImageData(0, 0, W, H).data.buffer);
+    };
+    // Spin + most of the hold at normal pace
+    const animatedFrames = spinFrames + Math.max(1, holdFrames - 1);
+    for (let f = 0; f < animatedFrames; f++) {
+        enc.addFrame(renderFrame(f), W, H, { delay: FRAME_DELAY_MS });
+    }
+    // Final winner frame: holds for a minute before any potential re-loop
+    enc.addFrame(renderFrame(animatedFrames), W, H, { delay: TAIL_DELAY_MS });
+    const buf = enc.finish();
+    fs.writeFileSync(outPath, buf);
 }
 
 function _drawWheelFrame(ctx, W, H, options, rotation, title, winnerIdx) {
