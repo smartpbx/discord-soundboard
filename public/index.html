@@ -9054,13 +9054,22 @@
                 const outcomeLabel = ev.passed
                     ? (ev.actionOk ? '✅ ' + (ev.type === 'kick' ? 'Disconnected' : 'Timed out ' + ev.timeoutMinutes + 'min') : '⚠️ Passed (action failed: ' + (ev.actionError || '?') + ')')
                     : '❌ ' + (ev.outcome === 'window-expired' ? 'Window expired' : ev.outcome === 'no-overtake-impossible' ? 'Not enough Yes' : 'Failed');
+                let votersCell = '';
+                if (Array.isArray(ev.voters) && ev.voters.length) {
+                    const yes = ev.voters.filter(v => v.choice === 'yes').map(v => v.name);
+                    const no = ev.voters.filter(v => v.choice === 'no').map(v => v.name);
+                    const parts = [];
+                    if (yes.length) parts.push('<span style="color:#57f287">✓ ' + yes.map(esc).join(', ') + '</span>');
+                    if (no.length) parts.push('<span style="color:#ed4245">✗ ' + no.map(esc).join(', ') + '</span>');
+                    votersCell = '<div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.2rem;">' + parts.join(' &nbsp; ') + '</div>';
+                }
                 return '<tr>'
                     + '<td style="padding: 0.35rem 0.5rem; color: var(--text-muted); font-family: monospace; font-size: 0.78rem;">' + esc(fmtTime(ev.when)) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem;">' + esc(ev.type) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(ev.targetDisplayName || ev.targetUsername || ev.targetUserId) + '">' + esc(ev.targetDisplayName || ev.targetUsername || ev.targetUserId) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(ev.initiatorDisplayName || ev.initiatorUsername || ev.initiatorUserId) + '">' + esc(ev.initiatorDisplayName || ev.initiatorUsername || ev.initiatorUserId) + '</td>'
                     + '<td style="padding: 0.35rem 0.5rem; font-family: monospace; font-size: 0.78rem;">' + ev.yes + ' / ' + ev.no + ' / ' + ev.eligible + '</td>'
-                    + '<td style="padding: 0.35rem 0.5rem;">' + esc(outcomeLabel) + (ev.reason ? '<div style="font-size: 0.72rem; color: var(--text-muted);">' + esc(ev.reason) + '</div>' : '') + '</td>'
+                    + '<td style="padding: 0.35rem 0.5rem;">' + esc(outcomeLabel) + (ev.reason ? '<div style="font-size: 0.72rem; color: var(--text-muted);">' + esc(ev.reason) + '</div>' : '') + votersCell + '</td>'
                     + '</tr>';
             }).join('');
         }

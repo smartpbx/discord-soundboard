@@ -1926,6 +1926,19 @@ async function finalizeVote(vote, outcome) {
     const eligibleCount = vote.eligible.size;
     const passed = yesCount >= vote.threshold;
 
+    // Resolve voters to displayName + choice for the persisted audit trail
+    // and the final Discord embed.
+    const guild = client.guilds.cache.get(vote.guildId);
+    const voterDetails = [];
+    for (const [userId, choice] of vote.voters) {
+        const m = guild?.members?.cache?.get(userId);
+        voterDetails.push({
+            userId,
+            name: m?.displayName || m?.user?.username || userId,
+            choice,
+        });
+    }
+
     let actionResult = null;
     if (passed) actionResult = await executeVoteAction(vote);
     if (passed && actionResult?.ok) {
@@ -1950,6 +1963,7 @@ async function finalizeVote(vote, outcome) {
         actionOk: actionResult?.ok === true,
         actionError: actionResult?.ok === false ? (actionResult.error || actionResult.reason || 'unknown') : null,
         timeoutMinutes: vote.type === 'timeout' ? vote.timeoutMinutes : null,
+        voters: voterDetails,
     });
     statsDb.recordAdminAction({
         actor: vote.initiatorUsername || vote.initiatorUserId,
@@ -1965,6 +1979,10 @@ async function finalizeVote(vote, outcome) {
             : `❌ **Vote failed** — ${outcome === 'no-overtake-impossible' ? 'Yes can no longer reach threshold.' : outcome === 'window-expired' ? 'Window expired.' : 'Insufficient yes votes.'}`,
         `Final tally: **${yesCount} Yes** / **${noCount} No** / ${eligibleCount - yesCount - noCount} no-vote (threshold ${vote.threshold}).`,
     ];
+    const yesNames = voterDetails.filter(v => v.choice === 'yes').map(v => v.name);
+    const noNames = voterDetails.filter(v => v.choice === 'no').map(v => v.name);
+    if (yesNames.length) summaryLines.push(`**Yes:** ${yesNames.join(', ')}`);
+    if (noNames.length) summaryLines.push(`**No:** ${noNames.join(', ')}`);
     const embed = new EmbedBuilder()
         .setTitle(vote.type === 'kick' ? (passed ? 'Vote-kick passed' : 'Vote-kick failed') : (passed ? 'Vote-timeout passed' : 'Vote-timeout failed'))
         .setColor(passed && actionResult?.ok ? 0x57f287 : 0x99aab5)
