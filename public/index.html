@@ -971,6 +971,7 @@
                     <button type="button" class="header-menu-item" id="headerMenuTheme" onclick="toggleTheme(); updateHeaderMenuThemeLabel();">Theme: <span id="headerMenuThemeLabel">Dark</span></button>
                     <button type="button" class="header-menu-item user-only hidden" id="headerMenuChangePassword" onclick="openChangePasswordModal(); closeHeaderMenu();">Change password</button>
                     <button type="button" class="header-menu-item hidden" id="headerMenuEntranceExit" onclick="openEntranceExitModal(); closeHeaderMenu();">Entrance / exit sounds</button>
+                    <button type="button" class="header-menu-item" onclick="openClips(); closeHeaderMenu();">Clips<span id="clipsCountBadge" class="pending-badge hidden">0</span></button>
                     <button type="button" class="header-menu-item" onclick="openShortcuts(); closeHeaderMenu();">Keyboard shortcuts</button>
                     <button type="button" class="header-menu-item" onclick="openWhatsNew(); closeHeaderMenu();">What's new<span class="pending-badge hidden" id="whatsNewBadge">•</span></button>
                     <button type="button" class="header-menu-item" onclick="logout(); closeHeaderMenu();">Log out</button>
@@ -1648,6 +1649,22 @@
                         </div>
                     </div>
                     <div class="sa-field-help">When enabled for a role, users in that role can paste a video URL and stream its audio into Discord. yt-dlp-supported sites only; Instagram / TikTok may be brittle. Set a max duration to 0 to disable the length cap for that role.</div>
+                </div>
+
+                <div class="superadmin-section">
+                    <div class="superadmin-section-title">
+                        YouTube Cookie Session
+                        <span class="sa-title-meta" id="ytSessionStatusBadge">—</span>
+                    </div>
+                    <div class="sa-field-help" style="margin-bottom:0.7rem;">YouTube blocks yt-dlp from datacenter IPs unless requests carry session cookies from a logged-in browser. A persistent Chromium runs in CT 109 under Xvfb and holds the session; click <strong>Open browser</strong> to log into a throwaway Google account once. After login, click <strong>Enable cookies for yt-dlp</strong>.</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.6rem;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="openYtSessionBrowser()">Open browser</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="ytSessionEnableBtn" onclick="toggleYtSessionCookies()">Enable cookies for yt-dlp</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="testYtSessionCookies()" id="ytSessionTestBtn">Test cookies</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="restartYtChromium()">Restart Chromium</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="refreshYtSessionStatus()" title="Refresh this panel">↻</button>
+                    </div>
+                    <div id="ytSessionLastTest" class="sa-field-help" style="font-family: var(--font-mono, monospace); font-size:0.78rem; color: var(--text-muted); min-height:1.2em;">No test run yet.</div>
                 </div>
             </div>
 
@@ -2739,6 +2756,120 @@
             if (el) el.classList.add('hidden');
         }
 
+        // ---- /clip preview / trim / save-as-sound -----------------------
+        let _clipsCache = [];
+        async function openClips() {
+            const overlay = document.getElementById('clipsOverlay');
+            if (!overlay) return;
+            overlay.classList.remove('hidden');
+            await _refreshClipsList();
+        }
+        function closeClips() {
+            const el = document.getElementById('clipsOverlay');
+            if (el) el.classList.add('hidden');
+        }
+        async function _refreshClipsList() {
+            const body = document.getElementById('clipsBody');
+            if (!body) return;
+            try {
+                const res = await api('/api/clips');
+                if (!res || !res.ok) { body.textContent = 'Failed to load clips.'; return; }
+                _clipsCache = await res.json();
+                _renderClips();
+                _refreshClipsCountBadge();
+            } catch (err) {
+                body.textContent = 'Failed to load clips: ' + (err && err.message || 'unknown');
+            }
+        }
+        function _renderClips() {
+            const body = document.getElementById('clipsBody');
+            if (!body) return;
+            if (!_clipsCache.length) {
+                body.innerHTML = '<div style="padding:1rem; color:var(--text-muted); text-align:center;">No clips yet. In Discord, run <code>/clip</code> (default 30 seconds) while people are talking.</div>';
+                return;
+            }
+            const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+            body.innerHTML = _clipsCache.map(c => {
+                const when = new Date(c.createdAt).toLocaleString();
+                const by = esc(c.byUserTag || c.byUserId || '—');
+                const dur = Number(c.durationSec) || 0;
+                const saved = c.savedToSoundboard ? '<span style="color:var(--accent); font-size:0.78rem;">saved as ' + esc(c.savedToSoundboard) + '</span>' : '';
+                return (
+                    '<div class="clip-row" data-id="' + esc(c.id) + '" style="border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.75rem; background:var(--surface);">' +
+                    '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.4rem;">' +
+                    '<div><strong>' + dur + 's</strong> · <span style="color:var(--text-muted); font-size:0.82rem;">' + when + ' · ' + by + '</span></div>' +
+                    saved +
+                    '</div>' +
+                    '<audio controls preload="none" src="/api/clips/' + esc(c.id) + '/audio" style="width:100%; margin-bottom:0.5rem;"></audio>' +
+                    '<div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.4rem;">' +
+                    '<label style="font-size:0.78rem; color:var(--text-muted);">Trim:</label>' +
+                    '<input type="number" min="0" max="' + dur + '" step="0.1" value="0" data-field="start" style="width:75px; padding:0.25rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"> s' +
+                    '<span style="color:var(--text-muted);">→</span>' +
+                    '<input type="number" min="0" max="' + dur + '" step="0.1" value="' + dur + '" data-field="end" style="width:75px; padding:0.25rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;"> s' +
+                    '<input type="text" placeholder="Name (e.g. that one moment)" data-field="name" style="flex:1; min-width:200px; padding:0.25rem 0.5rem; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font:inherit;">' +
+                    '</div>' +
+                    '<div style="display:flex; gap:0.4rem; justify-content:flex-end;">' +
+                    '<button type="button" class="btn btn-ghost" onclick="_clipDelete(\'' + esc(c.id) + '\')">Discard</button>' +
+                    '<button type="button" class="btn btn-primary" onclick="_clipSaveAsSound(\'' + esc(c.id) + '\')">Save to soundboard</button>' +
+                    '</div>' +
+                    '</div>'
+                );
+            }).join('');
+        }
+        async function _clipSaveAsSound(id) {
+            const row = document.querySelector('.clip-row[data-id="' + id + '"]');
+            if (!row) return;
+            const startSec = parseFloat(row.querySelector('[data-field="start"]').value) || 0;
+            const endSec = parseFloat(row.querySelector('[data-field="end"]').value) || 0;
+            const displayName = String(row.querySelector('[data-field="name"]').value || '').trim();
+            if (!displayName) { showToast('Give it a name first', 'error'); return; }
+            if (endSec <= startSec) { showToast('End must be greater than start', 'error'); return; }
+            const res = await api('/api/clips/' + encodeURIComponent(id) + '/save-as-sound', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ startSec, endSec, displayName }),
+            });
+            if (res && res.ok) {
+                const d = await res.json();
+                showToast('Saved as "' + d.displayName + '"', 'success');
+                await _refreshClipsList();
+                if (typeof fetchSounds === 'function') fetchSounds();
+            } else if (res) {
+                const d = await res.json().catch(() => ({}));
+                showToast(d.error || 'Save failed', 'error');
+            }
+        }
+        async function _clipDelete(id) {
+            if (!(await confirmModal('Discard this clip? The audio file will be deleted.', { okText: 'Discard', danger: true }))) return;
+            const res = await api('/api/clips/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (res && res.ok) { await _refreshClipsList(); showToast('Discarded.', 'success'); }
+            else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
+        }
+        function _refreshClipsCountBadge() {
+            const badge = document.getElementById('clipsCountBadge');
+            if (!badge) return;
+            const unsaved = _clipsCache.filter(c => !c.savedToSoundboard).length;
+            if (unsaved > 0) {
+                badge.textContent = String(unsaved);
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+        // Poll clip count once at startup + every 30s so the badge reflects
+        // new /clip-created entries without needing the modal to be open.
+        async function _pollClipsCount() {
+            try {
+                const res = await api('/api/clips');
+                if (res && res.ok) {
+                    _clipsCache = await res.json();
+                    _refreshClipsCountBadge();
+                }
+            } catch {}
+        }
+        setTimeout(_pollClipsCount, 2000);
+        setInterval(_pollClipsCount, 30_000);
+
         // Poll /api/version every 60s — if the running SHA diverges from the
         // one the page loaded with, show the banner. Stop polling once the
         // banner is visible (user has been notified).
@@ -3409,11 +3540,12 @@
             // sounds view visible underneath so closing the modal returns the
             // user to exactly the state they left.
             document.getElementById('superadminView').classList.toggle('hidden', tab !== 'superadmin');
-            if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); }
+            if (tab === 'superadmin') { fetchGuestHistory(); fetchBlockedIPs(); fetchPendingUploads(); fetchPendingSignups(); fetchUsers(); refreshYtSessionStatus(); }
         }
         function switchSuperadminTab(panelId) {
             document.querySelectorAll('.superadmin-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panelId));
             document.querySelectorAll('.superadmin-panel').forEach(p => p.classList.toggle('active', p.id === 'superadminPanel' + panelId.charAt(0).toUpperCase() + panelId.slice(1)));
+            if (panelId === 'access') { refreshYtSessionStatus(); }
             if (panelId === 'ttsVoices') { fetchTtsVoicesAdmin(); fetchTrainJobs(); }
             if (panelId === 'activity') { renderActivityHeatmap(); fetchPlayAudit(); fetchAdminActions(); }
             if (panelId === 'guests') { fetchCooldownOverrides(); }
@@ -4104,6 +4236,87 @@
         async function setUrlStreamMaxDurSetting(role, val) {
             const obj = {}; obj[role] = Number(val);
             await api('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urlStreamMaxDurationSec: obj }) });
+        }
+
+        // ---------------- YouTube cookie session (Tier-1 bot-wall bypass) ----------------
+        async function refreshYtSessionStatus() {
+            const badge = document.getElementById('ytSessionStatusBadge');
+            const last = document.getElementById('ytSessionLastTest');
+            const toggleBtn = document.getElementById('ytSessionEnableBtn');
+            try {
+                const r = await api('/api/admin/yt-session/status');
+                const d = await r.json();
+                if (badge) badge.textContent = d.cookiesFromBrowser ? 'Cookies: enabled' : 'Cookies: not enabled';
+                if (badge) badge.style.color = d.cookiesFromBrowser ? 'var(--success, #4ade80)' : 'var(--warning, #fbbf24)';
+                if (toggleBtn) toggleBtn.textContent = d.cookiesFromBrowser ? 'Disable cookies' : 'Enable cookies for yt-dlp';
+                if (last) {
+                    if (d.lastTest) {
+                        const t = new Date(d.lastTest.ts).toLocaleString();
+                        last.textContent = (d.lastTest.ok ? '✓ ' : '✗ ') + t + ' — ' + d.lastTest.message;
+                        last.style.color = d.lastTest.ok ? 'var(--success, #4ade80)' : 'var(--danger, #ef4444)';
+                    } else {
+                        last.textContent = 'No test run yet.';
+                        last.style.color = 'var(--text-muted)';
+                    }
+                }
+                window._ytSessionStatus = d;
+            } catch (e) {
+                if (badge) badge.textContent = '— (unavailable)';
+            }
+        }
+
+        function openYtSessionBrowser() {
+            const d = window._ytSessionStatus;
+            if (d && d.novncUrl) {
+                window.open(d.novncUrl, '_blank', 'noopener');
+            } else {
+                // Fall back to the well-known path if status hasn't loaded yet.
+                window.open('/admin/yt-vnc/vnc.html?autoconnect=true&resize=remote&reconnect=true&path=' + encodeURIComponent('admin/yt-vnc/websockify'), '_blank', 'noopener');
+            }
+        }
+
+        async function testYtSessionCookies() {
+            const btn = document.getElementById('ytSessionTestBtn');
+            const last = document.getElementById('ytSessionLastTest');
+            if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+            if (last) { last.textContent = 'Probing yt-dlp…'; last.style.color = 'var(--text-muted)'; }
+            try {
+                const r = await api('/api/admin/yt-session/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const d = await r.json();
+                if (last) {
+                    const t = new Date(d.ts).toLocaleString();
+                    last.textContent = (d.ok ? '✓ ' : '✗ ') + t + ' — ' + d.message;
+                    last.style.color = d.ok ? 'var(--success, #4ade80)' : 'var(--danger, #ef4444)';
+                }
+                showToast(d.ok ? 'Cookies working' : 'Cookies not working', d.ok ? 'success' : 'error');
+            } catch (e) {
+                if (last) { last.textContent = 'Request failed: ' + (e?.message || e); last.style.color = 'var(--danger, #ef4444)'; }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Test cookies'; }
+            }
+        }
+
+        async function toggleYtSessionCookies() {
+            const d = window._ytSessionStatus || {};
+            const target = d.cookiesFromBrowser ? 'off' : 'on';
+            try {
+                const r = await api('/api/admin/yt-session/cookies/' + target, { method: 'POST' });
+                if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.error || 'request failed'); }
+                showToast(target === 'on' ? 'Cookies enabled' : 'Cookies disabled', 'success');
+                await refreshYtSessionStatus();
+            } catch (e) {
+                showToast('Toggle failed: ' + (e?.message || e), 'error');
+            }
+        }
+
+        async function restartYtChromium() {
+            if (!confirm('Restart the persistent Chromium? Any unsaved state in the YouTube tab will be lost.')) return;
+            try {
+                await api('/api/admin/yt-session/restart-chromium', { method: 'POST' });
+                showToast('Chromium restarting — give it ~10s before reopening', 'success');
+            } catch (e) {
+                showToast('Restart failed: ' + (e?.message || e), 'error');
+            }
         }
 
         // ---------------- URL streaming (card with preview/trim/import) ----------------
@@ -10526,6 +10739,14 @@
             <h3>What's New <button type="button" class="shortcuts-close" onclick="closeWhatsNew()" title="Close">✕</button></h3>
             <div class="whats-new-meta" id="whatsNewMeta">Loading…</div>
             <div id="whatsNewBody">Loading changelog…</div>
+        </div>
+    </div>
+
+    <div class="whats-new-overlay hidden" id="clipsOverlay" onclick="if(event.target===this)closeClips()">
+        <div class="whats-new-modal" style="max-width: 720px;">
+            <h3>Clips <button type="button" class="shortcuts-close" onclick="closeClips()" title="Close">✕</button></h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin:0 0 0.75rem;">Use <code>/clip</code> in Discord to capture the last N seconds of voice-channel audio. Preview, trim, and save the result as a regular sound below.</p>
+            <div id="clipsBody" style="display:flex; flex-direction:column; gap:0.6rem;">Loading…</div>
         </div>
     </div>
 

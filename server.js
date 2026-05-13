@@ -1122,7 +1122,9 @@ app.set('trust proxy', 1);
 app.use(express.static('public'));
 app.use(express.json());
 app.use(require('cookie-parser')());
-app.use(require('express-session')({
+// Held in a named ref so the WS upgrade handler (yt-session noVNC proxy) can
+// authenticate WebSocket clients with the same session cookie.
+const sessionMiddleware = require('express-session')({
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
@@ -1137,7 +1139,8 @@ app.use(require('express-session')({
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
     },
-}));
+});
+app.use(sessionMiddleware);
 
 
 // Parse users from env + data/users.json (approved signups)
@@ -1942,6 +1945,10 @@ async function registerSlashCommands() {
         new SlashCommandBuilder()
             .setName('rejoin')
             .setDescription("Move the soundboard into your current voice channel (or bounce it if it's stuck)"),
+        new SlashCommandBuilder()
+            .setName('clip')
+            .setDescription('Save the last N seconds of voice-channel audio as a previewable clip')
+            .addIntegerOption(o => o.setName('seconds').setDescription(`Seconds to clip (${CLIP_MIN_REQUEST_SEC}-${CLIP_MAX_REQUEST_SEC}, default ${CLIP_DEFAULT_REQUEST_SEC})`).setRequired(false).setMinValue(CLIP_MIN_REQUEST_SEC).setMaxValue(CLIP_MAX_REQUEST_SEC)),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2025,6 +2032,7 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'votekick') return handleVoteStart(interaction, 'kick');
             if (interaction.commandName === 'votetimeout') return handleVoteStart(interaction, 'timeout');
             if (interaction.commandName === 'rejoin') return handleRejoinCommand(interaction);
+            if (interaction.commandName === 'clip') return handleClipCommand(interaction);
         } else if (interaction.isButton?.()) {
             const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
             if (m) return handleVoteButton(interaction, m[1], m[2]);
@@ -2207,6 +2215,188 @@ function stopVoiceTriggerCapture() {
     voiceTriggerSpeakers.clear();
 }
 
+// ---------------------------------------------------------------------------
+// /clip — rolling buffer of recent voice-channel audio so users can rip the
+// last N seconds out of the channel as a previewable / editable sound clip.
+// Subscribes to every active speaker separately from the voice-trigger
+// pipeline (so /clip works even when triggers are disabled) and keeps each
+// user's last CLIP_BUFFER_MAX_SEC of 48 kHz stereo PCM in memory.
+// ---------------------------------------------------------------------------
+const CLIP_SAMPLE_RATE = 48000;
+const CLIP_CHANNELS = 2;
+const CLIP_BYTES_PER_SEC = CLIP_SAMPLE_RATE * CLIP_CHANNELS * 2; // 16-bit
+const CLIP_BUFFER_MAX_SEC = 180;
+const CLIP_MIN_REQUEST_SEC = 5;
+const CLIP_MAX_REQUEST_SEC = 120;
+const CLIP_DEFAULT_REQUEST_SEC = 30;
+const CLIP_RETAIN_COUNT = 30;
+const CLIPS_DIR = path.join(DATA_DIR, 'clips');
+const CLIPS_INDEX_PATH = path.join(DATA_DIR, 'clips.json');
+try { fs.mkdirSync(CLIPS_DIR, { recursive: true }); } catch {}
+
+const clipBuffers = new Map();           // userId -> { chunks: [{pcm, ts}], totalBytes }
+const clipCaptureSpeakers = new Map();   // userId -> { opusStream, decoder }
+let clipCaptureAttachedReceiver = null;
+
+function appendClipChunk(userId, pcm) {
+    let buf = clipBuffers.get(userId);
+    if (!buf) {
+        buf = { chunks: [], totalBytes: 0 };
+        clipBuffers.set(userId, buf);
+    }
+    buf.chunks.push({ pcm, ts: Date.now() });
+    buf.totalBytes += pcm.length;
+    const cap = CLIP_BUFFER_MAX_SEC * CLIP_BYTES_PER_SEC;
+    while (buf.totalBytes > cap && buf.chunks.length > 1) {
+        const dropped = buf.chunks.shift();
+        buf.totalBytes -= dropped.pcm.length;
+    }
+}
+
+// Walk every speaker's ring buffer and lay their audio onto a fresh stereo
+// timeline. Overlapping audio is sample-summed with clipping; gaps stay
+// silent. Wall-clock arrival timestamps drive placement.
+function mixClipToPcm(seconds) {
+    const totalShorts = seconds * CLIP_SAMPLE_RATE * CLIP_CHANNELS;
+    const out = new Int16Array(totalShorts);
+    const now = Date.now();
+    const startMs = now - seconds * 1000;
+    for (const [, buf] of clipBuffers) {
+        for (const chunk of buf.chunks) {
+            if (chunk.ts + (chunk.pcm.length / CLIP_BYTES_PER_SEC) * 1000 < startMs) continue;
+            if (chunk.ts > now) continue;
+            let outShortOffset = Math.floor(((chunk.ts - startMs) / 1000) * CLIP_SAMPLE_RATE) * CLIP_CHANNELS;
+            let chunkShortStart = 0;
+            if (outShortOffset < 0) {
+                chunkShortStart = -outShortOffset;
+                outShortOffset = 0;
+            }
+            const chunkInt16 = new Int16Array(chunk.pcm.buffer, chunk.pcm.byteOffset, chunk.pcm.length / 2);
+            const copyLen = Math.min(chunkInt16.length - chunkShortStart, totalShorts - outShortOffset);
+            for (let i = 0; i < copyLen; i++) {
+                const sum = out[outShortOffset + i] + chunkInt16[chunkShortStart + i];
+                out[outShortOffset + i] = sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum;
+            }
+        }
+    }
+    return Buffer.from(out.buffer, out.byteOffset, out.byteLength);
+}
+
+function encodeClipPcmToMp3(pcmBuffer) {
+    return new Promise((resolve, reject) => {
+        const ff = spawn('ffmpeg', [
+            '-nostdin', '-y',
+            '-f', 's16le', '-ar', String(CLIP_SAMPLE_RATE), '-ac', String(CLIP_CHANNELS),
+            '-i', 'pipe:0',
+            '-c:a', 'libmp3lame', '-b:a', '192k',
+            '-f', 'mp3', 'pipe:1',
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        const chunks = [];
+        ff.stdout.on('data', c => chunks.push(c));
+        ff.stderr.on('data', () => {});
+        ff.on('error', reject);
+        ff.on('close', code => {
+            if (code !== 0) return reject(new Error('ffmpeg exit ' + code));
+            resolve(Buffer.concat(chunks));
+        });
+        ff.stdin.end(pcmBuffer);
+    });
+}
+
+function loadClipsIndex() {
+    try {
+        const raw = fs.readFileSync(CLIPS_INDEX_PATH, 'utf8');
+        const data = JSON.parse(raw);
+        return Array.isArray(data) ? data : [];
+    } catch { return []; }
+}
+function saveClipsIndex(arr) {
+    writeJsonAtomic(CLIPS_INDEX_PATH, arr);
+}
+
+function startClipCapture() {
+    if (!currentConnection) return;
+    const receiver = currentConnection.receiver;
+    if (clipCaptureAttachedReceiver === receiver) return;
+    clipCaptureAttachedReceiver = receiver;
+    receiver.speaking.on('start', (userId) => {
+        if (clipCaptureAttachedReceiver !== receiver) return;
+        if (clipCaptureSpeakers.has(userId)) return;
+        try {
+            const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 800 } });
+            const decoder = new prism.opus.Decoder({ rate: CLIP_SAMPLE_RATE, channels: CLIP_CHANNELS, frameSize: 960 });
+            opusStream.pipe(decoder);
+            decoder.on('data', (chunk) => { try { appendClipChunk(userId, Buffer.from(chunk)); } catch {} });
+            let cleanedUp = false;
+            const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
+                try { opusStream.destroy(); } catch {}
+                try { decoder.destroy(); } catch {}
+                clipCaptureSpeakers.delete(userId);
+            };
+            opusStream.on('end', cleanup);
+            opusStream.on('error', cleanup);
+            clipCaptureSpeakers.set(userId, { opusStream, decoder });
+        } catch (err) {
+            console.error('[clip] capture attach failed for', userId, err.message);
+        }
+    });
+    console.log('[clip] capture attached to receiver');
+}
+
+function stopClipCapture() {
+    clipCaptureAttachedReceiver = null;
+    for (const [, entry] of clipCaptureSpeakers) {
+        try { entry.opusStream?.destroy?.(); } catch {}
+        try { entry.decoder?.destroy?.(); } catch {}
+    }
+    clipCaptureSpeakers.clear();
+    clipBuffers.clear();
+}
+
+async function handleClipCommand(interaction) {
+    if (!activeGuildId || !currentConnection) {
+        return interaction.reply({ content: "I'm not in a voice channel right now. Use `/rejoin` first.", flags: MessageFlags.Ephemeral });
+    }
+    const requested = interaction.options.getInteger('seconds') ?? CLIP_DEFAULT_REQUEST_SEC;
+    const seconds = Math.max(CLIP_MIN_REQUEST_SEC, Math.min(CLIP_MAX_REQUEST_SEC, requested));
+    if (clipBuffers.size === 0) {
+        return interaction.reply({ content: 'No voice audio has been captured yet — someone has to be talking first.', flags: MessageFlags.Ephemeral });
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+        const pcm = mixClipToPcm(seconds);
+        const mp3 = await encodeClipPcmToMp3(pcm);
+        const id = 'clip_' + crypto.randomBytes(6).toString('hex');
+        const filename = id + '.mp3';
+        fs.writeFileSync(path.join(CLIPS_DIR, filename), mp3);
+        const arr = loadClipsIndex();
+        const meta = {
+            id,
+            filename,
+            createdAt: Date.now(),
+            durationSec: seconds,
+            byUserId: String(interaction.user?.id || ''),
+            byUserTag: interaction.user?.tag || null,
+            channelId: lastChannelId,
+            guildId: interaction.guildId,
+            savedToSoundboard: null,
+        };
+        arr.unshift(meta);
+        while (arr.length > CLIP_RETAIN_COUNT) {
+            const dropped = arr.pop();
+            try { fs.unlinkSync(path.join(CLIPS_DIR, dropped.filename)); } catch {}
+        }
+        saveClipsIndex(arr);
+        console.log(`[clip] saved ${id} (${seconds}s) for ${meta.byUserTag || meta.byUserId}`);
+        return interaction.editReply({ content: `Saved the last **${seconds}s** as \`${id}\`. Open the soundboard → ☰ menu → **Clips** to preview, trim, and save it as a sound.` });
+    } catch (err) {
+        console.error('[clip] failed:', err);
+        try { await interaction.editReply({ content: 'Clip failed: ' + (err.message || 'unknown error') }); } catch {}
+    }
+}
+
 function handleSpeechResult(userId, text, firedThisUtterance = null) {
     const normalized = normalizeTriggerPhrase(text);
     if (!normalized) return;
@@ -2338,6 +2528,7 @@ function joinChannelById(channel) {
     attachVoiceConnectionListeners(currentConnection);
     currentConnection.subscribe(player);
     startVoiceTriggerCapture();
+    startClipCapture();
     return currentConnection;
 }
 
@@ -2624,6 +2815,7 @@ function processTtsQueue() {
 function leaveVoiceChannel() {
     if (activeGuildId) {
         stopVoiceTriggerCapture();
+        stopClipCapture();
         player.stop();
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
@@ -4686,10 +4878,15 @@ const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
 
 // Args applied to every yt-dlp invocation. The android/ios player clients
 // avoid YouTube's 'Sign in to confirm you're not a bot' wall that hits the
-// default web client, and also expose Shorts formats. YTDLP_COOKIES_FILE
-// lets an operator point at an exported cookies.txt for gated content.
+// default web client, and also expose Shorts formats. Cookies are pulled
+// from one of two sources, in order of precedence:
+//   YTDLP_COOKIES_FROM_BROWSER -- e.g. "chromium:/opt/discord-soundboard/yt-profile".
+//     Used by the noVNC-hosted Chromium session that the superadmin panel manages.
+//   YTDLP_COOKIES_FILE -- an exported Netscape cookies.txt for ad-hoc gated content.
 function ytdlpCommonArgs() {
     const args = ['--extractor-args', 'youtube:player_client=android,ios,web'];
+    const fromBrowser = (process.env.YTDLP_COOKIES_FROM_BROWSER || '').trim();
+    if (fromBrowser) args.push('--cookies-from-browser', fromBrowser);
     const cookies = (process.env.YTDLP_COOKIES_FILE || '').trim();
     if (cookies) args.push('--cookies', cookies);
     const extra = (process.env.YTDLP_EXTRA_ARGS || '').trim();
@@ -5127,6 +5324,100 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         console.error('[url-stream] fatal', err);
         res.status(500).json({ error: err.message || 'Failed to start stream' });
     }
+});
+
+// ============================================================
+// YouTube cookie-session (Tier-1 bot-wall bypass)
+// ============================================================
+// A persistent Chromium runs under Xvfb on the host (yt-chromium.service),
+// keeping a logged-in YouTube tab alive so yt-dlp can read its cookies via
+// --cookies-from-browser. Superadmins reach the Chromium UI through a
+// reverse-proxied noVNC tunnel mounted at /admin/yt-vnc/.
+
+const YT_NOVNC_HOST = '127.0.0.1';
+const YT_NOVNC_PORT = 6081;
+const YT_VNC_PROXY_PREFIX = '/admin/yt-vnc';
+const YT_TEST_CANARY = 'https://www.youtube.com/shorts/D84MXHJiqz4';
+let ytSessionLastTest = null; // { ts, ok, message, url }
+
+app.get('/api/admin/yt-session/status', requireSuperadmin, (req, res) => {
+    const fromBrowser = (process.env.YTDLP_COOKIES_FROM_BROWSER || '').trim();
+    const novncQuery = 'autoconnect=true&resize=remote&reconnect=true&path=' + encodeURIComponent(YT_VNC_PROXY_PREFIX.slice(1) + '/websockify');
+    res.json({
+        cookiesFromBrowser: fromBrowser || null,
+        novncUrl: `${YT_VNC_PROXY_PREFIX}/vnc.html?${novncQuery}`,
+        lastTest: ytSessionLastTest,
+    });
+});
+
+app.post('/api/admin/yt-session/test', requireSuperadmin, async (req, res) => {
+    const supplied = validateStreamUrl(req.body?.url);
+    const canary = supplied || YT_TEST_CANARY;
+    const r = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', canary], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
+    const ok = r.code === 0;
+    let message = '';
+    if (ok) {
+        try { message = (JSON.parse(r.stdout || '{}').title) || 'OK'; } catch { message = 'OK'; }
+    } else {
+        message = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' / ') || 'unknown error';
+    }
+    ytSessionLastTest = { ts: Date.now(), ok, message, url: canary };
+    res.json(ytSessionLastTest);
+});
+
+app.post('/api/admin/yt-session/restart-chromium', requireSuperadmin, (req, res) => {
+    const cp = require('child_process');
+    cp.spawn('systemctl', ['restart', 'yt-chromium.service'], { stdio: 'ignore', detached: true }).unref();
+    res.json({ ok: true });
+});
+
+// Toggle YTDLP_COOKIES_FROM_BROWSER for both the live process and the .env
+// file so the setting survives restarts. No service restart needed —
+// ytdlpCommonArgs() reads process.env on every call.
+app.post('/api/admin/yt-session/cookies/:state', requireSuperadmin, (req, res) => {
+    const state = req.params.state;
+    if (state !== 'on' && state !== 'off') return res.status(400).json({ error: 'state must be on|off' });
+    const profileDefault = 'chromium:/opt/discord-soundboard/yt-profile';
+    const envPath = path.join(__dirname, '.env');
+    let raw = '';
+    try { raw = fs.readFileSync(envPath, 'utf8'); } catch { raw = ''; }
+    // Remove any existing definitions (commented or not) to keep the file tidy.
+    const lines = raw.split(/\r?\n/).filter(l => !/^\s*#?\s*YTDLP_COOKIES_FROM_BROWSER\s*=/.test(l));
+    if (state === 'on') {
+        lines.push(`YTDLP_COOKIES_FROM_BROWSER=${profileDefault}`);
+        process.env.YTDLP_COOKIES_FROM_BROWSER = profileDefault;
+    } else {
+        lines.push(`# YTDLP_COOKIES_FROM_BROWSER=${profileDefault}`);
+        delete process.env.YTDLP_COOKIES_FROM_BROWSER;
+    }
+    // Strip trailing empty lines, then end with one newline.
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+    try {
+        fs.writeFileSync(envPath, lines.join('\n') + '\n', { mode: 0o600 });
+    } catch (e) {
+        return res.status(500).json({ error: 'Failed to write .env: ' + e.message });
+    }
+    res.json({ ok: true, cookiesFromBrowser: state === 'on' ? profileDefault : null });
+});
+
+// Reverse-proxy regular HTTP under /admin/yt-vnc/* to the local websockify.
+// req.url has the prefix stripped by app.use(prefix, ...).
+const ytProxyAgent = new (require('http').Agent)({ keepAlive: true });
+app.use(YT_VNC_PROXY_PREFIX, requireSuperadmin, (req, res) => {
+    const upstreamPath = req.url || '/';
+    const upstream = require('http').request({
+        host: YT_NOVNC_HOST,
+        port: YT_NOVNC_PORT,
+        method: req.method,
+        path: upstreamPath,
+        headers: { ...req.headers, host: `${YT_NOVNC_HOST}:${YT_NOVNC_PORT}` },
+        agent: ytProxyAgent,
+    }, (upRes) => {
+        res.writeHead(upRes.statusCode, upRes.headers);
+        upRes.pipe(res);
+    });
+    upstream.on('error', () => { try { res.status(502).type('text/plain').send('yt-session upstream unreachable'); } catch {} });
+    req.pipe(upstream);
 });
 
 app.get('/api/playback-state', requireAuth, (req, res) => {
@@ -7213,6 +7504,108 @@ app.get('/api/suno/recent', requireAuth, (req, res) => {
     catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---------------------------------------------------------------------------
+// /clip API — list / preview / save-as-sound / discard the rolling clips
+// captured via the /clip slash command.
+// ---------------------------------------------------------------------------
+const CLIP_ID_RE = /^clip_[a-f0-9]{12}$/i;
+function requireValidClipId(req, res, next) {
+    if (!CLIP_ID_RE.test(String(req.params.id || ''))) {
+        return res.status(400).json({ error: 'Invalid clip id' });
+    }
+    next();
+}
+
+app.get('/api/clips', requireAuth, (req, res) => {
+    res.json(loadClipsIndex());
+});
+
+app.get('/api/clips/:id/audio', requireAuth, requireValidClipId, (req, res) => {
+    const id = req.params.id;
+    const clip = loadClipsIndex().find(c => c.id === id);
+    if (!clip) return res.status(404).json({ error: 'Not found' });
+    const filePath = path.join(CLIPS_DIR, clip.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File missing' });
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    fs.createReadStream(filePath).pipe(res);
+});
+
+app.delete('/api/clips/:id', requireAuth, requireValidClipId, (req, res) => {
+    const id = req.params.id;
+    const arr = loadClipsIndex();
+    const idx = arr.findIndex(c => c.id === id);
+    if (idx < 0) return res.status(404).json({ error: 'Not found' });
+    const clip = arr[idx];
+    arr.splice(idx, 1);
+    saveClipsIndex(arr);
+    try { fs.unlinkSync(path.join(CLIPS_DIR, clip.filename)); } catch {}
+    res.json({ ok: true });
+});
+
+// Trims a stored clip and registers it as a regular sound. Body:
+//   { displayName, startSec?, endSec?, volume?, trimToEnd? }
+// Uses ffmpeg to copy/re-encode the source MP3 into the soundboard sounds
+// directory with the requested trim window; falls back to the full clip
+// duration if start/end are omitted.
+app.post('/api/clips/:id/save-as-sound', requireAuth, requireValidClipId, async (req, res) => {
+    const id = req.params.id;
+    const arr = loadClipsIndex();
+    const clip = arr.find(c => c.id === id);
+    if (!clip) return res.status(404).json({ error: 'Clip not found' });
+    const srcPath = path.join(CLIPS_DIR, clip.filename);
+    if (!fs.existsSync(srcPath)) return res.status(404).json({ error: 'Clip file missing on disk' });
+    const body = req.body || {};
+    const displayName = String(body.displayName || '').trim();
+    if (!displayName) return res.status(400).json({ error: 'displayName required' });
+    if (displayName.length > 100) return res.status(400).json({ error: 'displayName must be <= 100 characters' });
+    let startSec = Number.isFinite(body.startSec) ? Math.max(0, Number(body.startSec)) : 0;
+    let endSec = Number.isFinite(body.endSec) ? Number(body.endSec) : clip.durationSec;
+    endSec = Math.min(endSec, clip.durationSec);
+    if (endSec <= startSec) return res.status(400).json({ error: 'endSec must be greater than startSec' });
+    if (endSec - startSec < 0.25) return res.status(400).json({ error: 'Trimmed clip must be at least 0.25s' });
+
+    // Pick a non-conflicting filename in sounds/
+    const safe = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'clip';
+    let outName = safe + '.mp3';
+    let counter = 1;
+    while (fs.existsSync(path.join(SOUNDS_DIR, outName))) {
+        outName = safe + '_' + counter + '.mp3';
+        counter++;
+        if (counter > 999) return res.status(500).json({ error: 'Could not pick a unique filename' });
+    }
+    const outPath = path.join(SOUNDS_DIR, outName);
+
+    try {
+        await new Promise((resolve, reject) => {
+            const ff = spawn('ffmpeg', [
+                '-nostdin', '-y',
+                '-ss', String(startSec), '-to', String(endSec),
+                '-i', srcPath,
+                '-c:a', 'libmp3lame', '-b:a', '192k',
+                outPath,
+            ], { stdio: ['ignore', 'ignore', 'pipe'] });
+            ff.on('error', reject);
+            ff.on('close', code => code === 0 ? resolve() : reject(new Error('ffmpeg exit ' + code)));
+        });
+    } catch (err) {
+        try { fs.unlinkSync(outPath); } catch {}
+        return res.status(500).json({ error: 'Failed to trim clip: ' + err.message });
+    }
+
+    // Probe the new duration so the soundboard UI shows the right length.
+    let duration = endSec - startSec;
+    try { duration = probeDurationAsync ? await probeDurationAsync(outPath) : duration; } catch {}
+
+    setSoundMeta(outName, { displayName, duration });
+
+    clip.savedToSoundboard = outName;
+    saveClipsIndex(arr);
+
+    console.log(`[clip] saved-as-sound ${id} -> ${outName} (${displayName}) trim=${startSec}-${endSec}`);
+    res.json({ ok: true, filename: outName, displayName, duration });
+});
+
 // Full suno metadata for one saved sound (used by the "regenerate" flow).
 app.get('/api/suno/sound/:filename', requireAuth, (req, res) => {
     const safe = path.basename(req.params.filename);
@@ -7334,8 +7727,41 @@ client.login(token);
 // up automatically when the GPU is free.
 try { voiceTrainer.startScheduler(); } catch (e) { console.error('[voice-trainer] scheduler failed to start:', e.message); }
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);
+});
+
+// WebSocket upgrade tunnel for the yt-session noVNC proxy. Authenticates the
+// upgrade using the same session cookie as the rest of the app, then pipes
+// bytes through to the localhost websockify.
+httpServer.on('upgrade', (req, socket, head) => {
+    if (!req.url || !req.url.startsWith(YT_VNC_PROXY_PREFIX + '/')) return;
+    // express-session expects a Response-shaped object for setHeader / on('header').
+    // We never send a response on this code path — we hijack the socket directly —
+    // so a tiny stub is enough.
+    const stubRes = { setHeader: () => {}, getHeader: () => undefined, writeHead: () => {}, end: () => {}, on: () => {}, once: () => {}, emit: () => {} };
+    sessionMiddleware(req, stubRes, () => {
+        if (req.session?.user?.role !== 'superadmin') {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            try { socket.destroy(); } catch {}
+            return;
+        }
+        const upstreamPath = req.url.slice(YT_VNC_PROXY_PREFIX.length) || '/';
+        const upstream = require('net').connect(YT_NOVNC_PORT, YT_NOVNC_HOST, () => {
+            let raw = `${req.method} ${upstreamPath} HTTP/1.1\r\n`;
+            for (const [k, v] of Object.entries(req.headers)) {
+                if (Array.isArray(v)) for (const vv of v) raw += `${k}: ${vv}\r\n`;
+                else raw += `${k}: ${v}\r\n`;
+            }
+            raw += '\r\n';
+            upstream.write(raw);
+            if (head && head.length) upstream.write(head);
+            upstream.pipe(socket);
+            socket.pipe(upstream);
+        });
+        upstream.on('error', () => { try { socket.destroy(); } catch {} });
+        socket.on('error', () => { try { upstream.destroy(); } catch {} });
+    });
 });
 }
 
