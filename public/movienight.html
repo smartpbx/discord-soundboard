@@ -36,6 +36,8 @@
         .card .meta { font-size: 0.75rem; color: var(--text-muted); }
         .card .actions { padding: 0.5rem 0.75rem; border-top: 1px solid var(--border); display: flex; gap: 0.4rem; align-items: center; }
         .card .actions .tally { margin-left: auto; font-weight: 600; color: var(--accent); }
+        .card .tally-bar { height: 4px; background: var(--surface-hover); position: relative; }
+        .card .tally-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width 0.3s ease; }
         .card .vote-btn { flex: 1; padding: 0.45rem; font-size: 0.8rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
         .card .vote-btn.is-mine { background: var(--accent); border-color: var(--accent); color: white; }
         .card .drm-warn { font-size: 0.7rem; color: var(--danger); padding: 0.4rem 0.75rem; background: rgba(220,38,38,0.1); border-top: 1px solid rgba(220,38,38,0.3); }
@@ -181,9 +183,11 @@
             return;
         }
         const tallies = room.vote?.tallies || [];
+        const totalVotes = tallies.reduce((a, b) => a + b, 0);
         host.innerHTML = '<div class="grid">' + room.candidates.map((c, idx) => {
             const isWinner = room.winnerIdx === idx;
             const tally = tallies[idx] || 0;
+            const pct = totalVotes ? Math.round((tally / totalVotes) * 100) : 0;
             const myChoice = myVote === idx;
             const allowVote = room.phase === 'voting';
             const allowRemove = room.phase === 'gathering' && (c.addedBy === me || isHost);
@@ -203,8 +207,11 @@
                 +   (allowVote
                         ? '<button class="vote-btn' + (myChoice ? ' is-mine' : '') + '" onclick="castVote(' + idx + ')">' + (myChoice ? '✓ Voted' : 'Vote') + '</button>'
                         : (room.phase === 'decided' && isWinner ? '<span style="color:var(--accent);font-weight:600">🏆 Winner</span>' : '<span style="color:var(--text-muted)">' + esc(c.url.length > 30 ? c.url.slice(0, 30) + '…' : c.url) + '</span>'))
-                +   (room.phase === 'voting' || room.phase === 'decided' ? '<span class="tally">' + tally + '</span>' : '')
+                +   (room.phase === 'voting' || room.phase === 'decided' ? '<span class="tally">' + tally + (totalVotes ? ' · ' + pct + '%' : '') + '</span>' : '')
                 + '</div>'
+                + (room.phase === 'voting' || room.phase === 'decided'
+                    ? '<div class="tally-bar"><div class="fill" style="width:' + pct + '%"></div></div>'
+                    : '')
                 + '</div>';
         }).join('') + '</div>';
     }
@@ -257,6 +264,46 @@
     }
     window.startSpin = startSpin;
 
+    // Wheel tick sound — short clicks that get slower as the wheel decelerates.
+    // Each tick is a quick percussive sine burst via Web Audio; no asset
+    // download. Triggered alongside the canvas animation.
+    function startWheelSound(durationMs) {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const start = ctx.currentTime;
+            // Tick density: more ticks early, fewer near the end. Schedule
+            // ~30 clicks total along an ease-out curve.
+            const totalTicks = 32;
+            const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+            for (let i = 0; i < totalTicks; i++) {
+                const tNorm = i / (totalTicks - 1);
+                const at = start + easeOut(tNorm) * (durationMs / 1000);
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(800 + Math.random() * 200, at);
+                gain.gain.setValueAtTime(0.0001, at);
+                gain.gain.exponentialRampToValueAtTime(0.15, at + 0.005);
+                gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.04);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(at);
+                osc.stop(at + 0.05);
+            }
+            // Final "ding" on landing.
+            const ding = ctx.createOscillator();
+            const dingGain = ctx.createGain();
+            ding.type = 'sine';
+            ding.frequency.setValueAtTime(880, start + durationMs / 1000);
+            dingGain.gain.setValueAtTime(0.0001, start + durationMs / 1000);
+            dingGain.gain.exponentialRampToValueAtTime(0.3, start + durationMs / 1000 + 0.01);
+            dingGain.gain.exponentialRampToValueAtTime(0.0001, start + durationMs / 1000 + 0.7);
+            ding.connect(dingGain).connect(ctx.destination);
+            ding.start(start + durationMs / 1000);
+            ding.stop(start + durationMs / 1000 + 0.8);
+            setTimeout(() => { try { ctx.close(); } catch {} }, durationMs + 1500);
+        } catch {}
+    }
+
     function startWheelAnimation(winnerIdx, durationMs) {
         const wrap = document.getElementById('wheelOverlay');
         const canvas = document.getElementById('wheelCanvas');
@@ -276,6 +323,7 @@
         const finalRotation = (Math.PI * 6) + (-Math.PI / 2 - winnerMid);
         const start = performance.now();
         const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+        startWheelSound(durationMs);
         function frame(now) {
             const t = Math.min(1, (now - start) / durationMs);
             const rot = easeOut(t) * finalRotation;

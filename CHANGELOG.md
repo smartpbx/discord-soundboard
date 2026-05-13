@@ -6,6 +6,7 @@ Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
 ## 2026-05-13
+- **Movie Night polish — tally bars + wheel sound** — candidate cards now render a horizontal tally bar showing the percentage of votes during voting / on the winner card after deciding (with a "N · 12%" label). The wheel-spin gets a Web-Audio-driven tick track that decelerates along the same eased curve as the canvas animation, plus an 880 Hz "ding" on landing. No asset downloads — all generated client-side.
 - **Movie Night + Watch follow-ups** — five things in one pass:
   - **Host badge says "Connecting…"** until the WebSocket hello arrives, so the role doesn't briefly mis-display as "Viewer" while the auth round-trip happens.
   - **Iframe time-sync beacon** — for un-syncable embeds (weflix → vidsrcme → cloudnestra), the host now gets a small `[time] [Broadcast]` widget over the player; click broadcast and every viewer sees "⏱ Host at 1:24:33 (manual sync)" + a toast nudging them to scrub their iframe to match.
