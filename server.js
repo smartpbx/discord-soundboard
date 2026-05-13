@@ -621,6 +621,18 @@ function setVoiceTriggersGlobalCooldownSec(sec) {
     d.voiceTriggersGlobalCooldownSec = Math.max(0, Math.min(3600, Number(sec) || 0));
     saveGuestData(d);
 }
+// Auto-clip: when > 0, every voice-trigger fire also captures the last N
+// seconds of channel audio as a clip, so the "what just got said" moment
+// is preserved without anyone manually hitting /clip.
+function getVoiceTriggersAutoClipSec() {
+    const n = Number(loadGuestData().voiceTriggersAutoClipSec);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+function setVoiceTriggersAutoClipSec(sec) {
+    const d = loadGuestData();
+    d.voiceTriggersAutoClipSec = Math.max(0, Math.min(CLIP_MAX_REQUEST_SEC, Number(sec) || 0));
+    saveGuestData(d);
+}
 
 // --- Voting (kick/timeout via slash commands) ---
 const VOTE_DEFAULTS = {
@@ -1588,9 +1600,10 @@ class AudioMixer extends Readable {
         this.FRAME_SIZE = 3840; // 20ms of s16le stereo 48kHz (960 samples × 2ch × 2 bytes)
     }
 
-    addTrack(pcmStream, metadata, ffmpegProc) {
+    addTrack(pcmStream, metadata, ffmpegProc, opts) {
         const id = this.nextTrackId++;
-        const track = { id, stream: pcmStream, chunks: [], chunkBytes: 0, ended: false, metadata, ffmpegProc: ffmpegProc || null };
+        const priority = !!(opts && opts.priority);
+        const track = { id, stream: pcmStream, chunks: [], chunkBytes: 0, ended: false, metadata, ffmpegProc: ffmpegProc || null, priority };
         pcmStream.on('data', chunk => { track.chunks.push(chunk); track.chunkBytes += chunk.length; });
         pcmStream.on('end', () => { track.ended = true; });
         pcmStream.on('error', () => { track.ended = true; });
@@ -1653,13 +1666,27 @@ class AudioMixer extends Readable {
             } else {
                 silenceCount = 0;
                 const mixed = Buffer.alloc(this.FRAME_SIZE);
+                // Two-pass mix so we can apply sidechain ducking: if any
+                // priority track (TTS, voice-trigger fires) is contributing
+                // this frame, knock non-priority tracks down ~12 dB so
+                // speech sits on top of music without clipping.
+                const DUCK_GAIN = 0.25;
+                const contributing = [];
+                let priorityActive = false;
                 for (const [, track] of this.tracks) {
                     const frame = this._consumeFrame(track);
-                    if (frame) {
-                        for (let i = 0; i < this.FRAME_SIZE; i += 2) {
-                            let sum = mixed.readInt16LE(i) + frame.readInt16LE(i);
-                            mixed.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i);
-                        }
+                    if (!frame) continue;
+                    contributing.push({ frame, priority: track.priority });
+                    if (track.priority) priorityActive = true;
+                }
+                for (const { frame, priority } of contributing) {
+                    const ducked = priorityActive && !priority;
+                    for (let i = 0; i < this.FRAME_SIZE; i += 2) {
+                        const sample = ducked
+                            ? Math.round(frame.readInt16LE(i) * DUCK_GAIN)
+                            : frame.readInt16LE(i);
+                        const sum = mixed.readInt16LE(i) + sample;
+                        mixed.writeInt16LE(Math.max(-32768, Math.min(32767, sum)), i);
                     }
                 }
                 this.push(mixed);
@@ -2616,9 +2643,20 @@ function handleSpeechResult(userId, text, firedThisUtterance = null) {
         // Voice triggers play as a regular 'user' so they obey the admin-only
         // / superadmin-only gates configured for the soundboard. Earlier this
         // ran with role 'superadmin', which silently bypassed every gate.
-        playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'user' })
+        // priority:true asks the mixer to duck other concurrent tracks
+        // while the trigger sound plays, so the punchline sits above music.
+        playSoundAsLinkedUser(trigger.soundFilename, { username: 'voice-trigger', role: 'user', priority: true })
             .then(r => { if (!r || !r.ok) console.warn('[voice-triggers] playback failed:', r?.reason); })
             .catch(err => console.error('[voice-triggers] playback error:', err.message));
+        // Auto-clip: optionally save the last N seconds of channel audio
+        // every time a trigger fires, so we keep the surrounding context
+        // without anyone manually hitting /clip. Fire-and-forget; never
+        // gates the trigger sound playback.
+        const autoClipSec = getVoiceTriggersAutoClipSec();
+        if (autoClipSec > 0) {
+            captureClip(autoClipSec, { userId: String(userId), source: 'auto-trigger', triggerPhrase: trigger.phrase })
+                .catch(err => console.warn('[voice-triggers] auto-clip failed:', err && err.message));
+        }
         // After firing one trigger, respect global cooldown for subsequent matches in this utterance.
         if (globalCooldownMs) break;
     }
@@ -2949,7 +2987,7 @@ function playTtsBuffer(item) {
             ff.on('error', (err) => console.error('[TTS] ffmpeg multi-play error', err));
             ff.on('close', () => { ttsIsPlaying = false; processTtsQueue(); });
             Readable.from(wavBuffer).pipe(ff.stdin);
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName }, ff);
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: 'tts', displayName }, ff, { priority: true });
             activeTracks.set(trackId, { filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy });
             playbackState = { status: 'playing', filename: 'tts', displayName, startTime: Date.now(), startTimeOffset: 0, duration: null, startedBy, tts: true, ttsVoice: voiceId };
         } else {
@@ -4181,6 +4219,7 @@ app.get('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
     res.json({
         enabled: getVoiceTriggersEnabled(),
         globalCooldownSec: getVoiceTriggersGlobalCooldownSec(),
+        autoClipSec: getVoiceTriggersAutoClipSec(),
         modelReady: voiceTriggerModelReady(),
         triggers: loadVoiceTriggers(),
     });
@@ -4198,6 +4237,10 @@ app.patch('/api/superadmin/voice-triggers/config', requireSuperadmin, (req, res)
     if ('globalCooldownSec' in body) {
         setVoiceTriggersGlobalCooldownSec(body.globalCooldownSec);
         details.globalCooldownSec = getVoiceTriggersGlobalCooldownSec();
+    }
+    if ('autoClipSec' in body) {
+        setVoiceTriggersAutoClipSec(body.autoClipSec);
+        details.autoClipSec = getVoiceTriggersAutoClipSec();
     }
     if (Object.keys(details).length) {
         statsDb.recordAdminAction({
@@ -4725,7 +4768,7 @@ async function playSoundAsLinkedUser(filename, startedBy) {
                 resource.volume.setVolume(currentVolume);
                 player.play(resource);
             }
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff);
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff, { priority: !!(startedBy && startedBy.priority) });
             activeTracks.set(trackId, {
                 filename: safeFilename, displayName,
                 startTime: Date.now(), startTimeOffset: startTime,
@@ -4964,7 +5007,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
                 player.play(resource);
             }
 
-            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff);
+            const trackId = activeMixer.addTrack(ff.stdout, { filename: safeFilename, displayName }, ff, { priority: !!(startedBy && startedBy.priority) });
             activeTracks.set(trackId, {
                 filename: safeFilename,
                 displayName,

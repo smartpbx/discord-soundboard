@@ -1955,10 +1955,17 @@
                         <span>Listen to channel speech and play sounds on configured phrases</span>
                     </label>
                     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When enabled, the bot transcribes voice in its current channel using a small on-device English model and fires the mapped sound on a phrase match. No audio is sent off-box.</p>
-                    <div class="field" style="margin: 0.6rem 0 0; max-width: 16rem;">
-                        <label for="voiceTriggersGlobalCooldown">Global cooldown (s)</label>
-                        <input type="number" id="voiceTriggersGlobalCooldown" min="0" max="3600" value="0" onchange="setVoiceTriggersGlobalCooldown(this.value)" style="width:100%; box-sizing:border-box;">
-                        <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Minimum seconds between any two trigger fires combined. 0 disables. Per-trigger cooldowns still apply on top.</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:1rem; margin: 0.6rem 0 0;">
+                        <div class="field" style="max-width: 16rem;">
+                            <label for="voiceTriggersGlobalCooldown">Global cooldown (s)</label>
+                            <input type="number" id="voiceTriggersGlobalCooldown" min="0" max="3600" value="0" onchange="setVoiceTriggersGlobalCooldown(this.value)" style="width:100%; box-sizing:border-box;">
+                            <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Minimum seconds between any two trigger fires combined. 0 disables. Per-trigger cooldowns still apply on top.</div>
+                        </div>
+                        <div class="field" style="max-width: 16rem;">
+                            <label for="voiceTriggersAutoClipSec">Auto-clip on fire (s)</label>
+                            <input type="number" id="voiceTriggersAutoClipSec" min="0" max="120" value="0" onchange="setVoiceTriggersAutoClipSec(this.value)" style="width:100%; box-sizing:border-box;">
+                            <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">When a trigger fires, also save the last N seconds of channel audio as a clip (visible in ☰ → Clips). 0 disables.</div>
+                        </div>
                     </div>
                     <p id="voiceTriggersModelStatus" style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0;"></p>
                 </div>
@@ -8658,6 +8665,8 @@
             if (toggle) toggle.checked = cfg.enabled === true;
             const cdInput = document.getElementById('voiceTriggersGlobalCooldown');
             if (cdInput) cdInput.value = Number(cfg.globalCooldownSec) || 0;
+            const acInput = document.getElementById('voiceTriggersAutoClipSec');
+            if (acInput) acInput.value = Number(cfg.autoClipSec) || 0;
             const status = document.getElementById('voiceTriggersModelStatus');
             if (status) status.textContent = cfg.modelReady ? 'Speech model loaded.' : 'Speech model not loaded — run scripts/update.sh on the host to install vosk-en-us-small.';
             _populateVoiceTriggerSelects();
@@ -8978,7 +8987,20 @@
                 body: JSON.stringify({ globalCooldownSec: n }),
             });
             if (!res || !res.ok) {
-                alert('Failed to update global cooldown');
+                showToast('Failed to update global cooldown', 'error');
+                fetchVoiceTriggers();
+            }
+        }
+
+        async function setVoiceTriggersAutoClipSec(sec) {
+            const n = Math.max(0, Math.min(120, Number(sec) || 0));
+            const res = await api('/api/superadmin/voice-triggers/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoClipSec: n }),
+            });
+            if (!res || !res.ok) {
+                showToast('Failed to update auto-clip', 'error');
                 fetchVoiceTriggers();
             }
         }
