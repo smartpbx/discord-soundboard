@@ -2193,7 +2193,8 @@ async function registerSlashCommands() {
         new SlashCommandBuilder()
             .setName('watch')
             .setDescription('Start a synced Watch Together room around a video URL')
-            .addStringOption(o => o.setName('url').setDescription('YouTube / Vimeo / Twitch / direct video / weflix URL').setRequired(true)),
+            .addStringOption(o => o.setName('url').setDescription('YouTube / Vimeo / Twitch / direct video / weflix URL').setRequired(true))
+            .addBooleanOption(o => o.setName('public').setDescription('Post the join link to the channel (default: only you see it)').setRequired(false)),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2729,6 +2730,35 @@ function _watchExtractTwitch(u) {
         return null;
     } catch { return null; }
 }
+// Resolve a YouTube URL to a direct progressive CDN URL via yt-dlp using the
+// existing cookie session. Lets us serve YouTube videos as HTML5 <video>
+// instead of the iframe — full programmatic sync + sidesteps YouTube's
+// viewer-side "Sign in to confirm you're not a bot" wall.
+function resolveDirectVideoUrlViaYtDlp(sourceUrl) {
+    return new Promise((resolve) => {
+        const args = ytdlpCommonArgs();
+        // Progressive single-file MP4 plays in every browser with one URL.
+        // YouTube progressive caps at ~720p but that's fine for a watch
+        // party; we'd need MSE + DASH for higher quality.
+        args.push('-f', 'best[ext=mp4][acodec!=none][vcodec!=none]/best[ext=mp4]/best');
+        args.push('-g', '--no-warnings', sourceUrl);
+        let stdout = '', stderr = '';
+        let child;
+        try { child = spawn(YT_DLP_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] }); }
+        catch (e) { resolve(null); return; }
+        const tmo = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve(null); }, 15000);
+        child.stdout.on('data', d => stdout += d.toString());
+        child.stderr.on('data', d => stderr += d.toString());
+        child.on('error', () => { clearTimeout(tmo); resolve(null); });
+        child.on('close', (code) => {
+            clearTimeout(tmo);
+            if (code !== 0) { console.warn('[watch] yt-dlp resolve failed (' + code + '):', stderr.split('\n').slice(-2).join(' ').trim()); resolve(null); return; }
+            const lines = stdout.split('\n').map(s => s.trim()).filter(Boolean);
+            resolve(lines[0] || null);
+        });
+    });
+}
+
 function _watchDetectSource(url) {
     const u = String(url || '').trim();
     if (!u) return { sourceType: 'invalid', error: 'URL required' };
@@ -3023,27 +3053,33 @@ async function handleWatchCommand(interaction) {
     if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
         return interaction.reply({ content: detect.error || 'Could not start a watch room.', flags: MessageFlags.Ephemeral });
     }
+    // yt-dlp probe can take a few seconds, so defer the slash reply early.
+    const wantPublic = interaction.options.getBoolean('public') === true;
+    await interaction.deferReply({ flags: wantPublic ? 0 : MessageFlags.Ephemeral });
+    let sourceType = detect.sourceType;
+    let sourceMeta = detect.sourceMeta || {};
+    if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
+        const direct = await resolveDirectVideoUrlViaYtDlp(url);
+        if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: url, resolvedAt: Date.now() }; }
+    }
     const id = makeWatchRoomId();
     const now = Date.now();
     const room = {
-        id, url,
-        sourceType: detect.sourceType,
-        sourceMeta: detect.sourceMeta || {},
+        id, url, sourceType, sourceMeta,
         hostUsername: caller.username,
         hostRole: caller.role,
-        createdAt: now,
-        lastActivity: now,
+        createdAt: now, lastActivity: now,
         state: { playing: false, position: 0, positionAt: now },
         viewers: new Set(),
     };
     watchRooms.set(id, room);
     const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
     const joinUrl = `${publicBase}/watch/${id}`;
-    console.log(`[watch] room ${id} created via /watch by ${caller.fallbackTag} (${room.sourceType})`);
-    return interaction.reply({
-        content: `🎬 **Watch Together** — ${room.sourceType.toUpperCase()} room ready. Open ${joinUrl} to join. The host (you) controls play / pause / seek.`,
-        flags: MessageFlags.Ephemeral,
-    });
+    console.log(`[watch] room ${id} created via /watch by ${caller.fallbackTag} (${room.sourceType}, public=${wantPublic})`);
+    const content = wantPublic
+        ? `🎬 **Watch Together** — ${caller.fallbackTag} started a ${room.sourceType.toUpperCase()} party. Join: ${joinUrl}`
+        : `🎬 **Watch Together** — ${room.sourceType.toUpperCase()} room ready. Open ${joinUrl} to join. The host (you) controls play / pause / seek. (Re-run with \`public: True\` to post the link to the channel.)`;
+    return interaction.editReply({ content });
 }
 
 async function handlePlayAutocomplete(interaction) {
@@ -8637,23 +8673,31 @@ function requireWatchPartyPermission(req, res, next) {
     next();
 }
 
-app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, (req, res) => {
+app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (req, res) => {
     const url = String((req.body || {}).url || '').trim();
     const detect = _watchDetectSource(url);
     if (detect.sourceType === 'invalid' || detect.sourceType === 'drm-blocked') {
         return res.status(400).json({ error: detect.error });
     }
+    // YouTube: try to upgrade to a direct CDN URL via yt-dlp + the signed-in
+    // cookies so the viewer never hits YouTube's "are you a bot" iframe wall
+    // AND we get full HTML5 video sync instead of the player API.
+    let sourceType = detect.sourceType;
+    let sourceMeta = detect.sourceMeta || {};
+    // Try yt-dlp for every non-direct source. If it resolves to a CDN URL,
+    // we get full HTML5 video sync AND sidestep iframe limitations + bot
+    // walls. Falls back to the original sourceType on failure.
+    if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
+        const direct = await resolveDirectVideoUrlViaYtDlp(url);
+        if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: url, resolvedAt: Date.now() }; }
+    }
     const id = makeWatchRoomId();
     const now = Date.now();
     const room = {
-        id,
-        url,
-        sourceType: detect.sourceType,
-        sourceMeta: detect.sourceMeta || {},
+        id, url, sourceType, sourceMeta,
         hostUsername: req.session.user.username,
         hostRole: req.session.user.role,
-        createdAt: now,
-        lastActivity: now,
+        createdAt: now, lastActivity: now,
         state: { playing: false, position: 0, positionAt: now },
         viewers: new Set(),
     };

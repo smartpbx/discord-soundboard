@@ -207,8 +207,14 @@
             // eslint-disable-next-line no-undef
             const api = new YT.Player('__ytplayer', {
                 width: '100%', height: '100%',
+                // youtube-nocookie.com is YT's "privacy-enhanced mode" — the
+                // embed doesn't drop tracking cookies and dodges the "Sign in
+                // to confirm you're not a bot" wall that the default embed
+                // started showing viewers in late 2025. `origin` makes the
+                // Player API drop messages from any other origin.
+                host: 'https://www.youtube-nocookie.com',
                 videoId: room.sourceMeta.videoId,
-                playerVars: { enablejsapi: 1, modestbranding: 1, rel: 0, playsinline: 1 },
+                playerVars: { enablejsapi: 1, modestbranding: 1, rel: 0, playsinline: 1, origin: window.location.origin },
                 events: {
                     onReady: () => { hideOverlay(); player = { kind: 'youtube', api }; if (room.state) applyState(room.state); },
                     onStateChange: (e) => {
