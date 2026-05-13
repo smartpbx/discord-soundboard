@@ -9,8 +9,20 @@ const crypto = require('crypto');
 // voice connection churn — recoverable, not worth a restart. Anything else
 // here is a real bug and we re-throw so systemd restarts us.
 const BENIGN_ERROR_CODES = new Set(['EPIPE', 'ECONNRESET', 'ECONNABORTED', 'ENOBUFS']);
+// Recoverable error messages we should never crash on. Opus stream corruption
+// is one bad packet — prism emits it as a TypeError (no `code`) and we drop
+// the stream's audio for the rest of the turn; the next speaking turn starts
+// a fresh decoder. Re-throwing this previously created a death spiral via
+// the unhandledRejection -> setImmediate(throw) symmetry I added earlier.
+const BENIGN_ERROR_MESSAGE_FRAGMENTS = [
+    'The compressed data passed is corrupted',
+];
 function isBenignError(err) {
-    return !!(err && err.code && BENIGN_ERROR_CODES.has(err.code));
+    if (!err) return false;
+    if (err.code && BENIGN_ERROR_CODES.has(err.code)) return true;
+    const msg = err.message || (typeof err === 'string' ? err : '');
+    if (msg && BENIGN_ERROR_MESSAGE_FRAGMENTS.some(f => msg.includes(f))) return true;
+    return false;
 }
 process.on('uncaughtException', (err) => {
     if (isBenignError(err)) {
@@ -2196,6 +2208,11 @@ function startVoiceTriggerCapture() {
             const firedThisUtterance = new Map();
             let lastPartial = '';
             opusStream.pipe(decoder).pipe(downmix);
+            // prism's opus decoder throws on malformed packets ("compressed
+            // data passed is corrupted") and the error would otherwise
+            // bubble to the global uncaughtException handler.
+            decoder.on('error', (err) => console.warn('[voice-triggers] decoder error:', err && err.message));
+            downmix.on('error', (err) => console.warn('[voice-triggers] downmix error:', err && err.message));
             downmix.on('data', (chunk) => {
                 try {
                     if (recognizer.acceptWaveform(chunk)) {
@@ -2405,6 +2422,7 @@ function startClipCapture() {
             decoder = new prism.opus.Decoder({ rate: CLIP_SAMPLE_RATE, channels: CLIP_CHANNELS, frameSize: 960 });
             startClipSession(userId);
             opusStream.pipe(decoder);
+            decoder.on('error', (err) => console.warn('[clip] decoder error:', err && err.message));
             decoder.on('data', (chunk) => { try { appendClipChunk(userId, Buffer.from(chunk)); } catch {} });
             let cleanedUp = false;
             const cleanup = () => {
