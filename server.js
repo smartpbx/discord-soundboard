@@ -668,6 +668,20 @@ function setVoiceTriggersAutoClipSec(sec) {
     saveGuestData(d);
 }
 
+// Wake-word soundboard: when set to a non-empty phrase, the voice-trigger
+// pipeline listens for "<wake> [play] <sound name>" patterns and plays the
+// best-matching sound from the library. Reuses the existing per-speaker
+// vosk subscription; matches sound display names + filenames (substring).
+function getVoiceTriggersWakeWord() {
+    const v = loadGuestData().voiceTriggersWakeWord;
+    return typeof v === 'string' ? v.trim() : '';
+}
+function setVoiceTriggersWakeWord(v) {
+    const d = loadGuestData();
+    d.voiceTriggersWakeWord = String(v || '').trim().toLowerCase().slice(0, 50);
+    saveGuestData(d);
+}
+
 // Pronunciation overrides — a phonetic map applied to TTS text *before* synth
 // so proper nouns, inside-joke names, and tech jargon ("nginx" -> "engine-x",
 // "Discord" -> "diss-cord") read correctly. Match is whole-word, case-
@@ -2913,6 +2927,43 @@ function handleSpeechResult(userId, text, firedThisUtterance = null) {
         // After firing one trigger, respect global cooldown for subsequent matches in this utterance.
         if (globalCooldownMs) break;
     }
+    handleWakeWord(userId, normalized, firedThisUtterance);
+}
+
+// "<wake> [hey/please/...] [play] <sound name>" — when the configured wake
+// word is heard, look up the sound by display-name / filename substring and
+// fire it as the linked user (so role gates apply). Per-utterance dedupe
+// reuses the same firedThisUtterance Map by stashing a sentinel key.
+const WAKE_WORD_KEY = '__wake__';
+function handleWakeWord(userId, normalized, firedThisUtterance) {
+    const wake = getVoiceTriggersWakeWord();
+    if (!wake || !normalized) return;
+    if (firedThisUtterance && firedThisUtterance.has(WAKE_WORD_KEY)) return;
+    const wakeEsc = wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // After the wake word, allow filler words like "hey/please/can you" before
+    // "play", and let "play" itself be optional ("soundboard airhorn").
+    const re = new RegExp('\\b' + wakeEsc + '\\b[\\s,]+(?:(?:please|hey|can you|could you)\\s+)?(?:play\\s+)?(.+)$', 'i');
+    const m = normalized.match(re);
+    if (!m || !m[1]) return;
+    const query = m[1].trim().replace(/[!?.,;:]+$/g, '').trim();
+    if (!query || query.length < 2) return;
+    const soundsMeta = loadSoundsMeta();
+    const files = Object.keys(soundsMeta);
+    const q = query.toLowerCase();
+    const nameOf = (f) => String((soundsMeta[f] && soundsMeta[f].displayName) || f).toLowerCase();
+    const matched =
+        files.find(f => nameOf(f) === q) ||
+        files.find(f => nameOf(f).startsWith(q)) ||
+        files.find(f => nameOf(f).includes(q));
+    if (!matched) {
+        console.log(`[wake-word] heard "${query}" from ${userId} — no matching sound`);
+        return;
+    }
+    if (firedThisUtterance) firedThisUtterance.set(WAKE_WORD_KEY, { transcript: normalized, query, sound: matched });
+    console.log(`[wake-word] firing "${matched}" for ${userId} (heard: "${query}")`);
+    playSoundAsLinkedUser(matched, { username: 'wake-word', role: 'user', priority: true })
+        .then(r => { if (!r || !r.ok) console.warn('[wake-word] playback failed:', r?.reason); })
+        .catch(err => console.error('[wake-word] playback error:', err.message));
 }
 
 // ---------------------------------------------------------------------------
@@ -4566,6 +4617,7 @@ app.get('/api/superadmin/voice-triggers', requireSuperadmin, (req, res) => {
         enabled: getVoiceTriggersEnabled(),
         globalCooldownSec: getVoiceTriggersGlobalCooldownSec(),
         autoClipSec: getVoiceTriggersAutoClipSec(),
+        wakeWord: getVoiceTriggersWakeWord(),
         modelReady: voiceTriggerModelReady(),
         triggers: loadVoiceTriggers(),
     });
@@ -4587,6 +4639,10 @@ app.patch('/api/superadmin/voice-triggers/config', requireSuperadmin, (req, res)
     if ('autoClipSec' in body) {
         setVoiceTriggersAutoClipSec(body.autoClipSec);
         details.autoClipSec = getVoiceTriggersAutoClipSec();
+    }
+    if ('wakeWord' in body) {
+        setVoiceTriggersWakeWord(body.wakeWord);
+        details.wakeWord = getVoiceTriggersWakeWord();
     }
     if (Object.keys(details).length) {
         statsDb.recordAdminAction({

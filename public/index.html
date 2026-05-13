@@ -2019,6 +2019,11 @@
                             <input type="number" id="voiceTriggersAutoClipSec" min="0" max="120" value="0" onchange="setVoiceTriggersAutoClipSec(this.value)" style="width:100%; box-sizing:border-box;">
                             <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">When a trigger fires, also save the last N seconds of channel audio as a clip (visible in ☰ → Clips). 0 disables.</div>
                         </div>
+                        <div class="field" style="max-width: 18rem;">
+                            <label for="voiceTriggersWakeWord">Wake word</label>
+                            <input type="text" id="voiceTriggersWakeWord" placeholder="soundboard" onchange="setVoiceTriggersWakeWord(this.value)" style="width:100%; box-sizing:border-box;">
+                            <div class="field-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">Optional. Say "&lt;wake&gt; [play] &lt;sound name&gt;" to fire a sound by name. E.g. set wake = <code>soundboard</code>, then say "soundboard play airhorn". Empty = off.</div>
+                        </div>
                     </div>
                     <p id="voiceTriggersModelStatus" style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0;"></p>
                 </div>
@@ -8817,6 +8822,8 @@
             if (cdInput) cdInput.value = Number(cfg.globalCooldownSec) || 0;
             const acInput = document.getElementById('voiceTriggersAutoClipSec');
             if (acInput) acInput.value = Number(cfg.autoClipSec) || 0;
+            const wwInput = document.getElementById('voiceTriggersWakeWord');
+            if (wwInput) wwInput.value = cfg.wakeWord || '';
             const status = document.getElementById('voiceTriggersModelStatus');
             if (status) status.textContent = cfg.modelReady ? 'Speech model loaded.' : 'Speech model not loaded — run scripts/update.sh on the host to install vosk-en-us-small.';
             _populateVoiceTriggerSelects();
@@ -9147,6 +9154,19 @@
             });
             if (!res || !res.ok) {
                 showToast('Failed to update global cooldown', 'error');
+                fetchVoiceTriggers();
+            }
+        }
+
+        async function setVoiceTriggersWakeWord(value) {
+            const wake = String(value || '').trim().toLowerCase().slice(0, 50);
+            const res = await api('/api/superadmin/voice-triggers/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wakeWord: wake }),
+            });
+            if (!res || !res.ok) {
+                showToast('Failed to update wake word', 'error');
                 fetchVoiceTriggers();
             }
         }
