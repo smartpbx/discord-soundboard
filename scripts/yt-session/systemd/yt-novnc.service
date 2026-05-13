@@ -1,0 +1,14 @@
+[Unit]
+Description=YouTube cookie-session noVNC (websockify -> x11vnc, localhost only)
+After=yt-vnc.service
+Requires=yt-vnc.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/websockify --web /usr/share/novnc 127.0.0.1:6081 127.0.0.1:5901
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=YouTube cookie-session keep-warm (reload the YT tab)
+After=yt-chromium.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/discord-soundboard/scripts/yt-session/bin/keepwarm.sh

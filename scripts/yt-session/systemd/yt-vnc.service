@@ -1,0 +1,14 @@
+[Unit]
+Description=YouTube cookie-session x11vnc (binds Xvfb :99 -> localhost VNC)
+After=yt-chromium.service
+Requires=yt-chromium.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/x11vnc -display :99 -listen 127.0.0.1 -localhost -nopw -forever -shared -quiet -rfbport 5901 -noxdamage
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

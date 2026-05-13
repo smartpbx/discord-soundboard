@@ -1,0 +1,31 @@
+[Unit]
+Description=YouTube cookie-session Chromium (Xvfb-hosted)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:99
+Environment=HOME=/root
+ExecStartPre=/bin/sh -c '/usr/bin/Xvfb :99 -screen 0 1280x800x24 -nolisten tcp & sleep 1'
+ExecStart=/usr/bin/chromium \
+  --user-data-dir=/opt/discord-soundboard/yt-profile \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-features=Translate,AudioServiceOutOfProcess \
+  --disable-background-networking \
+  --disable-component-update \
+  --disable-sync \
+  --window-size=1280,800 \
+  --start-maximized \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --remote-debugging-port=9222 \
+  --remote-debugging-address=127.0.0.1 \
+  https://www.youtube.com
+ExecStopPost=/bin/sh -c 'pkill -f "Xvfb :99" || true'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
