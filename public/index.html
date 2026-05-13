@@ -1412,6 +1412,7 @@
                     <option value="plays-asc">Least played</option>
                 </select>
                 <label title="Only show sounds nobody has played yet"><input type="checkbox" id="filterZeroPlays" onchange="setZeroPlaysFilter(this.checked)"> 0 plays only</label>
+                <button type="button" id="playQueueBtn" class="btn btn-ghost btn-sm" onclick="togglePlayQueue()" title="Play every currently-visible sound in order, with a short pause between each. Click again to stop the queue." style="margin-left:auto;">▶ Play all</button>
                 <button type="button" class="tag-row-toggle" id="tagRowToggle" onclick="toggleTagRow()">▾ more</button>
             </div>
             <div class="sounds-tag-row-wrap">
@@ -5712,6 +5713,52 @@
             renderSoundsGrid();
         }
 
+        // ---- Play-all queue ("sound pack") ----
+        // Plays every currently-visible sound tile in order. Auto-advances
+        // when the server reports playback as idle (see the !state.status
+        // check below in the polling loop). Stops on any error / user
+        // clicking Stop / clicking the button again.
+        let _playQueue = [];
+        let _playQueueActive = false;
+        let _playQueueGapTimer = null;
+        function togglePlayQueue() {
+            const btn = document.getElementById('playQueueBtn');
+            if (_playQueueActive) {
+                _playQueueActive = false;
+                _playQueue = [];
+                if (_playQueueGapTimer) { clearTimeout(_playQueueGapTimer); _playQueueGapTimer = null; }
+                if (btn) { btn.textContent = '▶ Play all'; btn.classList.remove('active'); }
+                showToast('Queue stopped.', 'info');
+                return;
+            }
+            const tiles = [...document.querySelectorAll('#soundsList .sound-btn[data-filename]')]
+                .filter(t => !t.classList.contains('disabled'));
+            if (!tiles.length) { showToast('Nothing visible to queue.', 'info'); return; }
+            _playQueue = tiles.map(t => t.dataset.filename);
+            _playQueueActive = true;
+            if (btn) { btn.textContent = '⏹ Stop queue (' + _playQueue.length + ')'; btn.classList.add('active'); }
+            showToast('Queued ' + _playQueue.length + ' sounds.', 'success');
+            _advancePlayQueue();
+        }
+        function _advancePlayQueue() {
+            if (!_playQueueActive) return;
+            const next = _playQueue.shift();
+            const btn = document.getElementById('playQueueBtn');
+            if (!next) {
+                _playQueueActive = false;
+                if (btn) { btn.textContent = '▶ Play all'; btn.classList.remove('active'); }
+                showToast('Queue done.', 'success');
+                return;
+            }
+            if (btn) btn.textContent = '⏹ Stop queue (' + _playQueue.length + ' left)';
+            if (_playQueueGapTimer) clearTimeout(_playQueueGapTimer);
+            _playQueueGapTimer = setTimeout(() => {
+                if (!_playQueueActive) return;
+                playSound(next);
+            }, 350);
+        }
+        window.togglePlayQueue = togglePlayQueue;
+
         // ---- Bulk select + delete + retag + duplicate scan ----
         let selectMode = false;
         const _selectedSounds = new Set();
@@ -7572,7 +7619,7 @@
                 if (state.duration != null) playback.duration = state.duration;
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
-                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; }
+                if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; if (_playQueueActive) _advancePlayQueue(); }
                 // Track multi-play state
                 if (state.multiPlay !== undefined) multiPlayActive = state.multiPlay;
                 const mpToggle = document.getElementById('multiPlayToggle');
