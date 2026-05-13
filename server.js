@@ -5102,15 +5102,27 @@ const URL_PREVIEW_TTL_MS = 30 * 60 * 1000; // 30 min
 if (!fs.existsSync(URL_PREVIEW_DIR)) fs.mkdirSync(URL_PREVIEW_DIR, { recursive: true });
 const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
 
-// Args applied to every yt-dlp invocation. The android/ios player clients
-// avoid YouTube's 'Sign in to confirm you're not a bot' wall that hits the
-// default web client, and also expose Shorts formats. Cookies are pulled
-// from one of two sources, in order of precedence:
-//   YTDLP_COOKIES_FROM_BROWSER -- e.g. "chromium:/opt/discord-soundboard/yt-profile".
-//     Used by the noVNC-hosted Chromium session that the superadmin panel manages.
-//   YTDLP_COOKIES_FILE -- an exported Netscape cookies.txt for ad-hoc gated content.
+// Args applied to every yt-dlp invocation. Three layers stack here to defeat
+// YouTube's 2025-era anti-scraping:
+//   1. android/ios/web player_client list -- avoids the bare-web bot wall and
+//      exposes Shorts formats.
+//   2. bgutil-pot-provider script path (auto-detected when present) -- supplies
+//      the GVS PO Tokens YouTube now requires for non-storyboard formats.
+//      Paired with the local 127.0.0.1:4416 HTTP server that the pip plugin
+//      auto-discovers, plus Deno on PATH for the nsig JS challenge.
+//   3. Cookies (browser profile OR file) -- only needed for videos that hit
+//      the "Sign in to confirm you're not a bot" wall even with PO tokens.
+//      YTDLP_COOKIES_FROM_BROWSER takes precedence (e.g.
+//      "chromium:/opt/discord-soundboard/yt-profile" from the noVNC-managed
+//      Chromium session); YTDLP_COOKIES_FILE accepts a Netscape cookies.txt.
+const BGUTIL_POT_SCRIPT = '/opt/bgutil-pot-server/server/build/generate_once.js';
 function ytdlpCommonArgs() {
     const args = ['--extractor-args', 'youtube:player_client=android,ios,web'];
+    try {
+        if (fs.existsSync(BGUTIL_POT_SCRIPT)) {
+            args.push('--extractor-args', `youtubepot-bgutilscript:script_path=${BGUTIL_POT_SCRIPT}`);
+        }
+    } catch {}
     const fromBrowser = (process.env.YTDLP_COOKIES_FROM_BROWSER || '').trim();
     if (fromBrowser) args.push('--cookies-from-browser', fromBrowser);
     const cookies = (process.env.YTDLP_COOKIES_FILE || '').trim();

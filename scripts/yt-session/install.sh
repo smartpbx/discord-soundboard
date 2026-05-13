@@ -35,7 +35,7 @@ UNITS_SRC="${REPO_DIR}/scripts/yt-session/systemd"
 POT_SERVER_DIR="/opt/bgutil-pot-server"
 POT_SERVER_TAG="${POT_SERVER_TAG:-1.3.1}"
 
-echo "[1/7] apt install required packages"
+echo "[1/8] apt install required packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
@@ -49,13 +49,25 @@ apt-get install -y --no-install-recommends \
     python3-pip \
     curl \
     git \
+    unzip \
     ca-certificates
 
-echo "[2/7] create persistent Chromium profile dir"
+echo "[2/8] create persistent Chromium profile dir"
 mkdir -p "$PROFILE_DIR"
 chmod 700 "$PROFILE_DIR"
 
-echo "[3/7] clone + build bgutil-pot-server (PO-token sidecar)"
+echo "[3/8] install Deno (JS runtime for nsig + yt-dlp-ejs)"
+DENO_VERSION="${DENO_VERSION:-2.5.4}"
+if ! /usr/local/bin/deno --version 2>/dev/null | head -1 | grep -q "deno ${DENO_VERSION}"; then
+    tmp_zip="$(mktemp --suffix=.zip)"
+    curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -o "$tmp_zip"
+    unzip -q -o "$tmp_zip" -d /usr/local/bin
+    chmod +x /usr/local/bin/deno
+    rm -f "$tmp_zip"
+fi
+/usr/local/bin/deno --version | head -1
+
+echo "[4/8] clone + build bgutil-pot-server (PO-token sidecar)"
 if [ ! -d "${POT_SERVER_DIR}/.git" ]; then
     git clone --single-branch --branch "$POT_SERVER_TAG" \
         https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$POT_SERVER_DIR"
@@ -69,10 +81,10 @@ fi
     npx --yes tsc
 )
 
-echo "[4/7] install pip plugin (yt-dlp side of PO-token bridge)"
+echo "[5/8] install pip plugin (yt-dlp side of PO-token bridge)"
 pip3 install --break-system-packages --quiet -U bgutil-ytdlp-pot-provider
 
-echo "[5/7] install systemd units"
+echo "[6/8] install systemd units"
 for unit in yt-chromium.service yt-vnc.service yt-novnc.service \
             yt-keepwarm.service yt-keepwarm.timer yt-pot-server.service; do
     install -m 644 "${UNITS_SRC}/${unit}" "${SYSTEMD_DIR}/${unit}"
@@ -80,12 +92,12 @@ done
 chmod +x "${REPO_DIR}/scripts/yt-session/bin/keepwarm.sh"
 systemctl daemon-reload
 
-echo "[6/7] enable + start services"
+echo "[7/8] enable + start services"
 systemctl enable --now yt-pot-server.service
 systemctl enable --now yt-chromium.service yt-vnc.service yt-novnc.service
 systemctl enable --now yt-keepwarm.timer
 
-echo "[7/7] hint YTDLP_COOKIES_FROM_BROWSER in .env (commented)"
+echo "[8/8] hint YTDLP_COOKIES_FROM_BROWSER in .env (commented)"
 ENV_FILE="${REPO_DIR}/.env"
 if [ -f "$ENV_FILE" ] && ! grep -q '^#\?\s*YTDLP_COOKIES_FROM_BROWSER' "$ENV_FILE"; then
     {
