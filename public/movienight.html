@@ -140,7 +140,11 @@
                 }
                 room = msg.room; renderAll();
             } else if (msg.type === 'candidates') {
-                room.candidates = msg.candidates; renderCandidates();
+                room.candidates = msg.candidates;
+                // renderAll re-evaluates the Start vote / Spin / End vote
+                // button visibility — those depend on candidates.length so
+                // they need to refresh when the list changes.
+                renderAll();
             } else if (msg.type === 'tally') {
                 room.vote = room.vote || {};
                 room.vote.tallies = msg.tallies;
