@@ -1982,6 +1982,10 @@ async function registerSlashCommands() {
             .setName('clip')
             .setDescription('Save the last N seconds of voice-channel audio as a previewable clip')
             .addIntegerOption(o => o.setName('seconds').setDescription(`Seconds to clip (${CLIP_MIN_REQUEST_SEC}-${CLIP_MAX_REQUEST_SEC}, default ${CLIP_DEFAULT_REQUEST_SEC})`).setRequired(false).setMinValue(CLIP_MIN_REQUEST_SEC).setMaxValue(CLIP_MAX_REQUEST_SEC)),
+        new SlashCommandBuilder()
+            .setName('play')
+            .setDescription('Play a soundboard sound through the bot')
+            .addStringOption(o => o.setName('sound').setDescription('Sound name (autocompletes)').setRequired(true).setAutocomplete(true)),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2066,6 +2070,9 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'votetimeout') return handleVoteStart(interaction, 'timeout');
             if (interaction.commandName === 'rejoin') return handleRejoinCommand(interaction);
             if (interaction.commandName === 'clip') return handleClipCommand(interaction);
+            if (interaction.commandName === 'play') return handlePlayCommand(interaction);
+        } else if (interaction.isAutocomplete?.()) {
+            if (interaction.commandName === 'play') return handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
             const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
             if (m) return handleVoteButton(interaction, m[1], m[2]);
@@ -2520,6 +2527,50 @@ async function handleClipCommand(interaction) {
         return interaction.editReply({ content: result.error + hint });
     }
     return interaction.editReply({ content: `Saved the last **${result.meta.durationSec}s** as \`${result.meta.id}\`. Open the soundboard → **Clip** button (or ☰ → **Clips**) to preview, trim, and save it as a sound.` });
+}
+
+// /play <sound>
+// Looks up a sound by exact display-name match, exact filename match, then
+// case-insensitive substring on either. Falls back to a friendly "not found"
+// reply. Plays through whatever voice channel the bot is currently in.
+async function handlePlayCommand(interaction) {
+    if (!activeGuildId || !currentConnection) {
+        return interaction.reply({ content: "I'm not in a voice channel right now. Use `/rejoin` first.", flags: MessageFlags.Ephemeral });
+    }
+    const raw = String(interaction.options.getString('sound') || '').trim();
+    if (!raw) return interaction.reply({ content: 'Pick a sound name.', flags: MessageFlags.Ephemeral });
+    const meta = loadSoundsMeta();
+    const files = Object.keys(meta);
+    const q = raw.toLowerCase();
+    const nameOf = (f) => String((meta[f] && meta[f].displayName) || f).toLowerCase();
+    let match =
+        files.find(f => f.toLowerCase() === q || nameOf(f) === q) ||
+        files.find(f => f.toLowerCase().startsWith(q) || nameOf(f).startsWith(q)) ||
+        files.find(f => f.toLowerCase().includes(q) || nameOf(f).includes(q));
+    if (!match) return interaction.reply({ content: `No sound matching \`${raw}\`.`, flags: MessageFlags.Ephemeral });
+    const displayName = (meta[match] && meta[match].displayName) || match;
+    const username = interaction.user?.tag || interaction.user?.username || 'discord-user';
+    const result = await playSoundAsLinkedUser(match, { username, role: 'user' });
+    if (result && result.ok) {
+        console.log(`[slash] /play by ${username} -> ${match}`);
+        return interaction.reply({ content: `Playing **${displayName}**.`, flags: MessageFlags.Ephemeral });
+    }
+    return interaction.reply({ content: `Failed to play: ${(result && result.reason) || 'unknown error'}`, flags: MessageFlags.Ephemeral });
+}
+
+async function handlePlayAutocomplete(interaction) {
+    const focused = String(interaction.options.getFocused() || '').toLowerCase();
+    const meta = loadSoundsMeta();
+    const items = [];
+    for (const [filename, m] of Object.entries(meta)) {
+        const displayName = String((m && m.displayName) || filename);
+        const lower = displayName.toLowerCase();
+        if (!focused || lower.includes(focused) || filename.toLowerCase().includes(focused)) {
+            items.push({ name: displayName.length > 100 ? displayName.slice(0, 99) + '…' : displayName, value: filename });
+            if (items.length >= 25) break;
+        }
+    }
+    try { await interaction.respond(items); } catch {}
 }
 
 function handleSpeechResult(userId, text, firedThisUtterance = null) {
