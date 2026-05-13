@@ -2286,6 +2286,8 @@ client.on('interactionCreate', async (interaction) => {
         } else if (interaction.isButton?.()) {
             const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
             if (m) return handleVoteButton(interaction, m[1], m[2]);
+            const w = String(interaction.customId || '').match(/^watch:post:(w_[a-f0-9]{8})$/i);
+            if (w) return handleWatchPostButton(interaction, w[1]);
         }
     } catch (err) {
         console.error('[voting] interaction error:', err);
@@ -2730,6 +2732,31 @@ function _watchExtractTwitch(u) {
         return null;
     } catch { return null; }
 }
+// Some aggregator sites (weflix.org → vidsrcme.ru, similar shells) just
+// frame a third-party player. yt-dlp doesn't have extractors for the wrapper
+// itself, only the underlying provider. Fetch the wrapper page, regex out
+// the player iframe src, return that.
+async function unwrapAggregatorEmbed(url) {
+    let host;
+    try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+    if (!/(^|\.)(weflix\.org|watchug\.com)$/i.test(host)) return null;
+    try {
+        const res = await fetch(url, {
+            headers: {
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'accept': 'text/html,application/xhtml+xml',
+            },
+        });
+        if (!res.ok) return null;
+        const html = await res.text();
+        const m = html.match(/<iframe[^>]+src=["']([^"']+(?:vidsrc|vidsrcme|streamhg|filemoon|mixdrop|streamtape|doodstream|streamwish|upstream|streamzz|fembed|playerwish|streamhide)[^"']*)["']/i);
+        if (m && m[1]) return m[1];
+    } catch (err) {
+        console.warn('[watch] unwrapAggregatorEmbed failed for', url, err.message);
+    }
+    return null;
+}
+
 // Resolve a YouTube URL to a direct progressive CDN URL via yt-dlp using the
 // existing cookie session. Lets us serve YouTube videos as HTML5 <video>
 // instead of the iframe — full programmatic sync + sidesteps YouTube's
@@ -2768,7 +2795,7 @@ function _watchDetectSource(url) {
     try {
         const parsed = new URL(u);
         if (drm.test(parsed.hostname + parsed.pathname)) {
-            return { sourceType: 'drm-blocked', error: 'This service uses DRM that browsers block from iframe embedding. Watch Together can\'t play it.' };
+            return { sourceType: 'drm-blocked', error: 'This service uses DRM — the bot can\'t decrypt or re-stream it (industry-wide). Use Discord\'s built-in **Go Live / Screenshare** in voice instead: open the video in your browser, hit Go Live in the voice channel, friends in voice see your screen with the video.' };
         }
     } catch {}
     const yt = _watchExtractYouTubeId(u);
@@ -3058,9 +3085,21 @@ async function handleWatchCommand(interaction) {
     await interaction.deferReply({ flags: wantPublic ? 0 : MessageFlags.Ephemeral });
     let sourceType = detect.sourceType;
     let sourceMeta = detect.sourceMeta || {};
+    // Two-step resolution: (a) try yt-dlp on the original URL to grab a
+    // direct CDN stream; (b) if that fails AND the URL is a known aggregator
+    // wrapper, parse out the embedded player iframe and use that as a
+    // narrower iframe target (so users don't see the host site's chrome).
     if (sourceType === 'youtube' || sourceType === 'vimeo' || sourceType === 'twitch' || sourceType === 'iframe') {
         const direct = await resolveDirectVideoUrlViaYtDlp(url);
         if (direct) { sourceType = 'video'; sourceMeta = { url: direct, originalUrl: url, resolvedAt: Date.now() }; }
+        else if (sourceType === 'iframe') {
+            const unwrapped = await unwrapAggregatorEmbed(url);
+            if (unwrapped) {
+                const directInner = await resolveDirectVideoUrlViaYtDlp(unwrapped);
+                if (directInner) { sourceType = 'video'; sourceMeta = { url: directInner, originalUrl: url, resolvedAt: Date.now() }; }
+                else { sourceMeta = { url: unwrapped, originalUrl: url }; }
+            }
+        }
     }
     const id = makeWatchRoomId();
     const now = Date.now();
@@ -3076,10 +3115,46 @@ async function handleWatchCommand(interaction) {
     const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
     const joinUrl = `${publicBase}/watch/${id}`;
     console.log(`[watch] room ${id} created via /watch by ${caller.fallbackTag} (${room.sourceType}, public=${wantPublic})`);
-    const content = wantPublic
-        ? `🎬 **Watch Together** — ${caller.fallbackTag} started a ${room.sourceType.toUpperCase()} party. Join: ${joinUrl}`
-        : `🎬 **Watch Together** — ${room.sourceType.toUpperCase()} room ready. Open ${joinUrl} to join. The host (you) controls play / pause / seek. (Re-run with \`public: True\` to post the link to the channel.)`;
-    return interaction.editReply({ content });
+    if (wantPublic) {
+        return interaction.editReply({ content: `🎬 **Watch Together** — ${caller.fallbackTag} started a ${room.sourceType.toUpperCase()} party. Join: ${joinUrl}` });
+    }
+    // Ephemeral reply with a "Post to channel" button so the host can
+    // promote it to a public message after the fact without re-running.
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`watch:post:${id}`)
+            .setLabel('📢 Post to channel')
+            .setStyle(ButtonStyle.Primary),
+    );
+    return interaction.editReply({
+        content: `🎬 **Watch Together** — ${room.sourceType.toUpperCase()} room ready. Open ${joinUrl} to join. The host (you) controls play / pause / seek.`,
+        components: [row],
+    });
+}
+
+async function handleWatchPostButton(interaction, roomId) {
+    if (!WATCH_ID_RE.test(String(roomId || ''))) return interaction.reply({ content: 'Invalid room.', flags: MessageFlags.Ephemeral });
+    const room = watchRooms.get(roomId);
+    if (!room) return interaction.reply({ content: 'Room expired.', flags: MessageFlags.Ephemeral });
+    // Only the original host (or a superadmin) can post the link publicly.
+    const caller = resolveDiscordCaller(interaction);
+    if (caller.username !== room.hostUsername && caller.role !== 'superadmin') {
+        return interaction.reply({ content: 'Only the room host can post the link to the channel.', flags: MessageFlags.Ephemeral });
+    }
+    const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '') || 'https://soundboard.mannerow.net';
+    const joinUrl = `${publicBase}/watch/${roomId}`;
+    // Send a fresh non-ephemeral message in the same channel + disable the
+    // original ephemeral button so the host can't double-post.
+    try {
+        await interaction.update({ components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('watch:posted').setLabel('✓ Posted').setStyle(ButtonStyle.Success).setDisabled(true),
+        )] });
+        await interaction.followUp({
+            content: `🎬 **Watch Together** — ${caller.fallbackTag} started a ${room.sourceType.toUpperCase()} party. Join: ${joinUrl}`,
+        });
+    } catch (err) {
+        console.error('[watch] post-to-channel failed:', err.message);
+    }
 }
 
 async function handlePlayAutocomplete(interaction) {
