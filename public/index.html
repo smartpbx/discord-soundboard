@@ -3561,7 +3561,7 @@
             const r = ttsRecentsList.find(x => x.id === id);
             if (!r) return;
             const defaultName = (r.text || 'tts').slice(0, 60).replace(/[^a-zA-Z0-9._\- ]/g, '_').trim() || 'tts_clip';
-            const displayName = prompt('Save this TTS clip as a sound. Display name:', defaultName);
+            const displayName = await promptModal('Save this TTS clip as a sound. Display name:', defaultName, { okText: 'Save' });
             if (displayName == null) return;
             const res = await api('/api/tts/recents/' + id + '/save-as-sound', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4011,7 +4011,7 @@
             });
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
-                alert(err.error || 'Failed to save');
+                showToast(err.error || 'Failed to save', 'error');
                 return;
             }
             closeEntranceExitModal();
@@ -4584,7 +4584,7 @@
         }
 
         async function restartYtChromium() {
-            if (!confirm('Restart the persistent Chromium? Any unsaved state in the YouTube tab will be lost.')) return;
+            if (!(await confirmModal('Restart the persistent Chromium? Any unsaved state in the YouTube tab will be lost.', { okText: 'Restart' }))) return;
             try {
                 await api('/api/admin/yt-session/restart-chromium', { method: 'POST' });
                 showToast('Chromium restarting — give it ~10s before reopening', 'success');
@@ -5332,10 +5332,10 @@
         }
 
         async function resetUserPassword(username) {
-            const newPw = prompt('New password for ' + username + ' (min 6 characters):');
+            const newPw = await promptModal('New password for ' + username + ' (min 6 characters):', '', { okText: 'Set password' });
             if (newPw == null) return;
             if (newPw.length < 6) { showToast('Password must be at least 6 characters', 'error'); return; }
-            const forceChange = confirm('Force user to change password on next login?');
+            const forceChange = await confirmModal('Force user to change password on next login?', { okText: 'Force change', cancelText: 'No' });
             const res = await api('/api/superadmin/users/' + encodeURIComponent(username), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: newPw, forceChange }) });
             if (res && res.ok) { fetchUsers(); showToast('Password updated.', 'success'); }
             else if (res) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed', 'error'); }
@@ -5485,7 +5485,7 @@
         async function clearAllUserOverridesConfirm() {
             const ctx = _userOverridesCtx;
             if (!ctx) return;
-            if (!confirm('Remove every override for ' + ctx.username + '? They revert to role defaults.')) return;
+            if (!(await confirmModal('Remove every override for ' + ctx.username + '? They revert to role defaults.', { okText: 'Remove all', danger: true }))) return;
             const res = await api('/api/superadmin/user-overrides/' + encodeURIComponent(ctx.username), { method: 'DELETE' });
             const d = await res.json().catch(() => ({}));
             if (res && res.ok) { showToast('Cleared overrides for ' + ctx.username, 'success'); closeUserOverrides(); }
@@ -7714,10 +7714,10 @@
             showToast('Applied preset: ' + (p.name || '—'), 'success');
         }
 
-        function ttsPresetSaveCurrent() {
+        async function ttsPresetSaveCurrent() {
             const cur = _ttsPresetCurrent();
             if (!cur.voiceId) { showToast('Pick a voice before saving a preset.', 'error'); return; }
-            const name = prompt('Name this preset (e.g. "Trump rally", "Calm Herzog"):', '');
+            const name = await promptModal('Name this preset (e.g. "Trump rally", "Calm Herzog"):', '', { okText: 'Save preset' });
             if (name == null) return;  // cancelled
             const trimmed = String(name).trim();
             if (!trimmed) { showToast('Name required.', 'error'); return; }
@@ -7738,11 +7738,11 @@
             _ttsPresetsRenderDropdown();
             _ttsPresetRenderManage();
         }
-        function ttsPresetRename(presetId) {
+        async function ttsPresetRename(presetId) {
             const presets = _ttsPresetsLoad();
             const p = presets.find(x => x.id === presetId);
             if (!p) return;
-            const name = prompt('New name:', p.name || '');
+            const name = await promptModal('New name:', p.name || '', { okText: 'Rename' });
             if (name == null) return;
             const trimmed = String(name).trim();
             if (!trimmed) return;
@@ -8634,7 +8634,7 @@
             });
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
-                alert(err.error || 'Failed to update entrance/exit settings');
+                showToast(err.error || 'Failed to update entrance/exit settings', 'error');
             }
             fetchEntranceExitAdmin();
         }
@@ -8646,7 +8646,7 @@
                 body: JSON.stringify({ globalEnabled: !!enabled }),
             });
             if (!res || !res.ok) {
-                alert('Failed to update global toggle');
+                showToast('Failed to update global toggle', 'error');
                 fetchEntranceExitAdmin();
             }
         }
@@ -8740,8 +8740,8 @@
             const soundFilename = document.getElementById('vtNewSound')?.value || '';
             const cooldownSec = Number(document.getElementById('vtNewCooldown')?.value) || 0;
             const speakerUserId = document.getElementById('vtNewSpeaker')?.value || null;
-            if (!phrase) return alert('Phrase is required');
-            if (!soundFilename) return alert('Pick a sound');
+            if (!phrase) { showToast('Phrase is required', 'error'); return; }
+            if (!soundFilename) { showToast('Pick a sound', 'error'); return; }
             const res = await api('/api/superadmin/voice-triggers', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -8749,7 +8749,7 @@
             });
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
-                return alert(err.error || 'Failed to add trigger');
+                showToast(err.error || 'Failed to add trigger', 'error'); return;
             }
             document.getElementById('vtNewPhrase').value = '';
             document.getElementById('vtNewSound').value = '';
@@ -8766,7 +8766,7 @@
             });
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
-                alert(err.error || 'Failed to update trigger');
+                showToast(err.error || 'Failed to update trigger', 'error');
                 fetchVoiceTriggers();
             }
         }
@@ -8775,7 +8775,7 @@
             if (!(await confirmModal('Delete trigger "' + phrase + '"?', { okText: 'Delete', danger: true }))) return;
             const res = await api('/api/superadmin/voice-triggers/' + encodeURIComponent(id), { method: 'DELETE' });
             if (!res || !res.ok) {
-                alert('Failed to delete trigger');
+                showToast('Failed to delete trigger', 'error');
             }
             fetchVoiceTriggers();
         }
@@ -8787,7 +8787,7 @@
                 body: JSON.stringify({ enabled: !!enabled }),
             });
             if (!res || !res.ok) {
-                alert('Failed to update global toggle');
+                showToast('Failed to update global toggle', 'error');
                 fetchVoiceTriggers();
                 return;
             }
@@ -8898,7 +8898,7 @@
                 body: JSON.stringify(patch),
             });
             if (!res || !res.ok) {
-                alert('Failed to update voting config');
+                showToast('Failed to update voting config', 'error');
                 fetchVotingConfig();
                 return;
             }
@@ -9542,7 +9542,7 @@
         }
         async function deleteEmotionRef(dirId, emotion, engine) {
             const eng = engine || 'chatterbox';
-            if (!confirm('Remove the ' + emotion + ' reference clip for ' + eng + '/' + dirId + '? Synth for that emotion will fall back to neutral.')) return;
+            if (!(await confirmModal('Remove the ' + emotion + ' reference clip for ' + eng + '/' + dirId + '? Synth for that emotion will fall back to neutral.', { okText: 'Remove', danger: true }))) return;
             const r = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/refs/' + encodeURIComponent(emotion) + '?engine=' + eng, { method: 'DELETE' });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
@@ -9552,7 +9552,7 @@
 
         async function autoPickEmotionRefs(dirId, name, engine) {
             const eng = engine || 'chatterbox';
-            if (!confirm('Auto-pick reference clips for "' + name + '"?\n\nScans this voice\'s dataset archive (models/datasets/' + dirId + '/chunks/) and picks the best chunk per emotion using audio features (RMS, pitch, spectral centroid). Takes ~30-60 seconds. Existing refs will be overwritten.')) return;
+            if (!(await confirmModal('Auto-pick reference clips for "' + name + '"?\n\nScans this voice\'s dataset archive (models/datasets/' + dirId + '/chunks/) and picks the best chunk per emotion using audio features (RMS, pitch, spectral centroid). Takes ~30-60 seconds. Existing refs will be overwritten.', { okText: 'Auto-pick' }))) return;
             // Lock the button + all others on the same row so the operator can see
             // work is happening. Auto-refs can take 30–60s depending on chunk
             // count, and the endpoint is synchronous so we have no intermediate
@@ -9892,7 +9892,7 @@
         }
 
         async function deleteEngineVoice(engine, dirId, name) {
-            if (!confirm('Delete the ' + engine + ' voice for "' + name + '"?\n\nThe Chatterbox pair (if any) is NOT touched. You can re-clone via the → ' + (engine === 'fish' ? 'Fish' : 'GSV') + ' button later.')) return;
+            if (!(await confirmModal('Delete the ' + engine + ' voice for "' + name + '"?\n\nThe Chatterbox pair (if any) is NOT touched. You can re-clone via the → ' + (engine === 'fish' ? 'Fish' : 'GSV') + ' button later.', { okText: 'Delete', danger: true }))) return;
             const r = await api('/api/superadmin/tts/voice-engine/' + engine + '/' + encodeURIComponent(dirId), { method: 'DELETE' });
             const d = await r.json().catch(() => ({}));
             if (!r.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
@@ -9901,7 +9901,7 @@
         }
 
         async function cloneVoiceToFish(dirId, name) {
-            if (!confirm('Clone "' + name + '" to Fish v2?\n\nReuses the Chatterbox reference clip as-is and Whisper-transcribes it. Adds fish_' + dirId + ' as a new voice. Existing cb_' + dirId + ' stays unchanged.')) return;
+            if (!(await confirmModal('Clone "' + name + '" to Fish v2?\n\nReuses the Chatterbox reference clip as-is and Whisper-transcribes it. Adds fish_' + dirId + ' as a new voice. Existing cb_' + dirId + ' stays unchanged.', { okText: 'Clone' }))) return;
             const btn = event && event.currentTarget;
             const originalHtml = btn ? btn.innerHTML : null;
             if (btn) { btn.disabled = true; btn.innerHTML = '<span class="tts-spinner"></span> cloning…'; }
@@ -9916,7 +9916,7 @@
         }
 
         async function cloneVoiceToGsv(dirId, name) {
-            if (!confirm('Clone "' + name + '" to GPT-SoVITS?\n\nTrims the Chatterbox reference to 8 s, Whisper-transcribes, and creates gsv_' + dirId + '. Adds a new voice selectable in the TTS dropdown — existing cb_' + dirId + ' stays unchanged.')) return;
+            if (!(await confirmModal('Clone "' + name + '" to GPT-SoVITS?\n\nTrims the Chatterbox reference to 8 s, Whisper-transcribes, and creates gsv_' + dirId + '. Adds a new voice selectable in the TTS dropdown — existing cb_' + dirId + ' stays unchanged.', { okText: 'Clone' }))) return;
             showToast('Cloning "' + name + '" → GSV (transcribing…)', 'info');
             const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(dirId) + '/clone-to-gsv', {
                 method: 'POST',
@@ -9931,7 +9931,7 @@
         }
 
         async function deleteChatterboxVoice(voiceId, name) {
-            if (!confirm('Delete voice "' + (name || voiceId) + '"? This removes the reference clip from disk.')) return;
+            if (!(await confirmModal('Delete voice "' + (name || voiceId) + '"? This removes the reference clip from disk.', { okText: 'Delete', danger: true }))) return;
             const id = voiceId.replace(/^cb_/, '');
             const res = await api('/api/superadmin/tts/voice/' + encodeURIComponent(id), { method: 'DELETE' });
             const data = await res.json().catch(() => ({}));
@@ -9942,7 +9942,7 @@
         }
 
         async function deleteRvcVoice(voiceId, name) {
-            if (!confirm('Delete RVC model "' + (name || voiceId) + '"? Model weights + FAISS index are wiped. Chatterbox pair (if any) stays.')) return;
+            if (!(await confirmModal('Delete RVC model "' + (name || voiceId) + '"? Model weights + FAISS index are wiped. Chatterbox pair (if any) stays.', { okText: 'Delete', danger: true }))) return;
             const id = voiceId.replace(/^rvc_/, '');
             const res = await api('/api/superadmin/tts/rvc-voice/' + encodeURIComponent(id), { method: 'DELETE' });
             const data = await res.json().catch(() => ({}));
@@ -10213,7 +10213,7 @@
 
         async function cancelTrainingJob() {
             if (!_trainCurrentJobId) return;
-            if (!confirm('Cancel this training job? The pipeline will stop where it is.')) return;
+            if (!(await confirmModal('Cancel this training job? The pipeline will stop where it is.', { okText: 'Cancel job', danger: true }))) return;
             const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(_trainCurrentJobId) + '/cancel', { method: 'POST' });
             if (res && res.ok) {
                 showToast('Job cancelled', 'info');
@@ -10374,7 +10374,7 @@
             const warning = status === 'completed'
                 ? 'Delete the completed training job for "' + name + '"?\n\nThis removes the job history only. The deployed voice artifacts (model.pth / model.index / Chatterbox reference) stay intact.'
                 : 'Delete this ' + status + ' training job for "' + name + '"?\n\nAny partially-trained artifacts inside the job dir will be removed. The deployed voice (if any) is not touched.';
-            if (!confirm(warning)) return;
+            if (!(await confirmModal(warning, { okText: 'Continue', danger: true }))) return;
             const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId), { method: 'DELETE' });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) { showToast(d.error || 'Delete failed', 'error'); return; }
@@ -10392,7 +10392,7 @@
         }
 
         async function cancelTrainJobFromList(jobId, name) {
-            if (!confirm('Cancel training "' + (name || jobId) + '"? You can resume from the last checkpoint afterwards.')) return;
+            if (!(await confirmModal('Cancel training "' + (name || jobId) + '"? You can resume from the last checkpoint afterwards.', { okText: 'Cancel', danger: true }))) return;
             const res = await api('/api/superadmin/tts/train/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
             if (res.ok) showToast('Cancelled', 'info'); else { const d = await res.json().catch(() => ({})); showToast(d.error || 'Cancel failed', 'error'); }
             fetchTrainJobs();
@@ -10573,7 +10573,7 @@
         }
 
         async function discardSunoTask(taskId) {
-            if (!confirm('Discard this generation? Files will be deleted.')) return;
+            if (!(await confirmModal('Discard this generation? Files will be deleted.', { okText: 'Discard', danger: true }))) return;
             const res = await api('/api/suno/discard/' + encodeURIComponent(taskId), { method: 'DELETE' });
             if (!res || !res.ok) {
                 const d = res ? await res.json().catch(() => ({})) : {};
@@ -10793,13 +10793,13 @@
         function openSunoLyrics(slot) {
             const t = (window._sunoTracks || [])[slot];
             const text = t && t.lyrics ? t.lyrics : '(no lyrics returned)';
-            alert(text);
+            alertModal(text, { title: 'Lyrics' });
         }
 
         async function saveSunoSlot(slot) {
             const t = (window._sunoTracks || [])[slot];
             const fallbackName = document.getElementById('sunoTitleInput').value.trim() || (t && t.title) || '';
-            const dn = prompt('Save this variant as a sound. Display name:', fallbackName);
+            const dn = await promptModal('Save this variant as a sound. Display name:', fallbackName, { okText: 'Save' });
             if (dn == null) return;
             const style = document.getElementById('sunoStyleInput').value.trim();
             const lyrics = document.getElementById('sunoLyricsInput').value;
@@ -10844,7 +10844,7 @@
 
         async function discardSuno() {
             if (!_sunoTaskId) { backToSunoForm(); return; }
-            if (!confirm('Discard all variants from this generation? Files are deleted; credits were already spent.')) return;
+            if (!(await confirmModal('Discard all variants from this generation? Files are deleted; credits were already spent.', { okText: 'Discard all', danger: true }))) return;
             await api('/api/suno/discard/' + encodeURIComponent(_sunoTaskId), { method: 'DELETE' });
             _sunoTaskId = null;
             backToSunoForm();
