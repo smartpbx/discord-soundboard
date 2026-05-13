@@ -58,18 +58,19 @@
         <div class="watch-bar">
             <span class="watch-title" id="watchTitle">Loading room…</span>
             <span class="watch-meta" id="watchMeta"></span>
-            <span class="watch-badge viewer" id="watchRoleBadge">Viewer</span>
+            <span class="watch-badge viewer" id="watchRoleBadge" title="Resolving role…">Connecting…</span>
             <div class="controls hidden" id="watchControls">
                 <button type="button" class="btn primary" id="btnPlay">▶ Play</button>
                 <button type="button" class="btn" id="btnPause">⏸ Pause</button>
                 <button type="button" class="btn" id="btnSync">↻ Resync</button>
+                <button type="button" class="btn" id="btnPickAnother">🎬 Pick another</button>
                 <button type="button" class="btn danger" id="btnClose">✕ Close room</button>
             </div>
         </div>
         <div class="watch-stage" id="watchStage">
             <div class="overlay" id="watchOverlay">
                 <h2 id="overlayTitle">Connecting…</h2>
-                <p id="overlayBody">Waiting for the host to start playback.</p>
+                <p id="overlayBody">Authenticating with the soundboard.</p>
             </div>
         </div>
         <div class="status-line">
@@ -148,12 +149,20 @@
             if (msg.type === 'hello') {
                 me = msg.you;
                 isHost = (me === room.hostUsername);
+                // Show controls, set badge — also clear the "Connecting…"
+                // placeholder so the user sees their resolved role.
                 CONTROLS.classList.toggle('hidden', !isHost);
                 ROLE_BADGE.textContent = isHost ? 'Host' : 'Viewer';
                 ROLE_BADGE.className = 'watch-badge ' + (isHost ? 'host' : 'viewer');
+                ROLE_BADGE.title = '';
                 applyState(msg.room.state);
             } else if (msg.type === 'state') {
                 applyState(msg.state);
+            } else if (msg.type === 'host-pos') {
+                // Iframe-mode position beacon from the host. Just surface it
+                // on the status line so viewers can manually scrub to match.
+                STATUS_STATE.textContent = '⏱ Host at ' + fmtTime(msg.position) + ' (manual sync)';
+                showToast('Host is at ' + fmtTime(msg.position) + ' — scrub your player to match.', 3500);
             } else if (msg.type === 'viewers') {
                 STATUS_VIEWERS.textContent = msg.count + ' viewer' + (msg.count === 1 ? '' : 's');
             } else if (msg.type === 'closed') {
@@ -277,6 +286,36 @@
         }
     }
 
+    // For iframe sources we can't programmatically drive (weflix etc.), the
+    // host can hit "I'm at <time>" to broadcast their current timestamp so
+    // viewers see "Host is at 1:24:33" and scrub their own player to match.
+    let _hostPosPrompt = null;
+    function showHostPosControl() {
+        if (_hostPosPrompt || !isHost) return;
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:absolute; bottom:1rem; left:50%; transform:translateX(-50%); z-index:5; display:flex; gap:0.5rem; align-items:center; background:rgba(0,0,0,0.75); border:1px solid var(--accent); padding:0.4rem 0.6rem; border-radius:8px;';
+        wrap.innerHTML = '<span style="font-size:0.78rem; color:#e4e4e7;">Tell viewers your time:</span>'
+            + '<input type="text" id="_hostPosIn" placeholder="1:24:33" style="width:90px; padding:0.3rem; background:#0f0f12; border:1px solid var(--border); border-radius:4px; color:#e4e4e7; font:inherit;">'
+            + '<button class="btn primary" id="_hostPosBtn" style="padding:0.3rem 0.6rem; font-size:0.8rem;">Broadcast</button>';
+        STAGE.appendChild(wrap);
+        _hostPosPrompt = wrap;
+        wrap.querySelector('#_hostPosBtn').addEventListener('click', async () => {
+            const v = wrap.querySelector('#_hostPosIn').value.trim();
+            const parts = v.split(':').map(Number);
+            let secs = 0;
+            if (parts.length === 1) secs = parts[0];
+            else if (parts.length === 2) secs = parts[0] * 60 + parts[1];
+            else if (parts.length === 3) secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
+            if (!Number.isFinite(secs) || secs < 0) { showToast('Enter time like 1:24:33 or 1500'); return; }
+            await fetch('/api/watch/rooms/' + ROOM_ID + '/host-position', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ position: secs }),
+            });
+            showToast('Broadcast: ' + fmtTime(secs));
+        });
+    }
+
     function renderIframe() {
         // Prefer the unwrapped inner-player URL (e.g. vidsrcme.ru from a
         // weflix.org page) when the server provided one — otherwise fall back
@@ -294,8 +333,13 @@
         STAGE.appendChild(ifr);
         STAGE.appendChild(OVERLAY);
         player = { kind: 'iframe' };
-        if (room.sourceType === 'iframe') showOverlay('Click-to-start sync', '<p>This source\'s player doesn\'t expose programmatic controls — the host can fire a "go now" event but everyone still has to press play in the embedded player. Use Resync to nudge everyone to the same time.</p>');
-        else hideOverlay();
+        if (room.sourceType === 'iframe') {
+            showOverlay('Click-to-start sync', '<p>This source\'s embedded player can\'t be driven from outside. Everyone plays in the iframe directly; the host can broadcast their current timestamp so viewers scrub to match.</p>');
+            // Auto-hide overlay after 8s so the iframe is usable, but the
+            // host-position helper sticks around.
+            setTimeout(() => { if (player && player.kind === 'iframe') hideOverlay(); }, 8000);
+            showHostPosControl();
+        } else hideOverlay();
     }
 
     async function sendControl(action, position) {
@@ -331,6 +375,16 @@
         if (!confirm('Close this watch room for everyone?')) return;
         const r = await fetch('/api/watch/rooms/' + ROOM_ID, { method: 'DELETE', credentials: 'same-origin' });
         if (r.ok) showOverlay('Room closed', '<p>You\'ve ended this watch party.</p>');
+    });
+    // Pick-another: spin up a fresh /movienight room and redirect. Whoever
+    // clicks it becomes the new Movie Night host; viewers can follow via WS
+    // notification (next commit can pipe that through). Host-only.
+    document.getElementById('btnPickAnother').addEventListener('click', async () => {
+        if (!isHost) { showToast('Only the host can pick another'); return; }
+        const r = await fetch('/api/movienight/rooms', { method: 'POST', credentials: 'same-origin' });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); showToast(d.error || 'Failed to start Movie Night'); return; }
+        const data = await r.json();
+        window.location.href = '/movienight/' + data.id;
     });
 
     init();

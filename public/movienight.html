@@ -61,14 +61,29 @@
         <span class="pill" id="phaseDecided">3. Watch</span>
         <span class="countdown" id="countdown"></span>
         <span class="spacer"></span>
-        <button type="button" class="btn primary" id="btnStartVote" style="display:none" onclick="startVote()">Start 30-second vote</button>
+        <button type="button" class="btn primary" id="btnStartVote" style="display:none" onclick="startVote()">🎯 Start 30-second vote</button>
+        <button type="button" class="btn" id="btnStartSpin" style="display:none" onclick="startSpin()">🎡 Spin the wheel</button>
         <button type="button" class="btn" id="btnEndVote" style="display:none" onclick="endVote()">End vote early</button>
         <button type="button" class="btn danger" id="btnClose" style="display:none" onclick="closeRoom()">✕ Close</button>
     </div>
 
+    <div id="catalogRow" class="add-row" style="display:none">
+        <input type="text" id="catalogQuery" placeholder="Search weflix catalog (title)…" onkeydown="if(event.key==='Enter')searchCatalog()">
+        <button type="button" class="btn" onclick="searchCatalog()">🔎 Search</button>
+        <button type="button" class="btn" id="catalogToggle" onclick="toggleCatalog()">Hide</button>
+    </div>
+    <div id="catalogResults" style="margin-bottom: 1rem;"></div>
+
     <div class="add-row" id="addRow">
         <input type="text" id="urlInput" placeholder="Paste a YouTube / weflix / Vimeo / direct video URL…" onkeydown="if(event.key==='Enter')addCandidate()">
         <button type="button" class="btn primary" onclick="addCandidate()">+ Add candidate</button>
+        <button type="button" class="btn" onclick="toggleCatalog()">🎬 Browse weflix</button>
+    </div>
+
+    <div id="wheelOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.9); z-index:50; display:none; flex-direction:column; align-items:center; justify-content:center; gap:1rem;">
+        <h2 style="color:white; margin:0;">🎡 Spinning the wheel…</h2>
+        <canvas id="wheelCanvas" width="480" height="480" style="max-width:90vw; max-height:70vh;"></canvas>
+        <div id="wheelWinner" style="color:var(--accent); font-weight:600; font-size:1.2rem; min-height:1.5rem;"></div>
     </div>
 
     <div id="candidatesHost"></div>
@@ -123,6 +138,10 @@
                 renderCandidates();
             } else if (msg.type === 'vote-started') {
                 room = msg.room; renderAll();
+            } else if (msg.type === 'spin-started') {
+                room = msg.room;
+                renderAll();
+                startWheelAnimation(msg.winnerIdx, msg.spinDurationMs || 4500);
             } else if (msg.type === 'decided') {
                 room = msg.room;
                 renderAll();
@@ -148,6 +167,7 @@
         const showAdd = room.phase === 'gathering';
         document.getElementById('addRow').style.display = showAdd ? 'flex' : 'none';
         document.getElementById('btnStartVote').style.display = (isHost && room.phase === 'gathering' && room.candidates.length >= 2) ? '' : 'none';
+        document.getElementById('btnStartSpin').style.display = (isHost && room.phase === 'gathering' && room.candidates.length >= 2) ? '' : 'none';
         document.getElementById('btnEndVote').style.display = (isHost && room.phase === 'voting') ? '' : 'none';
         document.getElementById('btnClose').style.display = isHost ? '' : 'none';
         renderCandidates();
@@ -230,6 +250,114 @@
         if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed'); }
     }
     window.startVote = startVote;
+
+    async function startSpin() {
+        const res = await fetch('/api/movienight/rooms/' + ROOM_ID + '/start-spin', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); showToast(d.error || 'Failed'); }
+    }
+    window.startSpin = startSpin;
+
+    function startWheelAnimation(winnerIdx, durationMs) {
+        const wrap = document.getElementById('wheelOverlay');
+        const canvas = document.getElementById('wheelCanvas');
+        const winnerEl = document.getElementById('wheelWinner');
+        wrap.style.display = 'flex';
+        winnerEl.textContent = '';
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 20;
+        const slices = room.candidates.length;
+        const sliceAngle = (Math.PI * 2) / slices;
+        const colors = ['#7c3aed', '#dc2626', '#0891b2', '#16a34a', '#ea580c', '#a855f7', '#0284c7', '#65a30d', '#d97706', '#be185d', '#0f766e', '#9333ea'];
+        // Pointer is at the top (-PI/2). To land winnerIdx, the winner's
+        // center slice should end up under the pointer. Final rotation =
+        // multiple full turns + offset so winner's mid-angle lands at -PI/2.
+        const winnerMid = winnerIdx * sliceAngle + sliceAngle / 2;
+        const finalRotation = (Math.PI * 6) + (-Math.PI / 2 - winnerMid);
+        const start = performance.now();
+        const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+        function frame(now) {
+            const t = Math.min(1, (now - start) / durationMs);
+            const rot = easeOut(t) * finalRotation;
+            ctx.clearRect(0, 0, W, H);
+            // Slices
+            for (let i = 0; i < slices; i++) {
+                const a0 = rot + i * sliceAngle;
+                const a1 = a0 + sliceAngle;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.arc(cx, cy, R, a0, a1);
+                ctx.closePath();
+                ctx.fillStyle = colors[i % colors.length];
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+                ctx.stroke();
+                // Label
+                const mid = a0 + sliceAngle / 2;
+                ctx.save();
+                ctx.translate(cx + Math.cos(mid) * R * 0.6, cy + Math.sin(mid) * R * 0.6);
+                ctx.rotate(mid + Math.PI / 2);
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.textAlign = 'center';
+                const label = (room.candidates[i].title || '').slice(0, 18);
+                ctx.fillText(label, 0, 0);
+                ctx.restore();
+            }
+            // Pointer at top
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - R - 10);
+            ctx.lineTo(cx - 14, cy - R + 14);
+            ctx.lineTo(cx + 14, cy - R + 14);
+            ctx.closePath();
+            ctx.fillStyle = '#e4e4e7';
+            ctx.fill();
+            if (t < 1) requestAnimationFrame(frame);
+            else winnerEl.textContent = '🏆 ' + (room.candidates[winnerIdx].title || 'Winner');
+        }
+        requestAnimationFrame(frame);
+        // Hide the overlay 1.5s after the win lands so the redirect feels good.
+        setTimeout(() => { wrap.style.display = 'none'; }, durationMs + 1500);
+    }
+    window.startWheelAnimation = startWheelAnimation;
+
+    function toggleCatalog() {
+        const row = document.getElementById('catalogRow');
+        const results = document.getElementById('catalogResults');
+        if (row.style.display === 'none' || !row.style.display) {
+            row.style.display = 'flex';
+            document.getElementById('catalogQuery').focus();
+        } else {
+            row.style.display = 'none';
+            results.innerHTML = '';
+        }
+    }
+    window.toggleCatalog = toggleCatalog;
+
+    async function searchCatalog() {
+        const q = document.getElementById('catalogQuery').value.trim();
+        if (!q) return;
+        const results = document.getElementById('catalogResults');
+        results.innerHTML = '<div class="empty">Searching…</div>';
+        const res = await fetch('/api/movienight/catalog-search?q=' + encodeURIComponent(q), { credentials: 'same-origin' });
+        if (!res.ok) { results.innerHTML = '<div class="empty">Search failed.</div>'; return; }
+        const data = await res.json();
+        if (!data.items || !data.items.length) { results.innerHTML = '<div class="empty">No matches.</div>'; return; }
+        results.innerHTML = '<div class="grid">' + data.items.slice(0, 12).map(it =>
+            '<div class="card" style="cursor:pointer" onclick="addCatalogCandidate(' + JSON.stringify(it.url).replace(/"/g, '&quot;') + ')">'
+            + (it.poster ? '<div class="poster" style="background-image:url(' + JSON.stringify(it.poster) + ')"></div>' : '<div class="poster placeholder">🎞️</div>')
+            + '<div class="body"><div class="title">' + esc(it.title) + '</div><div class="meta">click to add</div></div>'
+            + '</div>'
+        ).join('') + '</div>';
+    }
+    window.searchCatalog = searchCatalog;
+
+    async function addCatalogCandidate(url) {
+        document.getElementById('urlInput').value = url;
+        await addCandidate();
+        document.getElementById('catalogResults').innerHTML = '';
+    }
+    window.addCatalogCandidate = addCatalogCandidate;
 
     async function castVote(idx) {
         myVote = idx;

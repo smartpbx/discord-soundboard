@@ -2949,14 +2949,21 @@ function getMovieNightEnabled(role, username) {
 }
 
 function _mnFinalize(room) {
-    if (room.phase !== 'voting' || !room.vote) return;
-    if (room.vote.timer) { clearTimeout(room.vote.timer); room.vote.timer = null; }
-    const tallies = _mnTallies(room);
-    let maxIdx = 0, maxVotes = -1;
-    tallies.forEach((v, i) => { if (v > maxVotes) { maxVotes = v; maxIdx = i; } });
-    // Tie-breaker: random among top-tied.
-    const tied = tallies.map((v, i) => v === maxVotes ? i : -1).filter(i => i >= 0);
-    const winnerIdx = tied[Math.floor(Math.random() * tied.length)];
+    if (room.phase === 'decided') return;
+    let winnerIdx;
+    if (room.phase === 'voting' && room.vote) {
+        if (room.vote.timer) { clearTimeout(room.vote.timer); room.vote.timer = null; }
+        const tallies = _mnTallies(room);
+        let maxVotes = -1;
+        tallies.forEach((v) => { if (v > maxVotes) maxVotes = v; });
+        const tied = tallies.map((v, i) => v === maxVotes ? i : -1).filter(i => i >= 0);
+        winnerIdx = tied[Math.floor(Math.random() * tied.length)];
+    } else if (room.phase === 'spinning' && room.winnerIdx != null) {
+        // Wheel mode: winner was picked at spin-start time.
+        winnerIdx = room.winnerIdx;
+    } else {
+        return;
+    }
     room.winnerIdx = winnerIdx;
     room.phase = 'decided';
     // Create the corresponding watch room.
@@ -8983,6 +8990,25 @@ app.get('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res)
     res.json(_watchRoomPublic(room));
 });
 
+// Lightweight "host is at this timestamp" beacon for iframe sources that
+// can't be programmatically driven (weflix → vidsrcme → cloudnestra etc).
+// The host's iframe can't be controlled, but if the host MANUALLY plays
+// at a known time and beams that time to viewers, viewers can scrub their
+// own embedded player to match. Same auth+ownership rules as /control.
+app.post('/api/watch/rooms/:id/host-position', requireAuth, requireValidWatchRoomId, (req, res) => {
+    const room = watchRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    const un = req.session.user.username;
+    if (un !== room.hostUsername && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Host only' });
+    const pos = Number(req.body?.position);
+    if (!Number.isFinite(pos) || pos < 0) return res.status(400).json({ error: 'position number required' });
+    room.state.position = pos;
+    room.state.positionAt = Date.now();
+    room.lastActivity = Date.now();
+    _watchBroadcast(room, { type: 'host-pos', position: pos, at: room.state.positionAt });
+    res.json({ ok: true });
+});
+
 app.post('/api/watch/rooms/:id/control', requireAuth, requireValidWatchRoomId, (req, res) => {
     const room = watchRooms.get(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found or expired' });
@@ -9109,6 +9135,27 @@ app.post('/api/movienight/rooms/:id/start-vote', requireAuth, requireValidMnRoom
     res.json(_mnRoomPublic(room));
 });
 
+// 🎡 Wheel mode — animated random selection. Server picks the winner index
+// + broadcasts it so every viewer's wheel lands on the same slot. Host
+// only. Locks the room (phase becomes 'spinning' for ~5s, then 'decided').
+app.post('/api/movienight/rooms/:id/start-spin', requireAuth, requireValidMnRoomId, (req, res) => {
+    const room = movieNightRooms.get(req.params.id);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.hostUsername !== req.session.user.username && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Host only' });
+    if (room.phase !== 'gathering') return res.status(400).json({ error: 'Spin already started or decided' });
+    if (room.candidates.length < 2) return res.status(400).json({ error: 'Need at least 2 candidates' });
+    const playable = room.candidates.map((c, i) => c.drmBlocked ? -1 : i).filter(i => i >= 0);
+    if (!playable.length) return res.status(400).json({ error: 'No playable candidates' });
+    const winnerIdx = playable[Math.floor(Math.random() * playable.length)];
+    room.phase = 'spinning';
+    room.winnerIdx = winnerIdx;
+    room.lastActivity = Date.now();
+    _mnBroadcast(room, { type: 'spin-started', winnerIdx, spinDurationMs: 4500, room: _mnRoomPublic(room) });
+    // Auto-finalize when the spin animation ends.
+    setTimeout(() => _mnFinalize(room), 4500);
+    res.json(_mnRoomPublic(room));
+});
+
 app.post('/api/movienight/rooms/:id/vote', requireAuth, requireValidMnRoomId, requireMovieNightPermission, (req, res) => {
     const room = movieNightRooms.get(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -9145,6 +9192,46 @@ app.delete('/api/movienight/rooms/:id', requireAuth, requireValidMnRoomId, (req,
 app.get('/movienight/:id', (req, res) => {
     if (!MN_ID_RE.test(String(req.params.id || ''))) return res.status(400).type('text/plain').send('Invalid room id');
     res.sendFile(path.join(__dirname, 'public', 'movienight.html'));
+});
+
+// Search weflix's catalog by title. Scrapes their listing page since they
+// don't expose a JSON API. Falls back to /movies?q=<query> which their
+// search UI uses. Title + poster + canonical /movie/<slug> URL returned.
+app.get('/api/movienight/catalog-search', requireAuth, requireMovieNightPermission, async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length > 100) return res.status(400).json({ error: 'Bad query' });
+    try {
+        const url = 'https://weflix.org/search?keyword=' + encodeURIComponent(q);
+        const r = await fetch(url, {
+            headers: {
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'accept': 'text/html,application/xhtml+xml',
+            },
+        });
+        if (!r.ok) return res.status(502).json({ error: 'weflix returned ' + r.status });
+        const html = await r.text();
+        // weflix cards: <a href="/movie/<slug>" ...><img src=poster ... alt="title"></a>
+        // Tolerate variations. Extract dedupe by slug.
+        const seen = new Set();
+        const items = [];
+        const re = /<a[^>]+href=["']\/(movie|tv-shows|tv-show|anime)\/([^"'\/]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+        let m;
+        while ((m = re.exec(html)) && items.length < 30) {
+            const path = '/' + m[1] + '/' + m[2];
+            if (seen.has(path)) continue;
+            seen.add(path);
+            const inner = m[3];
+            const imgM = inner.match(/<img[^>]+(?:data-src|src)=["']([^"']+)["'][^>]*(?:alt=["']([^"']+)["'])?/i);
+            const titleM = inner.match(/<(?:h\d|div|span)[^>]+(?:class=["'][^"']*(?:title|name)[^"']*["'])[^>]*>([^<]+)</i);
+            const title = (titleM && titleM[1] || imgM && imgM[2] || m[2].replace(/-/g, ' ')).trim();
+            const poster = imgM && imgM[1] || null;
+            items.push({ url: 'https://weflix.org' + path, title, poster });
+        }
+        res.json({ items, query: q });
+    } catch (err) {
+        console.error('[movienight] catalog-search failed:', err.message);
+        res.status(502).json({ error: 'Catalog search failed: ' + err.message });
+    }
 });
 
 app.delete('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res) => {
