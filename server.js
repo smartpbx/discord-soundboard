@@ -1461,9 +1461,12 @@ const ttsLastBuffer = new Map();
 // post-synth flash visualization.
 const ttsWavCache = new Map();
 const TTS_WAV_CACHE_TTL_MS = 2 * 60 * 1000;
-function ttsWavCacheStash(buffer) {
+function ttsWavCacheStash(buffer, owner) {
     const id = require('crypto').randomBytes(16).toString('hex');
-    ttsWavCache.set(id, { buffer, expiresAt: Date.now() + TTS_WAV_CACHE_TTL_MS });
+    // owner is the username that synthesised this WAV. The /api/tts/wav/:id
+    // endpoint refuses to serve to anyone else so a leaked / guessed id
+    // can't pull another user's freshly-synthesized clip.
+    ttsWavCache.set(id, { buffer, owner: owner ? String(owner).toLowerCase() : null, expiresAt: Date.now() + TTS_WAV_CACHE_TTL_MS });
     return id;
 }
 setInterval(() => {
@@ -1846,6 +1849,12 @@ async function executeVoteAction(vote) {
             return { ok: true };
         }
         if (vote.type === 'timeout') {
+            // Refuse to re-timeout someone who's already timed out — the
+            // Discord API silently extends the existing timeout in that case,
+            // which is rarely what voters intend ("they're already out").
+            if (typeof member.isCommunicationDisabled === 'function' && member.isCommunicationDisabled()) {
+                return { ok: false, reason: 'already-timed-out' };
+            }
             const ms = Math.min(vote.timeoutMinutes * 60 * 1000, 28 * 24 * 60 * 60 * 1000);
             await member.timeout(ms, vote.reason || 'Vote-timeout');
             return { ok: true };
@@ -2886,6 +2895,14 @@ function joinChannelById(channel) {
     startClipCapture();
     return currentConnection;
 }
+
+// Late-join guilds need slash commands too. registerSlashCommands iterates
+// every guild in cache and writes the full set, so we can call it again
+// safely on each guildCreate.
+client.on('guildCreate', (guild) => {
+    console.log(`[slash] joined guild ${guild.name} (${guild.id}) — re-registering commands`);
+    registerSlashCommands().catch(err => console.error('[slash] re-register on guildCreate failed:', err.message));
+});
 
 client.once('ready', () => {
     console.log(`🤖 Bot logged in as ${client.user.tag}`);
@@ -5483,6 +5500,9 @@ app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
 app.get('/api/stream-url/preview/:id/audio', requireAuth, (req, res) => {
     const entry = urlPreviewCache.get(String(req.params.id || ''));
     if (!entry || !fs.existsSync(entry.filePath)) return res.status(404).send('Not found');
+    // Cross-user IDOR guard: a leaked preview id shouldn't let another
+    // logged-in user stream / play the previewer's clip.
+    if (entry.username && entry.username !== req.session.user.username) return res.status(404).send('Not found');
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Cache-Control', 'private, max-age=900');
     fs.createReadStream(entry.filePath).pipe(res);
@@ -5505,6 +5525,7 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
     const previewId = String(body.previewId || '').trim();
     const entry = urlPreviewCache.get(previewId);
     if (!entry || !fs.existsSync(entry.filePath)) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
+    if (entry.username && entry.username !== req.session.user.username) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
 
     let trimStart = Number(body.trimStart);
     let trimEnd = Number(body.trimEnd);
@@ -5614,7 +5635,8 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
 
     const body = req.body || {};
     const previewId = body.previewId ? String(body.previewId).trim() : '';
-    const previewEntry = previewId ? urlPreviewCache.get(previewId) : null;
+    let previewEntry = previewId ? urlPreviewCache.get(previewId) : null;
+    if (previewEntry && previewEntry.username && previewEntry.username !== req.session.user.username) previewEntry = null;
     let url, title, duration;
 
     if (previewId) {
@@ -6377,7 +6399,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
     // Short-lived handle for the frontend to fetch the WAV and render a live
     // waveform during playback (audio element plays muted locally; only the
     // AnalyserNode taps the samples).
-    const localWavId = ttsWavCacheStash(wavBuffer);
+    const localWavId = ttsWavCacheStash(wavBuffer, req.session.user.username);
 
     const startedBy = { username: req.session.user.username, role };
     const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
@@ -6450,6 +6472,12 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
 app.get('/api/tts/wav/:id', requireAuth, (req, res) => {
     const entry = ttsWavCache.get(req.params.id);
     if (!entry) return res.status(404).json({ error: 'WAV expired or not found' });
+    const requester = String(req.session?.user?.username || '').toLowerCase();
+    if (entry.owner && entry.owner !== requester) {
+        // Cross-user replay attempts are masked as 404 instead of 403 so they
+        // can't distinguish "wrong id" from "not your clip" — same response.
+        return res.status(404).json({ error: 'WAV expired or not found' });
+    }
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Cache-Control', 'no-store');
     res.send(entry.buffer);
@@ -6516,7 +6544,7 @@ app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
         target: String(row.id),
         details: { owner: row.owner, voiceId: row.voice_id, preview: String(row.text || '').slice(0, 80) },
     });
-    const localWavId = ttsWavCacheStash(wavBuffer);
+    const localWavId = ttsWavCacheStash(wavBuffer, req.session.user.username);
     res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName, localWavId });
 });
 
@@ -7352,7 +7380,7 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
     const uniqueVoices = [...new Set(parsedLines.map(l => l.voiceId))];
     const previewText = parsedLines.map(l => l.text).join(' | ');
     const ttsDisplayName = `TTS Conv: ${parsedLines.length} lines, ${uniqueVoices.length} voice${uniqueVoices.length === 1 ? '' : 's'}`;
-    const localWavId = ttsWavCacheStash(stitched);
+    const localWavId = ttsWavCacheStash(stitched, req.session.user.username);
 
     // Persist as a single recent with a multi-line transcript body.
     let recentId = null;
