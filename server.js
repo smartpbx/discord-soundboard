@@ -3,23 +3,33 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Client-initiated socket aborts (clicking Stop on a long TTS synth, closing
-// the tab during a download, etc.) raise EPIPE/ECONNRESET/ECONNABORTED when we
-// continue writing. These are transport-level noise — never fatal to the
-// server — so swallow them. Anything else we log and re-throw. Express doesn't
-// give us a clean per-response error channel for these, hence the global hook.
+// Errors we never want to crash on. EPIPE/ECONNRESET/ECONNABORTED come from
+// client-initiated aborts (closing the tab mid-download, hitting Stop on a
+// long TTS synth). ENOBUFS is transient kernel UDP-buffer pressure from
+// voice connection churn — recoverable, not worth a restart. Anything else
+// here is a real bug and we re-throw so systemd restarts us.
+const BENIGN_ERROR_CODES = new Set(['EPIPE', 'ECONNRESET', 'ECONNABORTED', 'ENOBUFS']);
+function isBenignError(err) {
+    return !!(err && err.code && BENIGN_ERROR_CODES.has(err.code));
+}
 process.on('uncaughtException', (err) => {
-    const benign = err && (err.code === 'EPIPE' || err.code === 'ECONNRESET' || err.code === 'ECONNABORTED');
-    if (benign) {
-        console.warn('[net]', err.code, 'from client-side abort — ignored:', (err.syscall || '') + ' ' + (err.message || ''));
+    if (isBenignError(err)) {
+        console.warn('[net]', err.code, 'transient — ignored:', (err.syscall || '') + ' ' + (err.message || ''));
         return;
     }
     console.error('[fatal] uncaughtException:', err && err.stack || err);
-    // Re-throw asynchronously so node still logs it + systemd restarts us
     setImmediate(() => { throw err; });
 });
 process.on('unhandledRejection', (reason) => {
+    if (isBenignError(reason)) {
+        console.warn('[net]', reason.code, 'transient rejection — ignored:', (reason.syscall || '') + ' ' + (reason.message || ''));
+        return;
+    }
     console.error('[fatal] unhandledRejection:', reason && reason.stack || reason);
+    // Re-throw asynchronously to be symmetric with uncaughtException. Stops
+    // the process from silently limping on after a real async bug (the kind
+    // of state-drift that bit us in the /rejoin ENOBUFS incident).
+    setImmediate(() => { throw reason; });
 });
 
 // Discord voice requires an encryption lib to be ready *before* the first connection.
@@ -214,18 +224,36 @@ function getClientIP(req) {
     return req.ip || req.connection?.remoteAddress || 'unknown';
 }
 
+// Atomic write helper. Writes to <path>.tmp then renames; rename is atomic on
+// POSIX so a crash mid-write can't blank the destination file. Used for every
+// JSON state file (guest.json, state.json, users.json, sounds.json, etc).
+function writeJsonAtomic(filePath, obj) {
+    const tmp = filePath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+    fs.renameSync(tmp, filePath);
+}
+
+// In-memory cache of guest.json. Hot read path: vosk emits a partial result
+// every ~50-100 ms per active speaker, and each call into the voice-trigger
+// handler ends up calling loadGuestData() at least twice (trigger list +
+// global cooldown). Without this cache that's a 16 KB readFileSync +
+// JSON.parse hundreds of times per second blocking the event loop.
+let guestDataCache = null;
 function loadGuestData() {
+    if (guestDataCache) return structuredClone(guestDataCache);
     try {
         const raw = fs.readFileSync(GUEST_DATA_PATH, 'utf8');
         const data = JSON.parse(raw);
-        return typeof data === 'object' && data !== null ? data : { enabled: false, blockedIPs: [], history: [] };
+        guestDataCache = typeof data === 'object' && data !== null ? data : { enabled: false, blockedIPs: [], history: [] };
     } catch {
-        return { enabled: false, blockedIPs: [], history: [] };
+        guestDataCache = { enabled: false, blockedIPs: [], history: [] };
     }
+    return structuredClone(guestDataCache);
 }
 
 function saveGuestData(data) {
-    fs.writeFileSync(GUEST_DATA_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(GUEST_DATA_PATH, data);
+    guestDataCache = structuredClone(data);
 }
 
 function getGuestEnabled() {
@@ -652,20 +680,27 @@ function makeTriggerId() {
     return 'vt_' + crypto.randomBytes(6).toString('hex');
 }
 
+// Cached for the same reason as guestDataCache — /api/playback-state polls
+// this at 1 Hz per connected client, which would otherwise be a disk read +
+// JSON.parse per second per client.
+let serverStateCache = null;
 function loadServerState() {
+    if (serverStateCache) return structuredClone(serverStateCache);
     try {
         const raw = fs.readFileSync(SERVER_STATE_PATH, 'utf8');
         const data = JSON.parse(raw);
-        return typeof data === 'object' && data !== null ? data : {};
+        serverStateCache = typeof data === 'object' && data !== null ? data : {};
     } catch {
-        return {};
+        serverStateCache = {};
     }
+    return structuredClone(serverStateCache);
 }
 
 function saveServerState(updates) {
     try {
         const state = { ...loadServerState(), ...updates };
-        fs.writeFileSync(SERVER_STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
+        writeJsonAtomic(SERVER_STATE_PATH, state);
+        serverStateCache = structuredClone(state);
     } catch (err) {
         console.error('Failed to save server state:', err.message);
     }
@@ -724,7 +759,7 @@ function loadPendingMeta() {
 }
 
 function savePendingMeta(data) {
-    fs.writeFileSync(PENDING_META_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(PENDING_META_PATH, data);
 }
 
 function addPendingUpload(filename, meta) {
@@ -753,7 +788,7 @@ function loadSoundsMeta() {
 }
 
 function saveSoundsMeta(data) {
-    fs.writeFileSync(SOUNDS_META_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(SOUNDS_META_PATH, data);
 }
 
 function getDisplayName(meta, filename) {
@@ -1127,7 +1162,7 @@ function loadApprovedSignups() {
     }
 }
 function saveApprovedSignups(arr) {
-    fs.writeFileSync(USERS_JSON_PATH, JSON.stringify({ users: arr }, null, 2), 'utf8');
+    writeJsonAtomic(USERS_JSON_PATH, { users: arr });
 }
 function loadUsers() {
     const env = loadUsersFromEnv();
@@ -1152,7 +1187,7 @@ function loadPendingUsers() {
     }
 }
 function savePendingUsers(arr) {
-    fs.writeFileSync(PENDING_USERS_PATH, JSON.stringify(arr, null, 2), 'utf8');
+    writeJsonAtomic(PENDING_USERS_PATH, arr);
 }
 function addApprovedUser(username, password, role) {
     const un = String(username).trim().toLowerCase();
@@ -1271,7 +1306,7 @@ function loadDiscordLinks() {
     }
 }
 function saveDiscordLinks(data) {
-    fs.writeFileSync(DISCORD_LINKS_PATH, JSON.stringify(data, null, 2), 'utf8');
+    writeJsonAtomic(DISCORD_LINKS_PATH, data);
 }
 function getDiscordLinkGlobalEnabled() {
     return loadDiscordLinks().globalEnabled === true;
@@ -1840,39 +1875,70 @@ async function registerSlashCommands() {
     }
 }
 
-// Rapid back-to-back /rejoin invocations leak UDP sockets and crash the
-// process with `write ENOBUFS` once the kernel send-buffer fills up. Cooldown
-// throttles the command and a small delay lets the destroyed connection's
-// socket actually close before we open a fresh one.
+// Rapid back-to-back rejoins leak UDP sockets and crash the process with
+// `write ENOBUFS` once the kernel send-buffer fills up. Every rejoin path
+// (manual /rejoin, Disconnected handler, premature-close burst) funnels
+// through requestRejoin() below so the cooldown + in-flight guard catch them
+// all.
 const REJOIN_COOLDOWN_MS = 5_000;
 const REJOIN_BOUNCE_DELAY_MS = 250;
 let lastRejoinAt = 0;
+let rejoinInflight = false;
+
+function requestRejoin(reason, channelOverride = null) {
+    const now = Date.now();
+    const sinceLast = now - lastRejoinAt;
+    if (sinceLast < REJOIN_COOLDOWN_MS) {
+        return { ok: false, reason: 'cooldown', waitMs: REJOIN_COOLDOWN_MS - sinceLast };
+    }
+    if (rejoinInflight) {
+        return { ok: false, reason: 'inflight' };
+    }
+    let channel = channelOverride;
+    if (!channel && lastChannelId) {
+        channel = client.channels.cache.get(lastChannelId);
+    }
+    if (!channel || !channel.isVoiceBased?.()) {
+        return { ok: false, reason: 'no-channel' };
+    }
+    lastRejoinAt = now;
+    rejoinInflight = true;
+    console.warn(`[DIAG] voice.rejoin reason=${reason} channel=${channel.id} sinceLast=${sinceLast}ms`);
+    (async () => {
+        try {
+            const wasConnected = !!activeGuildId;
+            leaveVoiceChannel();
+            if (wasConnected) await new Promise(r => setTimeout(r, REJOIN_BOUNCE_DELAY_MS));
+            joinChannelById(channel);
+            lastChannelId = channel.id;
+            saveServerState({ lastChannelId });
+        } catch (err) {
+            console.error('[DIAG] voice.rejoin failed:', err.message);
+        } finally {
+            rejoinInflight = false;
+        }
+    })();
+    return { ok: true, channel };
+}
 
 async function handleRejoinCommand(interaction) {
     const channel = interaction.member?.voice?.channel;
     if (!channel || !channel.isVoiceBased?.()) {
         return interaction.reply({ content: 'Join a voice channel first, then run `/rejoin` again.', flags: MessageFlags.Ephemeral });
     }
-    const now = Date.now();
-    const sinceLast = now - lastRejoinAt;
-    if (sinceLast < REJOIN_COOLDOWN_MS) {
-        const wait = Math.ceil((REJOIN_COOLDOWN_MS - sinceLast) / 1000);
-        return interaction.reply({ content: `Just bounced — give me ${wait}s before trying again.`, flags: MessageFlags.Ephemeral });
+    const result = requestRejoin('manual', channel);
+    if (!result.ok) {
+        if (result.reason === 'cooldown') {
+            const wait = Math.ceil(result.waitMs / 1000);
+            return interaction.reply({ content: `Just bounced — give me ${wait}s before trying again.`, flags: MessageFlags.Ephemeral });
+        }
+        if (result.reason === 'inflight') {
+            return interaction.reply({ content: 'Already bouncing — try again in a moment.', flags: MessageFlags.Ephemeral });
+        }
+        return interaction.reply({ content: 'Failed to join: could not resolve target channel.', flags: MessageFlags.Ephemeral });
     }
-    lastRejoinAt = now;
-    try {
-        const wasConnected = !!activeGuildId;
-        leaveVoiceChannel();
-        if (wasConnected) await new Promise(r => setTimeout(r, REJOIN_BOUNCE_DELAY_MS));
-        joinChannelById(channel);
-        lastChannelId = channel.id;
-        saveServerState({ lastChannelId });
-        console.log(`[slash] /rejoin by ${interaction.user?.tag ?? interaction.user?.id} -> #${channel.name}`);
-        return interaction.reply({ content: `Joined **${channel.name}**.`, flags: MessageFlags.Ephemeral });
-    } catch (err) {
-        console.error('[slash] /rejoin failed:', err);
-        return interaction.reply({ content: `Failed to join: ${err.message || 'unknown error'}`, flags: MessageFlags.Ephemeral });
-    }
+    console.log(`[slash] /rejoin by ${interaction.user?.tag ?? interaction.user?.id} -> #${channel.name}`);
+    return interaction.reply({ content: `Joined **${channel.name}**.`, flags: MessageFlags.Ephemeral });
 }
 
 client.on('interactionCreate', async (interaction) => {
@@ -2134,16 +2200,6 @@ function recordDaveDecryptFail() {
 }
 
 let prematureCloseTimestamps = [];
-function scheduleRejoin(reason) {
-    if (!lastChannelId) return;
-    const channel = client.channels.cache.get(lastChannelId);
-    if (!channel?.isVoiceBased()) return;
-    console.warn(`[DIAG] voice.rejoin reason=${reason} channel=${lastChannelId}`);
-    leaveVoiceChannel();
-    setTimeout(() => {
-        try { joinChannelById(channel); } catch (err) { console.error('[DIAG] voice.rejoin failed:', err.message); }
-    }, 1000);
-}
 
 function attachVoiceConnectionListeners(conn) {
     conn.on('error', err => {
@@ -2173,9 +2229,16 @@ function attachVoiceConnectionListeners(conn) {
                 entersState(conn, VoiceConnectionStatus.Signalling, 5_000),
                 entersState(conn, VoiceConnectionStatus.Connecting, 5_000),
             ]);
+            // If our reference moved on (manual /rejoin during the race),
+            // don't log success on someone else's behalf.
+            if (conn !== currentConnection) return;
             console.log('[DIAG] voice.disconnect recovering');
         } catch {
-            scheduleRejoin('disconnected');
+            // The 5s race can land 4-5s into a fresh manual /rejoin; without
+            // this guard the stale handler would tear that new connection
+            // down.
+            if (conn !== currentConnection) return;
+            requestRejoin('disconnected');
         }
     });
 }
@@ -2346,7 +2409,7 @@ player.on('error', error => {
         prematureCloseTimestamps.push(now);
         if (prematureCloseTimestamps.length >= 3) {
             prematureCloseTimestamps = [];
-            scheduleRejoin('premature-close-burst');
+            requestRejoin('premature-close-burst');
         }
     }
 });
