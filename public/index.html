@@ -985,23 +985,6 @@
         <div class="sidebar">
         <div class="top-actions" id="topActions">
             <button type="button" class="btn btn-danger" id="stopAllBtn" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-            <div class="clip-menu-wrap" style="position:relative">
-                <button type="button" class="volume-btn" id="clipBtn" onclick="toggleClipMenu()" title="Save the last N seconds of voice-channel audio">
-                    <span class="volume-btn-icon">📎</span>
-                    <span class="volume-btn-pct">Clip</span>
-                </button>
-                <div class="volume-menu hidden" id="clipMenu" style="min-width: 180px; right: auto; left: 0;">
-                    <div class="volume-menu-header">
-                        <span>Capture last…</span>
-                        <button type="button" class="volume-menu-close" onclick="closeClipMenu()" title="Close">✕</button>
-                    </div>
-                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(10)">10 seconds</button>
-                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(30)">30 seconds</button>
-                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(60)">1 minute</button>
-                    <button type="button" class="header-menu-item" onclick="captureClipFromUI(120)">2 minutes</button>
-                    <button type="button" class="header-menu-item" style="border-top:1px solid var(--border); margin-top:0.25rem; padding-top:0.5rem;" onclick="openClips(); closeClipMenu();">Manage clips…</button>
-                </div>
-            </div>
             <div class="controls-menu-wrap admin-only" style="position:relative">
                 <button type="button" class="volume-btn" id="controlsBtn" onclick="toggleControlsMenu()" title="Playback controls">
                     <span class="volume-btn-icon">⚙</span>
@@ -1324,6 +1307,20 @@
             <div class="sounds-card-header">
                 <span class="card-title">Sounds</span>
                 <div class="sounds-header-actions">
+                    <div class="clip-menu-wrap" style="position:relative; display:inline-flex;">
+                        <button type="button" class="tts-toggle-btn" id="clipBtn" onclick="toggleClipMenu()" title="Save the last N seconds of voice-channel audio">📎 Clip</button>
+                        <div class="volume-menu hidden" id="clipMenu" style="min-width: 180px; right: 0; left: auto;">
+                            <div class="volume-menu-header">
+                                <span>Capture last…</span>
+                                <button type="button" class="volume-menu-close" onclick="closeClipMenu()" title="Close">✕</button>
+                            </div>
+                            <button type="button" class="header-menu-item" onclick="captureClipFromUI(10)">10 seconds</button>
+                            <button type="button" class="header-menu-item" onclick="captureClipFromUI(30)">30 seconds</button>
+                            <button type="button" class="header-menu-item" onclick="captureClipFromUI(60)">1 minute</button>
+                            <button type="button" class="header-menu-item" onclick="captureClipFromUI(120)">2 minutes</button>
+                            <button type="button" class="header-menu-item" style="border-top:1px solid var(--border); margin-top:0.25rem; padding-top:0.5rem;" onclick="openClips(); closeClipMenu();">Manage clips…</button>
+                        </div>
+                    </div>
                     <button type="button" class="tts-toggle-btn hidden" id="ttsToggleBtn" onclick="toggleTtsSection()" title="Text-to-Speech">🗣 TTS</button>
                     <button type="button" class="tts-toggle-btn hidden" id="urlStreamToggleBtn" onclick="toggleUrlStreamSection()" title="Stream from URL">🔗 URL</button>
                     <button type="button" class="tts-toggle-btn hidden" id="sunoToggleBtn" onclick="toggleSunoSection()" title="Generate a song with Suno">🎵 Song</button>
