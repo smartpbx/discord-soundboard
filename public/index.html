@@ -741,6 +741,36 @@
            is the nested confirm-modal at 1300) so feedback from inside a
            modal still surfaces instead of getting dimmed by the backdrop. */
         #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1400; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; max-width: 320px; }
+
+        /* Mobile bottom bar — pinned controls (Stop + Now Playing) so phone
+           users can pause without scrolling back to the sidebar. Auto-shows
+           at narrow viewports OR when the soundboard is in fullscreen
+           "mobile view" mode (which otherwise covers every other control). */
+        .mobile-bottom-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            display: none; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
+            z-index: 60;
+        }
+        .mobile-bottom-bar.visible { display: flex; }
+        .mobile-bottom-bar .mbb-now {
+            flex: 1; min-width: 0; font-size: 0.85rem;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text-muted);
+        }
+        .mobile-bottom-bar .mbb-now.is-playing { color: var(--text); }
+        .mobile-bottom-bar .mbb-stop {
+            padding: 0.45rem 0.85rem; font-size: 0.85rem; font-weight: 600;
+            background: var(--danger); color: white;
+            border: none; border-radius: var(--radius-sm); cursor: pointer;
+        }
+        @media (max-width: 900px) { .mobile-bottom-bar.auto-visible { display: flex; } }
+        .sounds-card.mobile-active ~ .mobile-bottom-bar { display: flex; }
+        /* Stop the soundboard / page content from being hidden behind the bar */
+        @media (max-width: 900px) { body { padding-bottom: 60px; } }
         .toast { padding: 0.65rem 1rem; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; box-shadow: var(--shadow); pointer-events: auto; animation: toastIn 0.2s ease; word-break: break-word; }
         .toast.fading { animation: toastOut 0.3s ease forwards; }
         .toast-success { background: #14532d; color: #bbf7d0; border: 1px solid #15803d; }
@@ -7419,7 +7449,9 @@
         function updateNowPlaying() {
             const card = document.getElementById('playerCard');
             const text = document.getElementById('nowPlayingText');
+            const mbb = document.getElementById('mbbNowPlaying');
             let html;
+            let isPlaying = false;
             if (playback.status === 'idle' || !playback.displayName) {
                 html = 'Nothing playing';
                 if (html !== lastNowPlayingHtml) {
@@ -7428,6 +7460,7 @@
                     card.classList.add('player-idle');
                 }
             } else {
+                isPlaying = true;
                 html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
                 if (playback.startedBy && playback.startedBy.username) {
                     html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
@@ -7437,6 +7470,10 @@
                     text.innerHTML = html;
                     card.classList.remove('player-idle');
                 }
+            }
+            if (mbb) {
+                mbb.textContent = isPlaying ? '▶ ' + (playback.displayName || playback.filename || '') : 'Nothing playing';
+                mbb.classList.toggle('is-playing', isPlaying);
             }
             // Legacy per-player TTS save button replaced by per-row saves on the Recent TTS list.
         }
@@ -11353,6 +11390,10 @@
         })();
     </script>
 
+    <div id="mobileBottomBar" class="mobile-bottom-bar auto-visible">
+        <button type="button" class="mbb-stop" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
+        <div class="mbb-now" id="mbbNowPlaying">Nothing playing</div>
+    </div>
     <div id="toastContainer"></div>
 
     <div class="shortcuts-overlay hidden" id="shortcutsOverlay" onclick="if(event.target===this)closeShortcuts()">
