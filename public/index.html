@@ -716,7 +716,10 @@
         .mobile-grid-btn.is-playing { border-color: var(--accent) !important; border-width: 3px !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.35); background: rgba(124,58,237,0.1) !important; }
 
         /* Toast notifications */
-        #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; max-width: 320px; }
+        /* Toast z-index sits above every modal overlay (the highest of which
+           is the nested confirm-modal at 1300) so feedback from inside a
+           modal still surfaces instead of getting dimmed by the backdrop. */
+        #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1400; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; max-width: 320px; }
         .toast { padding: 0.65rem 1rem; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; box-shadow: var(--shadow); pointer-events: auto; animation: toastIn 0.2s ease; word-break: break-word; }
         .toast.fading { animation: toastOut 0.3s ease forwards; }
         .toast-success { background: #14532d; color: #bbf7d0; border: 1px solid #15803d; }
@@ -1463,7 +1466,7 @@
                 <button type="button" class="superadmin-tab" data-panel="moderation" onclick="switchSuperadminTab('moderation')">Moderation<span class="tab-badge hidden" id="superadminTabModerationBadge">0</span></button>
                 <button type="button" class="superadmin-tab" data-panel="activity" onclick="switchSuperadminTab('activity')">Activity</button>
                 <button type="button" class="superadmin-tab" data-panel="ttsVoices" onclick="switchSuperadminTab('ttsVoices')">TTS Voices</button>
-                <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Entrance / Exit</button>
+                <button type="button" class="superadmin-tab" data-panel="entranceExit" onclick="switchSuperadminTab('entranceExit')">Linked Users</button>
                 <button type="button" class="superadmin-tab" data-panel="voiceTriggers" onclick="switchSuperadminTab('voiceTriggers')">Voice Triggers</button>
                 <button type="button" class="superadmin-tab" data-panel="voting" onclick="switchSuperadminTab('voting')">Voting</button>
             </div>
@@ -1910,12 +1913,17 @@
 
             <div id="superadminPanelEntranceExit" class="superadmin-panel">
                 <div class="superadmin-section">
-                    <div class="superadmin-section-title">Global</div>
+                    <div class="superadmin-section-title">Discord linking</div>
                     <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                         <input type="checkbox" id="entranceExitGlobalToggle" onchange="setEntranceExitGlobal(this.checked)">
-                        <span>Enable entrance / exit sounds for linked users</span>
+                        <span>Enable Discord linking</span>
                     </label>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When a linked Discord user joins or leaves the bot's current voice channel, their chosen sound plays as if they pressed it themselves — role hierarchy still applies.</p>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">Master switch. When on, slash commands like <code>/play</code> inherit each linked Discord user's soundboard role and per-user limits, and the per-user entrance/exit playback below can fire. When off, linked accounts are ignored across the board.</p>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.75rem;">
+                        <input type="checkbox" id="entranceExitSubToggle" onchange="setEntranceExitSounds(this.checked)">
+                        <span>Play entrance / exit sounds for linked users</span>
+                    </label>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.4rem 0 0;">When a linked user joins or leaves the bot's voice channel, their chosen sound plays as if they pressed it themselves — role hierarchy still applies. Requires the master toggle above to be on.</p>
                 </div>
                 <div class="superadmin-section">
                     <div class="superadmin-section-title" style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
@@ -3984,7 +3992,10 @@
             status.textContent = 'Linked to Discord ID ' + data.discordId + '.';
             controls.style.display = '';
             saveBtn.style.display = '';
-            warning.style.display = data.globalEnabled ? 'none' : '';
+            // Warning shows whenever entrance/exit playback won't fire: either
+            // Discord linking is off entirely, or the sub-toggle is off.
+            const eeOn = data.globalEnabled && data.entranceExitEnabled !== false;
+            warning.style.display = eeOn ? 'none' : '';
             const esc = (x) => (x != null ? String(x) : '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             const options = '<option value="">— none —</option>' + soundsList.map(s => {
                 const fn = s.filename || s;
@@ -8548,6 +8559,8 @@
             _discordMembersCache = Array.isArray(membersData.members) ? membersData.members : [];
             const toggle = document.getElementById('entranceExitGlobalToggle');
             if (toggle) toggle.checked = cfg.globalEnabled === true;
+            const sub = document.getElementById('entranceExitSubToggle');
+            if (sub) sub.checked = cfg.entranceExitEnabled !== false;
             renderEntranceExitRows(cfg.users || []);
         }
 
@@ -8646,7 +8659,19 @@
                 body: JSON.stringify({ globalEnabled: !!enabled }),
             });
             if (!res || !res.ok) {
-                showToast('Failed to update global toggle', 'error');
+                showToast('Failed to update Discord linking', 'error');
+                fetchEntranceExitAdmin();
+            }
+        }
+
+        async function setEntranceExitSounds(enabled) {
+            const res = await api('/api/superadmin/entrance-exit-config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entranceExitEnabled: !!enabled }),
+            });
+            if (!res || !res.ok) {
+                showToast('Failed to update entrance/exit toggle', 'error');
                 fetchEntranceExitAdmin();
             }
         }

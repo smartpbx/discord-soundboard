@@ -1357,17 +1357,25 @@ function updateOwnPassword(username, currentPassword, newPassword) {
 // --- Discord user linking & entrance/exit sounds ---
 // data/discord-links.json shape:
 // { globalEnabled: bool, users: { [username]: { discordId, entranceSound, exitSound, disabled } } }
+// Discord-linking config has two top-level toggles:
+//   globalEnabled       — master switch for the whole linking subsystem.
+//                         When off, /play ignores linked roles and entrance/
+//                         exit sounds don't fire.
+//   entranceExitEnabled — sub-toggle just for the entrance/exit playback
+//                         behavior. Defaults to true when missing so older
+//                         deploys keep their existing semantics.
 function loadDiscordLinks() {
     try {
         const raw = fs.readFileSync(DISCORD_LINKS_PATH, 'utf8');
         const data = JSON.parse(raw);
-        if (!data || typeof data !== 'object') return { globalEnabled: false, users: {} };
+        if (!data || typeof data !== 'object') return { globalEnabled: false, entranceExitEnabled: true, users: {} };
         return {
             globalEnabled: data.globalEnabled === true,
+            entranceExitEnabled: data.entranceExitEnabled !== false, // default true
             users: (data.users && typeof data.users === 'object') ? data.users : {},
         };
     } catch {
-        return { globalEnabled: false, users: {} };
+        return { globalEnabled: false, entranceExitEnabled: true, users: {} };
     }
 }
 function saveDiscordLinks(data) {
@@ -1379,6 +1387,14 @@ function getDiscordLinkGlobalEnabled() {
 function setDiscordLinkGlobalEnabled(enabled) {
     const d = loadDiscordLinks();
     d.globalEnabled = enabled === true;
+    saveDiscordLinks(d);
+}
+function getDiscordLinkEntranceExitEnabled() {
+    return loadDiscordLinks().entranceExitEnabled !== false;
+}
+function setDiscordLinkEntranceExitEnabled(enabled) {
+    const d = loadDiscordLinks();
+    d.entranceExitEnabled = enabled !== false;
     saveDiscordLinks(d);
 }
 function getDiscordLinkForUser(username) {
@@ -2838,7 +2854,9 @@ client.once('ready', () => {
 // Play entrance/exit sounds when linked users join or leave the bot's current channel.
 client.on('voiceStateUpdate', async (oldState, newState) => {
     try {
-        if (!getDiscordLinkGlobalEnabled()) return;
+        // Linking master must be on AND the entrance/exit sub-toggle —
+        // /play uses the master alone (it only needs role inheritance).
+        if (!getDiscordLinkGlobalEnabled() || !getDiscordLinkEntranceExitEnabled()) return;
         if (!activeGuildId || !lastChannelId) return;
         if (newState.guild?.id !== activeGuildId && oldState.guild?.id !== activeGuildId) return;
 
@@ -4182,6 +4200,7 @@ app.get('/api/me/entrance-exit', requireAuth, (req, res) => {
     const link = getDiscordLinkForUser(un) || { discordId: null, entranceSound: null, exitSound: null, disabled: false };
     res.json({
         globalEnabled: getDiscordLinkGlobalEnabled(),
+        entranceExitEnabled: getDiscordLinkEntranceExitEnabled(),
         discordId: link.discordId || null,
         entranceSound: link.entranceSound || null,
         exitSound: link.exitSound || null,
@@ -4218,20 +4237,38 @@ app.get('/api/superadmin/entrance-exit', requireSuperadmin, (req, res) => {
         });
     });
     list.sort((a, b) => a.username.localeCompare(b.username));
-    res.json({ globalEnabled: d.globalEnabled === true, users: list });
+    res.json({
+        globalEnabled: d.globalEnabled === true,
+        entranceExitEnabled: d.entranceExitEnabled !== false,
+        users: list,
+    });
 });
 
 app.patch('/api/superadmin/entrance-exit-config', requireSuperadmin, (req, res) => {
     const body = req.body || {};
-    if ('globalEnabled' in body) setDiscordLinkGlobalEnabled(body.globalEnabled === true);
-    statsDb.recordAdminAction({
-        actor: req.session.user.username,
-        actorRole: req.session.user.role,
-        action: 'entrance-exit.config',
-        target: null,
-        details: { globalEnabled: body.globalEnabled === true },
+    const details = {};
+    if ('globalEnabled' in body) {
+        setDiscordLinkGlobalEnabled(body.globalEnabled === true);
+        details.globalEnabled = body.globalEnabled === true;
+    }
+    if ('entranceExitEnabled' in body) {
+        setDiscordLinkEntranceExitEnabled(body.entranceExitEnabled !== false);
+        details.entranceExitEnabled = body.entranceExitEnabled !== false;
+    }
+    if (Object.keys(details).length) {
+        statsDb.recordAdminAction({
+            actor: req.session.user.username,
+            actorRole: req.session.user.role,
+            action: 'discord-linking.config',
+            target: null,
+            details,
+        });
+    }
+    res.json({
+        ok: true,
+        globalEnabled: getDiscordLinkGlobalEnabled(),
+        entranceExitEnabled: getDiscordLinkEntranceExitEnabled(),
     });
-    res.json({ ok: true, globalEnabled: getDiscordLinkGlobalEnabled() });
 });
 
 app.patch('/api/superadmin/entrance-exit/:username', requireSuperadmin, (req, res) => {
