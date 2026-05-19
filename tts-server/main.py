@@ -173,6 +173,62 @@ def get_training_mode():
     return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
 
 
+# ---------------------------------------------------------------------------
+# GPU release for external consumers (ComfyUI image gen, etc.). Same idea as
+# training mode — free our resident TTS/RVC weights so another process on the
+# same GPU can claim VRAM — but with refcounted "holders" so multiple callers
+# (e.g. ComfyUI + a future image-to-image service) can coexist, and synth
+# fast-fails with 503 instead of queueing (image-gen jobs can run minutes,
+# longer than the 30s training-mode queue timeout).
+# ---------------------------------------------------------------------------
+
+_GPU_HOLDERS: dict[str, dict] = {}      # holder_name -> {since: epoch, reason: str}
+_GPU_HOLDERS_LOCK = threading.Lock()
+
+
+class ReleaseGpuRequest(BaseModel):
+    caller: str = Field(..., min_length=1, max_length=64)
+    reason: Optional[str] = None
+
+
+@app.post("/admin/release-gpu")
+def release_gpu(req: ReleaseGpuRequest):
+    """Claim the GPU for an external consumer. Drops our model caches on the
+    first claim; subsequent claims from other callers are tracked but don't
+    re-free (already free). Synthesize calls return 503 while any holder is
+    active."""
+    with _GPU_HOLDERS_LOCK:
+        first = not _GPU_HOLDERS
+        _GPU_HOLDERS[req.caller] = {"since": time.time(), "reason": req.reason}
+        holders = list(_GPU_HOLDERS.keys())
+    if first:
+        log.info("GPU released to external consumers (first holder=%s, reason=%s) — freeing caches", req.caller, req.reason)
+        _free_gpu_caches()
+    else:
+        log.info("GPU holder added: %s (reason=%s) — already free, holders=%s", req.caller, req.reason, holders)
+    return {"holders": holders}
+
+
+@app.delete("/admin/release-gpu")
+def resume_gpu(caller: str):
+    """Drop a holder's claim. When the last holder is gone, synth resumes
+    normally on the next call (models lazy-reload)."""
+    with _GPU_HOLDERS_LOCK:
+        existed = _GPU_HOLDERS.pop(caller, None) is not None
+        holders = list(_GPU_HOLDERS.keys())
+    if existed and not holders:
+        log.info("GPU all holders released (last=%s) — synth resumes; models lazy-reload on next request", caller)
+    elif existed:
+        log.info("GPU holder removed: %s — remaining holders=%s", caller, holders)
+    return {"holders": holders, "removed": existed}
+
+
+@app.get("/admin/release-gpu")
+def get_gpu_holders():
+    with _GPU_HOLDERS_LOCK:
+        return {"holders": dict(_GPU_HOLDERS)}
+
+
 @app.get("/admin/emotion-presets")
 def get_emotion_presets():
     """Return the server-side emotion preset bundles so the superadmin UI
@@ -835,6 +891,16 @@ def _free_gpu_caches():
 
 @app.post("/synthesize")
 def synthesize(req: SynthesizeRequest):
+    if _GPU_HOLDERS:
+        # An external consumer (ComfyUI etc.) is using the 3090. Queue would
+        # block past the train-mode 30s timeout for typical SDXL/Flux runs,
+        # so fast-fail and let the Discord bot retry-with-backoff.
+        with _GPU_HOLDERS_LOCK:
+            holders = list(_GPU_HOLDERS.keys())
+        raise HTTPException(
+            status_code=503,
+            detail=f"GPU temporarily released to {holders}. Try again in a moment.",
+        )
     if _TRAINING_MODE:
         # Training is using ~8-10 GB of the 3090. TTS needs to share the
         # remaining ~14 GB without OOM'ing the train loop, so we:

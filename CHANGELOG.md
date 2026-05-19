@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-05-19
+- **TTS server: GPU sharing for ComfyUI / image gen** — new `POST/DELETE/GET /admin/release-gpu` endpoint pair on the TTS server lets an external GPU consumer (ComfyUI on the new image-gen LXC) claim the 3090 cleanly. On first claim, Chatterbox + RVC caches are dropped and `torch.cuda.empty_cache()` runs; while any holder is active, `/synthesize` fast-fails with `503 GPU temporarily released to [comfyui]` so the Discord bot can retry-with-backoff instead of hanging. Last release lets models lazy-reload on the next synth. Coexists with training-mode (separate refcount, so running both is safe).
+
 ## 2026-05-13
 - **Movie Night: Start vote / Spin the wheel buttons stuck hidden** — when a new candidate was added, the page only re-rendered the candidate cards, not the host control bar. Result: even when you had 2+ candidates and were the host, the "🎯 Start 30-second vote" + "🎡 Spin the wheel" buttons stayed hidden, with no obvious way to leave the Gather phase. The 'candidates' WS message now triggers a full re-render so the buttons appear as soon as candidate #2 lands.
 - **Watch Together: viewer pills in the status bar** — the watch window's bottom status line now shows a row of role-coloured pills next to the viewer count, like the soundboard's "Online now" rail. Host pill has an accent border + accent dot, you get a subtle ring around your own pill, superadmins are coloured purple, guests muted. Multi-tabs from the same user collapse into a single pill. Updates live over the same WS broadcast that drives the viewer count.
