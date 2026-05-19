@@ -202,8 +202,14 @@ def release_gpu(req: ReleaseGpuRequest):
         _GPU_HOLDERS[req.caller] = {"since": time.time(), "reason": req.reason}
         holders = list(_GPU_HOLDERS.keys())
     if first:
-        log.info("GPU released to external consumers (first holder=%s, reason=%s) — freeing caches", req.caller, req.reason)
+        log.info("GPU released to external consumers (first holder=%s, reason=%s) — freeing caches + stopping fish-speech", req.caller, req.reason)
         _free_gpu_caches()
+        # Fish-speech holds ~19 GiB resident with --compile and is a separate
+        # systemd unit, so freeing tts-server's Python caches alone won't
+        # actually return the 3090 to ComfyUI. Reuse the existing eviction
+        # path; fish-speech will lazy-restart on the next Fish synth via
+        # _evict_for_fish (matching the chatterbox<->fish mutual exclusion).
+        _evict_for_non_fish()
     else:
         log.info("GPU holder added: %s (reason=%s) — already free, holders=%s", req.caller, req.reason, holders)
     return {"holders": holders}
