@@ -1314,10 +1314,12 @@
                 <audio id="urlStreamLocalAudio" preload="auto" style="display:none"></audio>
             </div>
             <div class="hidden" id="urlStreamQueueArea" style="margin-top:0.6rem;">
-                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem; flex-wrap:wrap;">
                     <span style="font-size:0.8rem; font-weight:600; color:var(--text-muted);">Up next</span>
-                    <button type="button" class="btn btn-ghost btn-sm hidden" id="urlQueueSkipBtn" onclick="skipUrlStream()" title="Stop the current stream and play the next queued URL">⏭ Skip current</button>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="urlQueueSkipBtn" onclick="skipUrlStream()" title="Crossfade into the next queued URL">⏭ Skip current</button>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="urlVoteSkipBtn" onclick="voteSkipUrlStream()" title="Request a skip — when enough people vote, it skips automatically (click again to withdraw)">🗳 Vote skip</button>
                     <button type="button" class="btn btn-ghost btn-sm hidden" id="urlQueueClearBtn" onclick="clearUrlQueue()" title="Remove everything from the queue">Clear queue</button>
+                    <span id="urlVoteSkipInfo" style="font-size:0.75rem; color:var(--text-muted);"></span>
                 </div>
                 <div id="urlStreamQueueList"></div>
             </div>
@@ -5420,7 +5422,9 @@
             const items = (q && Array.isArray(q.items)) ? q.items : [];
             const toggleBtn = document.getElementById('urlStreamToggleBtn');
             if (toggleBtn) {
-                const label = items.length > 0 ? ('🔗 URL (' + items.length + ')') : '🔗 URL';
+                let label = items.length > 0 ? ('🔗 URL (' + items.length + ')') : '🔗 URL';
+                const v = state && state.urlSkipVote;
+                if (v && v.votes > 0) label += ' 🗳' + v.votes + '/' + v.threshold;
                 if (toggleBtn.textContent !== label) toggleBtn.textContent = label;
             }
             const area = document.getElementById('urlStreamQueueArea');
@@ -5433,7 +5437,20 @@
             if (skipBtn) skipBtn.classList.toggle('hidden', !canSkip);
             const clearBtn = document.getElementById('urlQueueClearBtn');
             if (clearBtn) clearBtn.classList.toggle('hidden', !isAdmin || items.length === 0);
-            if (items.length === 0 && !canSkip) { area.classList.add('hidden'); list.innerHTML = ''; return; }
+            // Vote-skip: visible to everyone while a URL stream plays.
+            const vote = state && state.urlSkipVote;
+            const voteBtn = document.getElementById('urlVoteSkipBtn');
+            const voteInfo = document.getElementById('urlVoteSkipInfo');
+            if (voteBtn) {
+                voteBtn.classList.toggle('hidden', !vote);
+                if (vote) {
+                    voteBtn.textContent = (vote.voted ? '🗳 Skip vote cast' : '🗳 Vote skip') + ' (' + vote.votes + '/' + vote.threshold + ')';
+                    voteBtn.classList.toggle('btn-primary', !!vote.voted);
+                    voteBtn.classList.toggle('btn-ghost', !vote.voted);
+                }
+            }
+            if (voteInfo) voteInfo.textContent = (vote && vote.votes > 0 && vote.voters && vote.voters.length) ? ('skip requested by ' + vote.voters.join(', ')) : '';
+            if (items.length === 0 && !canSkip && !vote) { area.classList.add('hidden'); list.innerHTML = ''; return; }
             area.classList.remove('hidden');
             const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
             list.innerHTML = items.map((it, i) => {
@@ -5458,6 +5475,20 @@
                 return;
             }
             showToast('Skipped', 'success');
+            setTimeout(refreshPlaybackState, 300);
+        }
+
+        async function voteSkipUrlStream() {
+            const res = await api('/api/stream-url/vote-skip', { method: 'POST' });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                showToast(err.error || 'Vote failed', 'error');
+                return;
+            }
+            const d = await res.json();
+            if (d.skipped) showToast('Skipped by vote 🗳', 'success');
+            else if (d.voted) showToast('Skip vote cast (' + d.votes + '/' + d.threshold + ')', 'success');
+            else showToast('Skip vote withdrawn', 'success');
             setTimeout(refreshPlaybackState, 300);
         }
 

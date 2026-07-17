@@ -4406,6 +4406,7 @@ player.on('stateChange', (oldState, newState) => {
         // non-TTS sound played between a TTS start and its end could leave
         // ttsIsPlaying stuck true.)
         ttsIsPlaying = false;
+        urlSkipVotes.clear();
         processTtsQueue();
         // TTS gets first claim on the freed player; if it started something,
         // the guards inside processUrlQueue keep the URL queue waiting.
@@ -6870,6 +6871,14 @@ let activeUrlStream = null; // { ytdlp, ff, killTimer, previewFilePath }
 const urlStreamQueue = [];
 let urlQueueNextId = 1;
 const URL_QUEUE_MAX = 20;
+// Skip crossfade: pre-spool the next stream, fade the current one down,
+// swap resources (no player Idle in between), fade the new one up.
+const URL_SKIP_FADEOUT_MS = 1200;
+const URL_SKIP_FADEIN_MS = 900;
+const URL_SKIP_PREBUFFER_TIMEOUT_MS = 8000;
+let urlSkipInProgress = false;
+let urlSkipAbort = false; // set by /api/stop to cancel an in-flight crossfade
+const urlSkipVotes = new Map(); // presenceKey -> display name, reset per stream
 // previewId -> { filePath, url, title, duration, createdAt, username }
 const urlPreviewCache = new Map();
 
@@ -6938,6 +6947,7 @@ function killActiveUrlStream() {
 function processUrlQueue() {
     if (urlStreamQueue.length === 0) return;
     if (voiceTeardownInProgress) return;
+    if (urlSkipInProgress) return; // crossfade orchestration owns the player right now
     if (activeUrlStream) return;
     if (player.state.status !== AudioPlayerStatus.Idle) return;
     // Let TTS drain first — its own Idle transition re-triggers this.
@@ -6956,44 +6966,11 @@ function processUrlQueue() {
     });
 }
 
-// Start a URL stream on the shared player. `item` carries everything needed
-// so queued entries can start after the originating request is long gone.
-async function startUrlStreamPlayback(item) {
-    const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur, mystery } = item;
-    // Mystery picks hide the title from everyone while queued and while
-    // playing; the real title only lands in Recently Played once the
-    // stream ends (the reveal). Stats/audit rows keep the real title.
-    const publicTitle = mystery ? `🎭 Mystery pick from ${requestedBy.username}` : title;
-    const conn = activeGuildId ? getVoiceConnection(activeGuildId) : null;
-    if (!conn) { const e = new Error('Not connected to a voice channel.'); e.statusCode = 400; throw e; }
-    if (conn.state?.status !== 'ready') {
-        try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
-        catch { const e = new Error('Voice connection failed to establish.'); e.statusCode = 503; throw e; }
-    }
-
-    // Preempt — a starting URL stream owns the single-play slot.
-    killActiveUrlStream();
-    if (currentSinglePlayId != null) {
-        statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
-        currentSinglePlayId = null;
-    }
-    if (multiPlayEnabled) {
-        finalizeAllOpenPlays(true);
-        if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
-        activeTracks.clear();
-    }
-    player.stop();
-
-    const crypto = require('crypto');
-    const safeName = 'url:' + crypto.createHash('sha1').update(url + ':' + trimStart + ':' + (trimEnd || '')).digest('hex').slice(0, 10);
-    const startedBy = { username: requestedBy.username, role: requestedBy.role };
-    const plannedDurationMs = effectiveDuration != null ? Math.round(effectiveDuration * 1000) : null;
-    const newPlayId = statsDb.recordPlayStart({
-        filename: safeName, displayName: title,
-        userId: requestedBy.username, userRole: requestedBy.role,
-        guestIp: null, plannedDurationMs,
-    });
-
+// Spawn the yt-dlp/ffmpeg pipeline for a queue item without touching the
+// player — split out so a crossfade can pre-spool the next stream while
+// the current one is still audible.
+function spawnUrlStreamPipeline(item) {
+    const { url, trimStart, trimEnd, previewFilePath } = item;
     let ytdlp = null, ff;
     if (previewFilePath) {
         // Stream from cached WAV through ffmpeg with trim.
@@ -7014,14 +6991,102 @@ async function startUrlStreamPlayback(item) {
         ff.stderr.on('data', () => {});
         ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
     }
+    return { ytdlp, ff };
+}
+
+function killUrlPipeline(pipeline) {
+    if (!pipeline) return;
+    try { pipeline.ff?.kill('SIGKILL'); } catch {}
+    try { pipeline.ytdlp?.kill('SIGKILL'); } catch {}
+}
+
+// Resolves once the pipeline has produced its first audio bytes (buffered,
+// not consumed), so a crossfade never swaps to dead air.
+function waitForFirstData(stream, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const finish = (err) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            stream.off('readable', onReadable);
+            stream.off('end', onEnd);
+            stream.off('close', onEnd);
+            stream.off('error', onError);
+            err ? reject(err) : resolve();
+        };
+        const onReadable = () => {
+            if (stream.readableLength > 0) return finish();
+            // A zero-byte 'readable' is the EOF signal on an unread stream;
+            // read() returns null there and unblocks the 'end' emission.
+            stream.read();
+        };
+        const onEnd = () => { if (stream.readableLength === 0) finish(new Error('stream ended before producing audio')); };
+        const onError = (e) => finish(e);
+        const timer = setTimeout(() => finish(new Error('timed out waiting for audio')), timeoutMs);
+        stream.on('readable', onReadable);
+        stream.on('end', onEnd);
+        stream.on('close', onEnd);
+        stream.on('error', onError);
+        onReadable();
+    });
+}
+
+// Ramp the current resource's inline volume to 0 over ~ms. Bails out if the
+// resource gets swapped or stopped underneath us mid-fade.
+async function fadeOutCurrentPlayback(ms) {
+    const st = player.state;
+    if (st.status !== AudioPlayerStatus.Playing && st.status !== AudioPlayerStatus.Buffering) return;
+    const res = st.resource;
+    if (!res || !res.volume) return;
+    const steps = 15;
+    const base = typeof res.volume.volume === 'number' ? res.volume.volume : currentVolume;
+    for (let i = 1; i <= steps; i++) {
+        await new Promise(r => setTimeout(r, Math.max(20, Math.round(ms / steps))));
+        if (player.state.resource !== res) return;
+        try { res.volume.setVolume(base * (1 - i / steps)); } catch { return; }
+    }
+}
+
+function fadeInResource(resource, target, ms) {
+    const steps = Math.max(4, Math.round(ms / 80));
+    let i = 0;
+    const iv = setInterval(() => {
+        i++;
+        const done = i >= steps || player.state.resource !== resource;
+        try { resource.volume.setVolume(done ? target : target * (i / steps)); } catch {}
+        if (done) clearInterval(iv);
+    }, Math.max(30, Math.round(ms / steps)));
+    if (iv.unref) iv.unref();
+}
+
+// Wire a spawned pipeline into the shared player and take over playback
+// state. Assumes the caller has already dealt with whatever was playing.
+function attachUrlStreamPipeline(item, pipeline, { fadeInMs = 0 } = {}) {
+    const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur, mystery } = item;
+    const { ytdlp, ff } = pipeline;
+    // Mystery picks hide the title from everyone while queued and while
+    // playing; the real title only lands in Recently Played once the
+    // stream ends (the reveal). Stats/audit rows keep the real title.
+    const publicTitle = mystery ? `🎭 Mystery pick from ${requestedBy.username}` : title;
+
+    const crypto = require('crypto');
+    const safeName = 'url:' + crypto.createHash('sha1').update(url + ':' + trimStart + ':' + (trimEnd || '')).digest('hex').slice(0, 10);
+    const startedBy = { username: requestedBy.username, role: requestedBy.role };
+    const plannedDurationMs = effectiveDuration != null ? Math.round(effectiveDuration * 1000) : null;
+    const newPlayId = statsDb.recordPlayStart({
+        filename: safeName, displayName: title,
+        userId: requestedBy.username, userRole: requestedBy.role,
+        guestIp: null, plannedDurationMs,
+    });
 
     const killAfterMs = ((effectiveDuration != null ? effectiveDuration : maxDur) || 600) * 1000 + 10_000;
     const killTimer = setTimeout(() => {
         console.log('[url-stream] hard-killing stream after max duration');
-        try { ff.kill('SIGKILL'); } catch {}
-        try { ytdlp?.kill('SIGKILL'); } catch {}
+        killUrlPipeline(pipeline);
     }, killAfterMs);
 
+    urlSkipVotes.clear();
     activeUrlStream = { ytdlp, ff, killTimer, previewFilePath: previewFilePath || null };
 
     ff.on('close', () => {
@@ -7042,7 +7107,12 @@ async function startUrlStreamPlayback(item) {
         inputType: StreamType.Arbitrary, inlineVolume: true,
         metadata: { filename: safeName, displayName: publicTitle },
     });
-    resource.volume.setVolume(currentVolume);
+    if (fadeInMs > 0) {
+        resource.volume.setVolume(0);
+        fadeInResource(resource, currentVolume, fadeInMs);
+    } else {
+        resource.volume.setVolume(currentVolume);
+    }
     player.play(resource);
     currentSinglePlayId = newPlayId;
     playbackState = {
@@ -7064,6 +7134,92 @@ async function startUrlStreamPlayback(item) {
         details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewFilePath, mystery: !!mystery },
     });
     return { title, duration: effectiveDuration, url, trimStart, trimEnd, mystery: !!mystery };
+}
+
+// Start a URL stream on the shared player. `item` carries everything needed
+// so queued entries can start after the originating request is long gone.
+async function startUrlStreamPlayback(item) {
+    const conn = activeGuildId ? getVoiceConnection(activeGuildId) : null;
+    if (!conn) { const e = new Error('Not connected to a voice channel.'); e.statusCode = 400; throw e; }
+    if (conn.state?.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
+        catch { const e = new Error('Voice connection failed to establish.'); e.statusCode = 503; throw e; }
+    }
+
+    // Preempt — a starting URL stream owns the single-play slot.
+    killActiveUrlStream();
+    if (currentSinglePlayId != null) {
+        statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+        currentSinglePlayId = null;
+    }
+    if (multiPlayEnabled) {
+        finalizeAllOpenPlays(true);
+        if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
+    }
+    player.stop();
+
+    return attachUrlStreamPipeline(item, spawnUrlStreamPipeline(item));
+}
+
+// Skip the current URL stream with a crossfade: pre-spool the next queued
+// item, fade the current stream out, swap the player resource (no Idle
+// transition, so nothing else can steal the slot), fade the next one in.
+// With an empty queue it's just a fade-to-stop.
+async function performUrlSkip() {
+    if (urlSkipInProgress) { const e = new Error('A skip is already in progress.'); e.statusCode = 409; throw e; }
+    urlSkipInProgress = true;
+    urlSkipAbort = false;
+    try {
+        urlSkipVotes.clear();
+        let next = null;
+        while (urlStreamQueue.length > 0 && !next) {
+            const cand = urlStreamQueue.shift();
+            if (cand.previewFilePath && !fs.existsSync(cand.previewFilePath)) {
+                console.warn('[url-queue] cached preview missing, skipping "%s"', cand.title);
+                continue;
+            }
+            next = cand;
+        }
+
+        let pipeline = null;
+        if (next) {
+            try {
+                pipeline = spawnUrlStreamPipeline(next);
+                await waitForFirstData(pipeline.ff.stdout, URL_SKIP_PREBUFFER_TIMEOUT_MS);
+            } catch (err) {
+                console.warn('[url-queue] crossfade pre-spool failed for "%s":', next.title, err.message || err);
+                killUrlPipeline(pipeline);
+                pipeline = null;
+                next = null; // drop the broken item; remaining queue advances normally
+            }
+        }
+
+        await fadeOutCurrentPlayback(URL_SKIP_FADEOUT_MS);
+
+        if (urlSkipAbort) { // /api/stop won mid-fade — leave everything stopped
+            killUrlPipeline(pipeline);
+            return { skipped: false, aborted: true };
+        }
+
+        killActiveUrlStream();
+        if (currentSinglePlayId != null) {
+            statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+            currentSinglePlayId = null;
+        }
+
+        if (pipeline && next) {
+            // player.play() swaps the resource directly — no Idle event, so
+            // TTS/queue handlers never see a free player mid-crossfade.
+            attachUrlStreamPipeline(next, pipeline, { fadeInMs: URL_SKIP_FADEIN_MS });
+            return { skipped: true, next: { title: next.mystery ? null : next.title, mystery: !!next.mystery, username: next.requestedBy?.username || null } };
+        }
+        player.stop();
+        return { skipped: true, next: null };
+    } finally {
+        urlSkipInProgress = false;
+        setImmediate(processUrlQueue);
+    }
 }
 
 // Download the URL audio to a server-side cache so the client can render a
@@ -7389,9 +7545,9 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
     }
 });
 
-// Skip the current URL stream; the queue advances via the player Idle
-// transition. Allowed for admins+ and whoever started the current stream.
-app.post('/api/stream-url/skip', requireAuth, (req, res) => {
+// Skip the current URL stream (crossfade into the next queued item).
+// Allowed for admins+ and whoever started the current stream.
+app.post('/api/stream-url/skip', requireAuth, async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     const isAdmin = role === 'admin' || role === 'superadmin';
@@ -7400,18 +7556,64 @@ app.post('/api/stream-url/skip', requireAuth, (req, res) => {
         const isOwn = current && current.username === un;
         if (!isOwn && !isAdmin) return res.status(403).json({ error: 'You can only skip your own stream.' });
         if (!isOwn && role === 'admin' && current?.role === 'superadmin') return res.status(403).json({ error: 'Only superadmin can skip superadmin playback.' });
-        killActiveUrlStream();
-        if (currentSinglePlayId != null) {
-            statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
-            currentSinglePlayId = null;
-        }
-        player.stop();
         statsDb.recordAdminAction({ actor: un, actorRole: role, action: 'url-stream.skip', target: playbackState.filename || 'url', details: null });
+        try {
+            await performUrlSkip();
+        } catch (err) {
+            return res.status(err.statusCode || 500).json({ error: err.message || 'Skip failed' });
+        }
     } else if (urlStreamQueue.length === 0) {
         return res.status(400).json({ error: 'No URL stream is playing or queued.' });
+    } else {
+        setImmediate(processUrlQueue);
     }
-    setImmediate(processUrlQueue);
     res.json({ ok: true, queued: urlStreamQueue.length });
+});
+
+// Anyone (incl. guests) can request a skip; enough requests and the skip
+// fires on its own. Threshold = half the users active on the web UI in the
+// last 45s. Voting again withdraws the vote. The stream's owner voting
+// skips immediately (it's theirs).
+function urlSkipVoteThreshold() {
+    const now = Date.now();
+    let active = 0;
+    for (const [, p] of activePresence) {
+        if (now - p.lastSeen < PRESENCE_TIMEOUT_MS) active++;
+    }
+    return Math.max(1, Math.ceil(active / 2));
+}
+
+app.post('/api/stream-url/vote-skip', requireAuth, async (req, res) => {
+    if (!activeUrlStream) return res.status(400).json({ error: 'No URL stream is playing.' });
+    const u = req.session.user;
+    const key = presenceKey(req);
+    const display = u.role === 'guest' ? 'guest' : u.username;
+    let voted;
+    if (urlSkipVotes.has(key)) {
+        urlSkipVotes.delete(key);
+        voted = false;
+    } else {
+        urlSkipVotes.set(key, display);
+        voted = true;
+    }
+    const threshold = urlSkipVoteThreshold();
+    const isOwn = u.role !== 'guest' && playbackState.startedBy && playbackState.startedBy.username === u.username;
+    let skipped = false;
+    if (voted && (isOwn || urlSkipVotes.size >= threshold)) {
+        statsDb.recordAdminAction({
+            actor: display, actorRole: u.role,
+            action: 'url-stream.vote-skip',
+            target: playbackState.filename || 'url',
+            details: { votes: urlSkipVotes.size, threshold, ownSkip: !!isOwn, voters: [...urlSkipVotes.values()] },
+        });
+        try {
+            await performUrlSkip();
+            skipped = true;
+        } catch (err) {
+            if (err.statusCode !== 409) console.error('[url-stream] vote-skip failed:', err.message || err);
+        }
+    }
+    res.json({ ok: true, voted, votes: urlSkipVotes.size, threshold, skipped });
 });
 
 // Remove one queued item — its requester or an admin+.
@@ -7654,6 +7856,13 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.volume = currentVolume;
     state.multiPlay = multiPlayEnabled;
     state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, synthPending: ttsSynthPending, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
+    // Vote-skip status for the current URL stream (null when none playing).
+    state.urlSkipVote = activeUrlStream ? {
+        votes: urlSkipVotes.size,
+        threshold: urlSkipVoteThreshold(),
+        voters: [...urlSkipVotes.values()],
+        voted: urlSkipVotes.has(presenceKey(req)),
+    } : null;
     // Mystery queue entries hide title + length from everyone except the
     // person who queued them — the list still shows who it came from.
     state.urlQueue = { length: urlStreamQueue.length, items: urlStreamQueue.map(q => {
@@ -7773,8 +7982,10 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     // Clear the queues and the active URL stream before player.stop() —
     // the Idle handler it fires synchronously would otherwise start the
     // next queued URL stream we're trying to stop.
+    if (urlSkipInProgress) urlSkipAbort = true; // cancel an in-flight crossfade
     killActiveUrlStream();
     urlStreamQueue.length = 0;
+    urlSkipVotes.clear();
     ttsQueue.length = 0;
     ttsIsPlaying = false;
     player.stop();
