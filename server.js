@@ -6959,7 +6959,11 @@ function processUrlQueue() {
 // Start a URL stream on the shared player. `item` carries everything needed
 // so queued entries can start after the originating request is long gone.
 async function startUrlStreamPlayback(item) {
-    const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur } = item;
+    const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur, mystery } = item;
+    // Mystery picks hide the title from everyone while queued and while
+    // playing; the real title only lands in Recently Played once the
+    // stream ends (the reveal). Stats/audit rows keep the real title.
+    const publicTitle = mystery ? `🎭 Mystery pick from ${requestedBy.username}` : title;
     const conn = activeGuildId ? getVoiceConnection(activeGuildId) : null;
     if (!conn) { const e = new Error('Not connected to a voice channel.'); e.statusCode = 400; throw e; }
     if (conn.state?.status !== 'ready') {
@@ -7028,12 +7032,15 @@ async function startUrlStreamPlayback(item) {
             statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
             currentSinglePlayId = null;
         }
+        // The reveal: mystery picks enter Recently Played with their real
+        // title only after the stream is over.
+        if (mystery) addToRecentlyPlayedServer(safeName, title, requestedBy.username, Date.now());
         setImmediate(processUrlQueue);
     });
 
     const resource = createAudioResource(ff.stdout, {
         inputType: StreamType.Arbitrary, inlineVolume: true,
-        metadata: { filename: safeName, displayName: title },
+        metadata: { filename: safeName, displayName: publicTitle },
     });
     resource.volume.setVolume(currentVolume);
     player.play(resource);
@@ -7041,21 +7048,22 @@ async function startUrlStreamPlayback(item) {
     playbackState = {
         status: 'playing',
         filename: safeName,
-        displayName: title,
+        displayName: publicTitle,
         startTime: Date.now(),
         startTimeOffset: 0,
         duration: effectiveDuration,
         startedBy,
+        mystery: !!mystery,
     };
-    addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
+    if (!mystery) addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
     statsDb.recordAdminAction({
         actor: requestedBy.username,
         actorRole: requestedBy.role,
         action: 'url-stream.play',
         target: safeName,
-        details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewFilePath },
+        details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewFilePath, mystery: !!mystery },
     });
-    return { title, duration: effectiveDuration, url, trimStart, trimEnd };
+    return { title, duration: effectiveDuration, url, trimStart, trimEnd, mystery: !!mystery };
 }
 
 // Download the URL audio to a server-side cache so the client can render a
@@ -7352,6 +7360,7 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         previewFilePath: previewEntry ? previewEntry.filePath : null,
         requestedBy: { username: un, role },
         maxDur,
+        mystery: !!body.mystery,
     };
 
     // Re-check after the async probe: another stream may have started since.
@@ -7645,7 +7654,13 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.volume = currentVolume;
     state.multiPlay = multiPlayEnabled;
     state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, synthPending: ttsSynthPending, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
-    state.urlQueue = { length: urlStreamQueue.length, items: urlStreamQueue.map(q => ({ id: q.id, title: q.title, duration: q.effectiveDuration, username: q.requestedBy?.username || null })) };
+    // Mystery queue entries hide title + length from everyone except the
+    // person who queued them — the list still shows who it came from.
+    state.urlQueue = { length: urlStreamQueue.length, items: urlStreamQueue.map(q => {
+        const isOwn = q.requestedBy?.username === req.session.user.username;
+        const hide = q.mystery && !isOwn;
+        return { id: q.id, title: hide ? null : q.title, duration: hide ? null : q.effectiveDuration, username: q.requestedBy?.username || null, mystery: !!q.mystery };
+    }) };
     // Include all active tracks for multi-play
     if (multiPlayEnabled && activeTracks.size > 0) {
         const now = Date.now();

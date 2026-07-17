@@ -1286,6 +1286,9 @@
                 <input type="url" id="urlStreamInput" placeholder="https://www.youtube.com/watch?v=..." style="flex:1; min-width:200px; padding:0.45rem 0.55rem; background:var(--surface-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); font-size:0.85rem;">
                 <button type="button" class="btn btn-primary btn-sm" id="urlStreamPreviewBtn" onclick="loadUrlStreamPreview()">Preview</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="urlStreamPlayFullBtn" onclick="playStreamUrl()" title="Stream the whole video directly — no preview / trim">Play full</button>
+                <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--text-muted); cursor:pointer; user-select:none;" title="Hide the title from everyone else — the queue and now-playing only show who queued it. The real title is revealed in Recently Played once it finishes.">
+                    <input type="checkbox" id="urlStreamMysteryChk" onchange="try{localStorage.setItem('urlStreamMystery', this.checked ? '1' : '')}catch(e){}"> 🎭 Mystery
+                </label>
             </div>
             <div id="urlStreamInfo" style="font-size:0.8rem; color:var(--text-muted); min-height:1.1rem; margin:0.4rem 0 0;"></div>
             <div class="hidden" id="urlStreamPreviewArea" style="margin-top:0.6rem;">
@@ -5105,6 +5108,7 @@
         let _urlStreamPreview = null; // { previewId, title, duration, url, peaks }
         let _urlStreamTrim = { start: 0, end: null };
         let _urlStreamDraggingHandle = null; // 'start' | 'end' | 'seek' | null
+        try { const _mc = document.getElementById('urlStreamMysteryChk'); if (_mc) _mc.checked = localStorage.getItem('urlStreamMystery') === '1'; } catch {}
 
         function toggleUrlStreamSection() {
             const card = document.getElementById('urlStreamCard');
@@ -5364,7 +5368,8 @@
             if (!url) { _urlStreamSetInfo('Paste a URL first.', true); showToast('Paste a URL first', 'error'); return; }
             _urlStreamSetBusy(true);
             _urlStreamSetInfo('Starting stream…');
-            const res = await api('/api/stream-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+            const mystery = !!document.getElementById('urlStreamMysteryChk')?.checked;
+            const res = await api('/api/stream-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, mystery }) });
             _urlStreamSetBusy(false);
             if (!res || !res.ok) {
                 const err = await (res ? res.json().catch(() => ({})) : {});
@@ -5374,8 +5379,8 @@
             }
             const d = await res.json();
             if (d.queued) {
-                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || url));
-                showToast('Added to queue (#' + d.position + ')', 'success');
+                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || url) + (mystery ? ' 🎭' : ''));
+                showToast('Added to queue (#' + d.position + ')' + (mystery ? ' 🎭 mystery' : ''), 'success');
             } else {
                 _urlStreamSetInfo('Streaming: ' + (d.title || url));
                 showToast('Streaming ' + (d.title || 'URL'), 'success');
@@ -5388,9 +5393,10 @@
             if (!p) { _urlStreamSetInfo('Load a preview first.', true); showToast('Load a preview first', 'error'); return; }
             _urlStreamSetBusy(true);
             _urlStreamSetInfo('Starting trimmed stream…');
+            const mystery = !!document.getElementById('urlStreamMysteryChk')?.checked;
             const res = await api('/api/stream-url', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ previewId: p.previewId, trimStart: _urlStreamTrim.start, trimEnd: _urlStreamTrim.end }),
+                body: JSON.stringify({ previewId: p.previewId, trimStart: _urlStreamTrim.start, trimEnd: _urlStreamTrim.end, mystery }),
             });
             _urlStreamSetBusy(false);
             if (!res || !res.ok) {
@@ -5401,8 +5407,8 @@
             }
             const d = await res.json();
             if (d.queued) {
-                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || p.title) + (d.duration != null ? ' · ' + _fmtTime(d.duration) : ''));
-                showToast('Added to queue (#' + d.position + ')', 'success');
+                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || p.title) + (d.duration != null ? ' · ' + _fmtTime(d.duration) : '') + (mystery ? ' 🎭' : ''));
+                showToast('Added to queue (#' + d.position + ')' + (mystery ? ' 🎭 mystery' : ''), 'success');
             } else {
                 _urlStreamSetInfo('Streaming: ' + (d.title || p.title) + ' · ' + _fmtTime(d.duration));
                 showToast('Streaming trimmed clip to Discord', 'success');
@@ -5432,9 +5438,12 @@
             const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
             list.innerHTML = items.map((it, i) => {
                 const canRemove = isAdmin || (user && it.username === user.username);
+                // Mystery entries arrive with title/duration nulled for everyone but their requester.
+                const label = (it.mystery ? '🎭 ' : '') + (it.title != null ? it.title : '???');
+                const hoverTitle = it.title != null ? it.title : 'Mystery pick — revealed in Recently Played after it plays';
                 return '<div style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0; border-top:1px solid var(--border); font-size:0.8rem;">' +
                     '<span style="color:var(--text-muted); font-family:monospace; min-width:1.4rem;">' + (i + 1) + '.</span>' +
-                    '<span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(it.title) + '">' + esc(it.title) + '</span>' +
+                    '<span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(hoverTitle) + '">' + esc(label) + '</span>' +
                     '<span style="color:var(--text-muted); white-space:nowrap;">' + esc(it.username || '') + (it.duration != null ? ' · ' + _fmtTime(it.duration) : '') + '</span>' +
                     (canRemove ? '<button type="button" class="btn btn-ghost btn-sm" onclick="removeUrlQueueItem(' + Number(it.id) + ')" title="Remove from queue">✕</button>' : '') +
                     '</div>';
