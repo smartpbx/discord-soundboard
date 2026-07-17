@@ -1310,6 +1310,14 @@
                 </div>
                 <audio id="urlStreamLocalAudio" preload="auto" style="display:none"></audio>
             </div>
+            <div class="hidden" id="urlStreamQueueArea" style="margin-top:0.6rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                    <span style="font-size:0.8rem; font-weight:600; color:var(--text-muted);">Up next</span>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="urlQueueSkipBtn" onclick="skipUrlStream()" title="Stop the current stream and play the next queued URL">⏭ Skip current</button>
+                    <button type="button" class="btn btn-ghost btn-sm hidden" id="urlQueueClearBtn" onclick="clearUrlQueue()" title="Remove everything from the queue">Clear queue</button>
+                </div>
+                <div id="urlStreamQueueList"></div>
+            </div>
         </div>
         <div class="card hidden" id="sunoCard">
             <div class="tts-card-header">
@@ -5365,8 +5373,14 @@
                 return;
             }
             const d = await res.json();
-            _urlStreamSetInfo('Streaming: ' + (d.title || url));
-            showToast('Streaming ' + (d.title || 'URL'), 'success');
+            if (d.queued) {
+                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || url));
+                showToast('Added to queue (#' + d.position + ')', 'success');
+            } else {
+                _urlStreamSetInfo('Streaming: ' + (d.title || url));
+                showToast('Streaming ' + (d.title || 'URL'), 'success');
+            }
+            refreshPlaybackState();
         }
 
         async function playStreamUrlTrim() {
@@ -5386,8 +5400,78 @@
                 return;
             }
             const d = await res.json();
-            _urlStreamSetInfo('Streaming: ' + (d.title || p.title) + ' · ' + _fmtTime(d.duration));
-            showToast('Streaming trimmed clip to Discord', 'success');
+            if (d.queued) {
+                _urlStreamSetInfo('Queued at #' + d.position + ': ' + (d.title || p.title) + (d.duration != null ? ' · ' + _fmtTime(d.duration) : ''));
+                showToast('Added to queue (#' + d.position + ')', 'success');
+            } else {
+                _urlStreamSetInfo('Streaming: ' + (d.title || p.title) + ' · ' + _fmtTime(d.duration));
+                showToast('Streaming trimmed clip to Discord', 'success');
+            }
+            refreshPlaybackState();
+        }
+
+        function renderUrlQueue(q, state) {
+            const items = (q && Array.isArray(q.items)) ? q.items : [];
+            const toggleBtn = document.getElementById('urlStreamToggleBtn');
+            if (toggleBtn) {
+                const label = items.length > 0 ? ('🔗 URL (' + items.length + ')') : '🔗 URL';
+                if (toggleBtn.textContent !== label) toggleBtn.textContent = label;
+            }
+            const area = document.getElementById('urlStreamQueueArea');
+            const list = document.getElementById('urlStreamQueueList');
+            if (!area || !list) return;
+            const isAdmin = typeof isAdminOrSuperadmin === 'function' && isAdminOrSuperadmin();
+            const playingUrl = state && (state.status === 'playing' || state.status === 'paused' || state.status === 'buffering') && String(state.filename || '').indexOf('url:') === 0;
+            const canSkip = playingUrl && (isAdmin || (state.startedBy && user && state.startedBy.username === user.username));
+            const skipBtn = document.getElementById('urlQueueSkipBtn');
+            if (skipBtn) skipBtn.classList.toggle('hidden', !canSkip);
+            const clearBtn = document.getElementById('urlQueueClearBtn');
+            if (clearBtn) clearBtn.classList.toggle('hidden', !isAdmin || items.length === 0);
+            if (items.length === 0 && !canSkip) { area.classList.add('hidden'); list.innerHTML = ''; return; }
+            area.classList.remove('hidden');
+            const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+            list.innerHTML = items.map((it, i) => {
+                const canRemove = isAdmin || (user && it.username === user.username);
+                return '<div style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0; border-top:1px solid var(--border); font-size:0.8rem;">' +
+                    '<span style="color:var(--text-muted); font-family:monospace; min-width:1.4rem;">' + (i + 1) + '.</span>' +
+                    '<span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + esc(it.title) + '">' + esc(it.title) + '</span>' +
+                    '<span style="color:var(--text-muted); white-space:nowrap;">' + esc(it.username || '') + (it.duration != null ? ' · ' + _fmtTime(it.duration) : '') + '</span>' +
+                    (canRemove ? '<button type="button" class="btn btn-ghost btn-sm" onclick="removeUrlQueueItem(' + Number(it.id) + ')" title="Remove from queue">✕</button>' : '') +
+                    '</div>';
+            }).join('');
+        }
+
+        async function skipUrlStream() {
+            const res = await api('/api/stream-url/skip', { method: 'POST' });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                showToast(err.error || 'Skip failed', 'error');
+                return;
+            }
+            showToast('Skipped', 'success');
+            setTimeout(refreshPlaybackState, 300);
+        }
+
+        async function removeUrlQueueItem(id) {
+            const res = await api('/api/stream-url/queue/' + id, { method: 'DELETE' });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                showToast(err.error || 'Remove failed', 'error');
+                return;
+            }
+            showToast('Removed from queue', 'success');
+            refreshPlaybackState();
+        }
+
+        async function clearUrlQueue() {
+            const res = await api('/api/stream-url/queue/clear', { method: 'POST' });
+            if (!res || !res.ok) {
+                const err = await (res ? res.json().catch(() => ({})) : {});
+                showToast(err.error || 'Clear failed', 'error');
+                return;
+            }
+            showToast('Queue cleared', 'success');
+            refreshPlaybackState();
         }
 
         async function importStreamUrl() {
@@ -7995,6 +8079,7 @@
                         superadminStatus.textContent = hasActivity ? parts.join(' \u2022 ') : 'Queue idle.';
                     }
                 }
+                if (state.urlQueue) renderUrlQueue(state.urlQueue, state);
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
                 if ((state.status === 'playing' || state.status === 'paused') && state.filename && waveformFilename !== state.filename) loadWaveform(state.filename);
                 if (state.volume !== undefined && Number.isFinite(state.volume) && isAdminOrSuperadmin()) {

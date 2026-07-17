@@ -4407,6 +4407,9 @@ player.on('stateChange', (oldState, newState) => {
         // ttsIsPlaying stuck true.)
         ttsIsPlaying = false;
         processTtsQueue();
+        // TTS gets first claim on the freed player; if it started something,
+        // the guards inside processUrlQueue keep the URL queue waiting.
+        processUrlQueue();
     } else if (
         (newState.status === AudioPlayerStatus.Playing || newState.status === AudioPlayerStatus.Buffering) &&
         ttsIsPlaying && newState.resource?.metadata?.filename !== 'tts'
@@ -4485,20 +4488,30 @@ function processTtsQueue() {
     playTtsBuffer(item);
 }
 
+// player.stop() during teardown fires the Idle handler synchronously while
+// the voice connection still looks alive — without this flag the URL queue
+// would start its next stream into a connection we're about to destroy.
+let voiceTeardownInProgress = false;
+
 function leaveVoiceChannel() {
     if (activeGuildId) {
-        stopVoiceTriggerCapture();
-        stopClipCapture();
-        // Carrying premature-close timestamps across a leave can falsely
-        // trip the 3-in-30s rejoin guard the moment we reconnect.
-        prematureCloseTimestamps = [];
-        player.stop();
-        if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
-        activeTracks.clear();
-        const connection = getVoiceConnection(activeGuildId);
-        if (connection) connection.destroy();
-        activeGuildId = null;
-        currentConnection = null;
+        voiceTeardownInProgress = true;
+        try {
+            stopVoiceTriggerCapture();
+            stopClipCapture();
+            // Carrying premature-close timestamps across a leave can falsely
+            // trip the 3-in-30s rejoin guard the moment we reconnect.
+            prematureCloseTimestamps = [];
+            player.stop();
+            if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+            activeTracks.clear();
+            const connection = getVoiceConnection(activeGuildId);
+            if (connection) connection.destroy();
+            activeGuildId = null;
+            currentConnection = null;
+        } finally {
+            voiceTeardownInProgress = false;
+        }
         return true;
     }
     return false;
@@ -4516,6 +4529,8 @@ app.post('/api/join', requireAdmin, (req, res) => {
     console.log('[DIAG] voice.join channelId=', channelId, 'guildId=', channel.guild.id, 'connectionState=', currentConnection.state?.status ?? 'unknown');
     lastChannelId = channelId;
     saveServerState({ lastChannelId });
+    // Rejoining voice resumes any URL streams still waiting in the queue.
+    if (urlStreamQueue.length > 0) setTimeout(processUrlQueue, 1000);
     res.send(`Joined ${channel.name}`);
 });
 
@@ -6848,13 +6863,25 @@ function ytdlpCommonArgs() {
     if (extra) args.push(...extra.split(/\s+/));
     return args;
 }
-let activeUrlStream = null; // { ytdlp, ff, killTimer }
+let activeUrlStream = null; // { ytdlp, ff, killTimer, previewFilePath }
+// FIFO of URL streams waiting for the player: submitting a URL while one is
+// already streaming queues it instead of preempting.
+// [{ id, url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur }]
+const urlStreamQueue = [];
+let urlQueueNextId = 1;
+const URL_QUEUE_MAX = 20;
 // previewId -> { filePath, url, title, duration, createdAt, username }
 const urlPreviewCache = new Map();
 
 function sweepUrlPreviews() {
     const now = Date.now();
+    // Preview files backing the active stream or queued items must survive
+    // the TTL — a queued trim can sit longer than 30 min before it plays.
+    const pinned = new Set();
+    if (activeUrlStream?.previewFilePath) pinned.add(activeUrlStream.previewFilePath);
+    for (const q of urlStreamQueue) if (q.previewFilePath) pinned.add(q.previewFilePath);
     for (const [id, entry] of urlPreviewCache) {
+        if (pinned.has(entry.filePath)) continue;
         if (now - entry.createdAt > URL_PREVIEW_TTL_MS) {
             try { fs.unlinkSync(entry.filePath); } catch {}
             urlPreviewCache.delete(id);
@@ -6863,6 +6890,7 @@ function sweepUrlPreviews() {
     try {
         for (const name of fs.readdirSync(URL_PREVIEW_DIR)) {
             const full = path.join(URL_PREVIEW_DIR, name);
+            if (pinned.has(full)) continue;
             const st = fs.statSync(full);
             if (now - st.mtimeMs > URL_PREVIEW_TTL_MS) {
                 try { fs.unlinkSync(full); } catch {}
@@ -6902,6 +6930,132 @@ function killActiveUrlStream() {
     try { activeUrlStream.ytdlp?.kill('SIGKILL'); } catch {}
     if (activeUrlStream.killTimer) clearTimeout(activeUrlStream.killTimer);
     activeUrlStream = null;
+}
+
+// Advance the URL queue when the shared player is free. Called from the
+// player Idle transition, after each stream's ffmpeg exits, on enqueue, and
+// on skip — all guarded, so redundant calls are harmless.
+function processUrlQueue() {
+    if (urlStreamQueue.length === 0) return;
+    if (voiceTeardownInProgress) return;
+    if (activeUrlStream) return;
+    if (player.state.status !== AudioPlayerStatus.Idle) return;
+    // Let TTS drain first — its own Idle transition re-triggers this.
+    if (ttsIsPlaying || ttsQueue.length > 0) return;
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) return;
+    const item = urlStreamQueue.shift();
+    if (item.previewFilePath && !fs.existsSync(item.previewFilePath)) {
+        console.warn('[url-queue] cached preview missing, skipping "%s"', item.title);
+        setImmediate(processUrlQueue);
+        return;
+    }
+    console.log('[url-queue] starting "%s" (%d left in queue)', item.title, urlStreamQueue.length);
+    startUrlStreamPlayback(item).catch((err) => {
+        console.error('[url-queue] failed to start "%s":', item.title, err.message || err);
+        setImmediate(processUrlQueue);
+    });
+}
+
+// Start a URL stream on the shared player. `item` carries everything needed
+// so queued entries can start after the originating request is long gone.
+async function startUrlStreamPlayback(item) {
+    const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur } = item;
+    const conn = activeGuildId ? getVoiceConnection(activeGuildId) : null;
+    if (!conn) { const e = new Error('Not connected to a voice channel.'); e.statusCode = 400; throw e; }
+    if (conn.state?.status !== 'ready') {
+        try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
+        catch { const e = new Error('Voice connection failed to establish.'); e.statusCode = 503; throw e; }
+    }
+
+    // Preempt — a starting URL stream owns the single-play slot.
+    killActiveUrlStream();
+    if (currentSinglePlayId != null) {
+        statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+        currentSinglePlayId = null;
+    }
+    if (multiPlayEnabled) {
+        finalizeAllOpenPlays(true);
+        if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+        activeTracks.clear();
+    }
+    player.stop();
+
+    const crypto = require('crypto');
+    const safeName = 'url:' + crypto.createHash('sha1').update(url + ':' + trimStart + ':' + (trimEnd || '')).digest('hex').slice(0, 10);
+    const startedBy = { username: requestedBy.username, role: requestedBy.role };
+    const plannedDurationMs = effectiveDuration != null ? Math.round(effectiveDuration * 1000) : null;
+    const newPlayId = statsDb.recordPlayStart({
+        filename: safeName, displayName: title,
+        userId: requestedBy.username, userRole: requestedBy.role,
+        guestIp: null, plannedDurationMs,
+    });
+
+    let ytdlp = null, ff;
+    if (previewFilePath) {
+        // Stream from cached WAV through ffmpeg with trim.
+        const ffArgs = ['-nostdin'];
+        if (trimStart > 0) ffArgs.push('-ss', String(trimStart));
+        ffArgs.push('-i', previewFilePath);
+        if (trimEnd != null) ffArgs.push('-t', String(trimEnd - trimStart));
+        ffArgs.push('-vn', '-f', 'mp3', '-');
+        ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        ff.stderr.on('data', () => {});
+        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+    } else {
+        ytdlp = spawn(YT_DLP_BIN, [...ytdlpCommonArgs(), '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.stderr.on('data', () => {});
+        ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
+        ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+        ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
+        ff.stderr.on('data', () => {});
+        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+    }
+
+    const killAfterMs = ((effectiveDuration != null ? effectiveDuration : maxDur) || 600) * 1000 + 10_000;
+    const killTimer = setTimeout(() => {
+        console.log('[url-stream] hard-killing stream after max duration');
+        try { ff.kill('SIGKILL'); } catch {}
+        try { ytdlp?.kill('SIGKILL'); } catch {}
+    }, killAfterMs);
+
+    activeUrlStream = { ytdlp, ff, killTimer, previewFilePath: previewFilePath || null };
+
+    ff.on('close', () => {
+        clearTimeout(killTimer);
+        try { ytdlp?.kill('SIGTERM'); } catch {}
+        if (activeUrlStream && activeUrlStream.ff === ff) activeUrlStream = null;
+        if (currentSinglePlayId === newPlayId) {
+            statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
+            currentSinglePlayId = null;
+        }
+        setImmediate(processUrlQueue);
+    });
+
+    const resource = createAudioResource(ff.stdout, {
+        inputType: StreamType.Arbitrary, inlineVolume: true,
+        metadata: { filename: safeName, displayName: title },
+    });
+    resource.volume.setVolume(currentVolume);
+    player.play(resource);
+    currentSinglePlayId = newPlayId;
+    playbackState = {
+        status: 'playing',
+        filename: safeName,
+        displayName: title,
+        startTime: Date.now(),
+        startTimeOffset: 0,
+        duration: effectiveDuration,
+        startedBy,
+    };
+    addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
+    statsDb.recordAdminAction({
+        actor: requestedBy.username,
+        actorRole: requestedBy.role,
+        action: 'url-stream.play',
+        target: safeName,
+        details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewFilePath },
+    });
+    return { title, duration: effectiveDuration, url, trimStart, trimEnd };
 }
 
 // Download the URL audio to a server-side cache so the client can render a
@@ -7145,10 +7299,17 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
     }
 
+    // When a URL stream is already active (or others are waiting), the new
+    // request queues instead of preempting — so the override checks below
+    // only apply when we're about to cut something off.
+    const willQueue = !!activeUrlStream || urlStreamQueue.length > 0;
+    if (willQueue && urlStreamQueue.length >= URL_QUEUE_MAX) {
+        return res.status(429).json({ error: `URL queue is full (${URL_QUEUE_MAX} max).` });
+    }
     const currentStatus = player.state.status;
     const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
     const startedByRole = playbackState.startedBy?.role;
-    if (isSomeonePlaying) {
+    if (isSomeonePlaying && !willQueue) {
         if ((startedByRole === 'admin' || startedByRole === 'superadmin') && role === 'user') return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
         if (startedByRole === 'superadmin' && role === 'admin') return res.status(403).json({ error: 'A superadmin is playing. You cannot override their playback.' });
     }
@@ -7162,8 +7323,6 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         if (!Number.isFinite(trimEnd) || trimEnd <= trimStart) trimEnd = duration || null;
         if (duration && trimEnd && trimEnd > duration) trimEnd = duration;
     }
-    const effectiveDuration = previewEntry ? (trimEnd != null ? trimEnd - trimStart : duration) : duration;
-
     // If we didn't get a live-URL duration, probe yt-dlp for it (skipped when preview is in use).
     if (!previewEntry) {
         const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
@@ -7179,111 +7338,92 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         }
     }
 
+    const effectiveDuration = previewEntry ? (trimEnd != null ? trimEnd - trimStart : duration) : duration;
+
     const maxDur = getUrlStreamMaxDurationSec(role, un);
-    const checkDur = previewEntry ? effectiveDuration : duration;
-    if (maxDur > 0 && checkDur != null && checkDur > maxDur) {
-        return res.status(403).json({ error: `Length ${Math.ceil(checkDur)}s exceeds your ${maxDur}s cap.` });
+    if (maxDur > 0 && effectiveDuration != null && effectiveDuration > maxDur) {
+        return res.status(403).json({ error: `Length ${Math.ceil(effectiveDuration)}s exceeds your ${maxDur}s cap.` });
     }
 
-    const conn = getVoiceConnection(activeGuildId);
-    if (conn && conn.state?.status !== 'ready') {
-        try { await entersState(conn, VoiceConnectionStatus.Ready, 15_000); }
-        catch { return res.status(503).json({ error: 'Voice connection failed to establish.' }); }
-    }
+    const item = {
+        id: urlQueueNextId++,
+        url, title,
+        effectiveDuration, trimStart, trimEnd,
+        previewFilePath: previewEntry ? previewEntry.filePath : null,
+        requestedBy: { username: un, role },
+        maxDur,
+    };
 
-    // Preempt — URL streams are always single-play.
-    killActiveUrlStream();
-    if (currentSinglePlayId != null) {
-        statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
-        currentSinglePlayId = null;
+    // Re-check after the async probe: another stream may have started since.
+    if (activeUrlStream || urlStreamQueue.length > 0) {
+        if (urlStreamQueue.length >= URL_QUEUE_MAX) {
+            return res.status(429).json({ error: `URL queue is full (${URL_QUEUE_MAX} max).` });
+        }
+        urlStreamQueue.push(item);
+        statsDb.recordAdminAction({
+            actor: un, actorRole: role,
+            action: 'url-stream.queue',
+            target: 'queue',
+            details: { url, title, duration: effectiveDuration, position: urlStreamQueue.length },
+        });
+        // In case playback ended while we were probing.
+        setImmediate(processUrlQueue);
+        return res.json({ ok: true, queued: true, id: item.id, position: urlStreamQueue.length, title, duration: effectiveDuration });
     }
-    if (multiPlayEnabled) {
-        finalizeAllOpenPlays(true);
-        if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
-        activeTracks.clear();
-    }
-    player.stop();
-
-    const crypto = require('crypto');
-    const safeName = 'url:' + crypto.createHash('sha1').update(url + ':' + trimStart + ':' + (trimEnd || '')).digest('hex').slice(0, 10);
-    const startedBy = { username: req.session.user.username, role };
-    const plannedDurationMs = effectiveDuration != null ? Math.round(effectiveDuration * 1000) : null;
-    const newPlayId = statsDb.recordPlayStart({
-        filename: safeName, displayName: title,
-        userId: req.session.user.username, userRole: role,
-        guestIp: null, plannedDurationMs,
-    });
 
     try {
-        let ytdlp = null, ff;
-        if (previewEntry) {
-            // Stream from cached WAV through ffmpeg with trim.
-            const ffArgs = ['-nostdin'];
-            if (trimStart > 0) ffArgs.push('-ss', String(trimStart));
-            ffArgs.push('-i', previewEntry.filePath);
-            if (trimEnd != null) ffArgs.push('-t', String(trimEnd - trimStart));
-            ffArgs.push('-vn', '-f', 'mp3', '-');
-            ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-            ff.stderr.on('data', () => {});
-            ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
-        } else {
-            ytdlp = spawn(YT_DLP_BIN, [...ytdlpCommonArgs(), '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
-            ytdlp.stderr.on('data', () => {});
-            ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
-            ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
-            ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
-            ff.stderr.on('data', () => {});
-            ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
-        }
-
-        const killAfterMs = ((effectiveDuration != null ? effectiveDuration : maxDur) || 600) * 1000 + 10_000;
-        const killTimer = setTimeout(() => {
-            console.log('[url-stream] hard-killing stream after max duration');
-            try { ff.kill('SIGKILL'); } catch {}
-            try { ytdlp?.kill('SIGKILL'); } catch {}
-        }, killAfterMs);
-
-        activeUrlStream = { ytdlp, ff, killTimer };
-
-        ff.on('close', () => {
-            clearTimeout(killTimer);
-            try { ytdlp?.kill('SIGTERM'); } catch {}
-            if (activeUrlStream && activeUrlStream.ff === ff) activeUrlStream = null;
-            if (currentSinglePlayId === newPlayId) {
-                statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
-                currentSinglePlayId = null;
-            }
-        });
-
-        const resource = createAudioResource(ff.stdout, {
-            inputType: StreamType.Arbitrary, inlineVolume: true,
-            metadata: { filename: safeName, displayName: title },
-        });
-        resource.volume.setVolume(currentVolume);
-        player.play(resource);
-        currentSinglePlayId = newPlayId;
-        playbackState = {
-            status: 'playing',
-            filename: safeName,
-            displayName: title,
-            startTime: Date.now(),
-            startTimeOffset: 0,
-            duration: effectiveDuration,
-            startedBy,
-        };
-        addToRecentlyPlayedServer(safeName, title, startedBy.username, Date.now());
-        statsDb.recordAdminAction({
-            actor: req.session.user.username,
-            actorRole: role,
-            action: 'url-stream.play',
-            target: safeName,
-            details: { url, title, duration: effectiveDuration, trimStart, trimEnd, fromPreview: !!previewEntry },
-        });
-        res.json({ ok: true, title, duration: effectiveDuration, url, trimStart, trimEnd });
+        const result = await startUrlStreamPlayback(item);
+        res.json({ ok: true, ...result });
     } catch (err) {
         console.error('[url-stream] fatal', err);
-        res.status(500).json({ error: err.message || 'Failed to start stream' });
+        res.status(err.statusCode || 500).json({ error: err.message || 'Failed to start stream' });
     }
+});
+
+// Skip the current URL stream; the queue advances via the player Idle
+// transition. Allowed for admins+ and whoever started the current stream.
+app.post('/api/stream-url/skip', requireAuth, (req, res) => {
+    const role = req.session.user.role;
+    const un = req.session.user.username;
+    const isAdmin = role === 'admin' || role === 'superadmin';
+    if (activeUrlStream) {
+        const current = playbackState.startedBy;
+        const isOwn = current && current.username === un;
+        if (!isOwn && !isAdmin) return res.status(403).json({ error: 'You can only skip your own stream.' });
+        if (!isOwn && role === 'admin' && current?.role === 'superadmin') return res.status(403).json({ error: 'Only superadmin can skip superadmin playback.' });
+        killActiveUrlStream();
+        if (currentSinglePlayId != null) {
+            statsDb.recordPlayEnd(currentSinglePlayId, { stoppedEarly: true });
+            currentSinglePlayId = null;
+        }
+        player.stop();
+        statsDb.recordAdminAction({ actor: un, actorRole: role, action: 'url-stream.skip', target: playbackState.filename || 'url', details: null });
+    } else if (urlStreamQueue.length === 0) {
+        return res.status(400).json({ error: 'No URL stream is playing or queued.' });
+    }
+    setImmediate(processUrlQueue);
+    res.json({ ok: true, queued: urlStreamQueue.length });
+});
+
+// Remove one queued item — its requester or an admin+.
+app.delete('/api/stream-url/queue/:id', requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const idx = urlStreamQueue.findIndex(q => q.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Queue item not found.' });
+    const role = req.session.user.role;
+    const un = req.session.user.username;
+    const isAdmin = role === 'admin' || role === 'superadmin';
+    if (urlStreamQueue[idx].requestedBy.username !== un && !isAdmin) {
+        return res.status(403).json({ error: 'You can only remove your own queued items.' });
+    }
+    urlStreamQueue.splice(idx, 1);
+    res.json({ ok: true, queued: urlStreamQueue.length });
+});
+
+app.post('/api/stream-url/queue/clear', requireAdmin, (req, res) => {
+    const removed = urlStreamQueue.length;
+    urlStreamQueue.length = 0;
+    res.json({ ok: true, removed });
 });
 
 // ============================================================
@@ -7505,6 +7645,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.volume = currentVolume;
     state.multiPlay = multiPlayEnabled;
     state.ttsQueue = { length: ttsQueue.length, playing: ttsIsPlaying, synthPending: ttsSynthPending, items: ttsQueue.map(q => ({ id: q.id, displayName: q.displayName, username: q.username })) };
+    state.urlQueue = { length: urlStreamQueue.length, items: urlStreamQueue.map(q => ({ id: q.id, title: q.title, duration: q.effectiveDuration, username: q.requestedBy?.username || null })) };
     // Include all active tracks for multi-play
     if (multiPlayEnabled && activeTracks.size > 0) {
         const now = Date.now();
@@ -7614,12 +7755,16 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
         return res.status(403).json({ error: 'Only superadmin can stop superadmin playback.' });
     }
+    // Clear the queues and the active URL stream before player.stop() —
+    // the Idle handler it fires synchronously would otherwise start the
+    // next queued URL stream we're trying to stop.
+    killActiveUrlStream();
+    urlStreamQueue.length = 0;
+    ttsQueue.length = 0;
+    ttsIsPlaying = false;
     player.stop();
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
-    killActiveUrlStream();
-    ttsQueue.length = 0;
-    ttsIsPlaying = false;
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
     res.json({ ok: true });
 });
