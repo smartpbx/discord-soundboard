@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Watch party & movie night, console-styled
+- **Watch Together** and **Movie Night** now match the main app's look: tactile buttons, LCD-style readouts, a green "● LIVE / in sync" pill, viewer presence chips, and — for movie night — poster cards with vote-tally bars and a big LCD countdown.
+
 ## 2026-07-21 — Desktop console rack
 - **Now Playing is a rackmount rack now** — a live VU meter, a draggable scrub bar, an LCD time readout with who queued it, and round tactile transport buttons; the whole panel lights up green while something's playing.
 - **Online now** shows as presence chips.

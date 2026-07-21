@@ -12,9 +12,10 @@
             --live: #2ee06a; --live-tint: rgba(46,224,106,0.13);
             --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
             --elev-1: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 5px rgba(0,0,0,0.45);
+            --press: inset 0 3px 8px rgba(0,0,0,0.55);
+            --accent-text: #fff;
         }
-        .vote-count, .mn-count, .spin-timer { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-        .card { box-shadow: var(--elev-1); }
+        .vote-count, .mn-count, .spin-timer, .meta, .tally, .countdown, #viewerCount { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; min-height: 100vh; }
         .shell { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
@@ -23,38 +24,50 @@
         .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
         .badge.host { background: rgba(124,58,237,0.2); color: var(--accent); border: 1px solid var(--accent); margin-left: 0.5rem; }
         .add-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-        .add-row input { flex: 1; min-width: 240px; padding: 0.55rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; }
-        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
-        .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
-        .btn.danger { background: var(--danger); border-color: var(--danger); color: white; }
+        .add-row input { flex: 1; min-width: 240px; padding: 0.6rem 0.8rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; box-shadow: var(--press); outline: none; }
+        .add-row input::placeholder { color: var(--text-muted); }
+        .add-row input:focus { border-color: var(--accent); box-shadow: var(--press), 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: linear-gradient(180deg, var(--surface-hover), var(--surface)); color: var(--text); cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+        .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--accent-text); }
+        .btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--press); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+        .grid { display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); align-items: stretch; }
         .card {
             position: relative; background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column;
+            box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s ease;
         }
-        .card.winner { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-        .card .poster { width: 100%; aspect-ratio: 2 / 3; background: #000 center/cover no-repeat; }
-        .card .poster.placeholder { background: linear-gradient(135deg, #1f1f24, #0f0f12); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 2rem; }
-        .card .body { padding: 0.6rem 0.75rem; flex: 1; display: flex; flex-direction: column; gap: 0.3rem; }
-        .card .title { font-weight: 600; font-size: 0.9rem; line-height: 1.3; word-break: break-word; }
-        .card .meta { font-size: 0.75rem; color: var(--text-muted); }
+        .card:active { transform: translateY(1px); box-shadow: var(--press); }
+        .card.winner, .card:has(.vote-btn.is-mine) { border-color: var(--accent); box-shadow: var(--elev-1), 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); }
+        .card .poster { width: 100%; aspect-ratio: 2 / 3; background-color: var(--bg); background-position: center; background-size: cover; background-repeat: no-repeat; box-shadow: 0 -3px 10px rgba(0,0,0,0.5) inset; }
+        .card .poster.placeholder { background: linear-gradient(135deg, var(--surface-hover), var(--bg)); display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 2rem; }
+        .card .body { padding: 0.7rem 0.75rem; flex: 1; display: flex; flex-direction: column; gap: 0.35rem; background: var(--surface); }
+        .card .title { color: var(--text); font-weight: 700; font-size: 0.92rem; line-height: 1.3; word-break: break-word; }
+        .card .meta { font-size: 0.72rem; line-height: 1.35; color: var(--text-muted); }
         .card .actions { padding: 0.5rem 0.75rem; border-top: 1px solid var(--border); display: flex; gap: 0.4rem; align-items: center; }
-        .card .actions .tally { margin-left: auto; font-weight: 600; color: var(--accent); }
-        .card .tally-bar { height: 4px; background: var(--surface-hover); position: relative; }
-        .card .tally-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width 0.3s ease; }
-        .card .vote-btn { flex: 1; padding: 0.45rem; font-size: 0.8rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
-        .card .vote-btn.is-mine { background: var(--accent); border-color: var(--accent); color: white; }
-        .card .drm-warn { font-size: 0.7rem; color: var(--danger); padding: 0.4rem 0.75rem; background: rgba(220,38,38,0.1); border-top: 1px solid rgba(220,38,38,0.3); }
-        .card .x-btn { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 0.85rem; padding: 0; }
-        .phase-bar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.6rem 0.85rem; margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-        .phase-bar .pill { padding: 0.25rem 0.6rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); }
-        .phase-bar .pill.active { background: var(--accent); border-color: var(--accent); color: white; }
-        .phase-bar .countdown { font-family: 'SF Mono', Menlo, monospace; color: var(--accent); font-weight: 600; }
+        .card .actions .tally { margin-left: auto; font-size: 0.78rem; font-weight: 700; color: var(--accent); }
+        .card .tally-bar { height: 8px; margin: 0 0.75rem 0.65rem; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--press); position: relative; overflow: hidden; }
+        .card .tally-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; background: var(--accent); box-shadow: 0 0 0.45rem color-mix(in srgb, var(--accent) 65%, transparent); transition: width 0.3s ease; }
+        .card .vote-btn { flex: 1; padding: 0.45rem; font-size: 0.8rem; font-weight: 600; border-radius: 6px; border: 1px solid var(--border); background: linear-gradient(180deg, var(--surface-hover), var(--surface)); color: var(--text); cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
+        .card .vote-btn.is-mine { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+        .card .vote-btn:active { transform: translateY(1px); box-shadow: var(--press); }
+        .card .drm-warn { font-size: 0.72rem; line-height: 1.35; color: var(--danger); padding: 0.5rem 0.75rem; background: color-mix(in srgb, var(--danger) 11%, var(--surface)); border-top: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border)); border-left: 3px solid var(--danger); }
+        .card .x-btn { position: absolute; top: 7px; right: 7px; z-index: 1; display: grid; place-items: center; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 0.9rem; padding: 0; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
+        .card .x-btn:active { transform: translateY(1px); box-shadow: var(--press); }
+        .phase-bar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.65rem 0.85rem; margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--elev-1); }
+        .pill { display: inline-flex; align-items: center; min-height: 1.7rem; padding: 0.25rem 0.65rem; border-radius: 999px; font: 700 0.76rem/1 var(--font-mono); font-variant-numeric: tabular-nums; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text-muted); }
+        .pill.active { background: var(--live-tint); border-color: var(--live); color: var(--live); }
+        #phaseDecided.pill.active, .pill.winner { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); border-color: var(--accent); color: var(--accent); }
+        .phase-bar .countdown { min-width: 5.8rem; padding: 0.3rem 0.55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); box-shadow: var(--press); color: var(--live); font-size: 1.15rem; font-weight: 700; text-align: center; }
+        .phase-bar .countdown:empty { display: none; }
         .phase-bar .spacer { flex: 1; }
-        .empty { padding: 2rem 1rem; text-align: center; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius); }
-        .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--accent); color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100; }
+        .empty { padding: 2.25rem 1rem; text-align: center; color: var(--text-muted); background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); box-shadow: var(--press); line-height: 1.5; }
+        .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--surface); color: var(--text); padding: 0.55rem 1rem; border: 1px solid var(--accent); border-radius: var(--radius); font: 600 0.8rem/1.3 var(--font-mono); box-shadow: var(--elev-1), 0 8px 24px rgba(0,0,0,0.48); opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100; }
         .toast.visible { opacity: 1; }
+        @media (prefers-reduced-motion: reduce) {
+            .btn, .card, .card .vote-btn, .card .x-btn, .card .tally-bar .fill, .toast { transition: none; }
+        }
     </style>
 </head>
 <body>
@@ -222,7 +235,7 @@
                 + '<div class="actions">'
                 +   (allowVote
                         ? '<button class="vote-btn' + (myChoice ? ' is-mine' : '') + '" onclick="castVote(' + idx + ')">' + (myChoice ? '✓ Voted' : 'Vote') + '</button>'
-                        : (room.phase === 'decided' && isWinner ? '<span style="color:var(--accent);font-weight:600">🏆 Winner</span>' : '<span style="color:var(--text-muted)">' + esc(c.url.length > 30 ? c.url.slice(0, 30) + '…' : c.url) + '</span>'))
+                        : (room.phase === 'decided' && isWinner ? '<span class="pill winner">🏆 Winner</span>' : '<span style="color:var(--text-muted)">' + esc(c.url.length > 30 ? c.url.slice(0, 30) + '…' : c.url) + '</span>'))
                 +   (room.phase === 'voting' || room.phase === 'decided' ? '<span class="tally">' + tally + (totalVotes ? ' · ' + pct + '%' : '') + '</span>' : '')
                 + '</div>'
                 + (room.phase === 'voting' || room.phase === 'decided'

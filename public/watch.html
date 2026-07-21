@@ -18,14 +18,18 @@
             --live: #2ee06a;
             --live-tint: rgba(46,224,106,0.13);
             --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+            --elev-1: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 5px rgba(0,0,0,0.45);
+            --press: inset 0 3px 8px rgba(0,0,0,0.55);
+            --accent-text: #fff;
+            --warning: #f59e0b;
         }
         .watch-meta, .sync-pill, .vp-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        .watch-shell { display: flex; flex-direction: column; height: 100dvh; }
-        .watch-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-        .watch-title { font-weight: 600; font-size: 0.95rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .watch-meta { font-size: 0.8rem; color: var(--text-muted); }
+        .watch-shell { display: flex; flex-direction: column; height: 100dvh; background: var(--bg); isolation: isolate; }
+        .watch-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.65rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--elev-1); flex-wrap: wrap; position: relative; z-index: 2; }
+        .watch-title { font-weight: 700; font-size: 0.95rem; letter-spacing: 0.01em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .watch-meta { font-size: 0.78rem; color: var(--text-muted); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.55rem; box-shadow: var(--press); }
         .watch-badge { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
         .watch-badge.host { background: rgba(124,58,237,0.2); color: var(--accent); border: 1px solid var(--accent); }
         .watch-badge.viewer { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
@@ -35,35 +39,49 @@
         .watch-stage .overlay {
             position: absolute; inset: 0; display: flex; flex-direction: column;
             align-items: center; justify-content: center; gap: 1rem;
-            background: rgba(0,0,0,0.65); color: white; text-align: center; padding: 1rem;
+            background: rgba(0,0,0,0.72); color: var(--text); text-align: center; padding: 1rem;
         }
         .watch-stage .overlay.hidden { display: none; }
+        .watch-stage .overlay-card { width: min(100%, 520px); padding: 1.25rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--elev-1), 0 18px 45px rgba(0,0,0,0.5); }
         .watch-stage .overlay h2 { margin: 0; font-size: 1.2rem; }
-        .watch-stage .overlay p { margin: 0; color: rgba(255,255,255,0.85); max-width: 480px; }
-        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-hover); color: var(--text); cursor: pointer; }
-        .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
-        .btn.danger { background: var(--danger); border-color: var(--danger); color: white; }
+        .watch-stage .overlay p { margin: 0.65rem auto 0; color: var(--text-muted); max-width: 480px; }
+        .btn { padding: 0.55rem 1rem; font-size: 0.9rem; font-weight: 600; border-radius: 8px; border: 1px solid var(--border); background: linear-gradient(180deg, var(--surface-hover), var(--surface)); color: var(--text); cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+        .btn.danger { background: var(--danger); border-color: var(--danger); color: var(--accent-text); }
+        .btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--press); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .controls { display: flex; gap: 0.4rem; flex-wrap: wrap; }
         .controls.hidden { display: none; }
-        .status-line { font-size: 0.8rem; color: var(--text-muted); padding: 0.5rem 1rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+        .status-line { font: 0.78rem/1.3 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-muted); padding: 0.55rem 1rem; background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -2px 7px rgba(0,0,0,0.28); display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; position: relative; z-index: 2; }
         .status-line .sep { color: var(--border); }
-        .viewer-pills { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
-        .viewer-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.74rem; font-weight: 500; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); }
-        .viewer-pill .vp-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+        .sync-pill { display: inline-flex; align-items: center; gap: 0.4rem; min-height: 1.55rem; padding: 0.18rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.035em; text-transform: uppercase; }
+        .sync-pill::before { content: ''; width: 0.48rem; height: 0.48rem; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+        .sync-pill.is-live { color: var(--live); border-color: var(--live); background: var(--live-tint); }
+        .sync-pill.is-live::before { box-shadow: 0 0 0.6rem var(--live); animation: livePulse 1.8s ease-in-out infinite; }
+        .sync-pill.is-warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
+        .viewer-pills { display: inline-flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+        .viewer-pill { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.18rem 0.55rem; border-radius: 999px; font: 600 0.72rem/1.2 var(--font-mono); font-variant-numeric: tabular-nums; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset; }
+        .viewer-pill .vp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0.35rem color-mix(in srgb, var(--live) 70%, transparent); flex-shrink: 0; }
         .viewer-pill.role-superadmin { border-color: rgba(124,58,237,0.5); color: var(--accent); }
         .viewer-pill.role-admin { border-color: rgba(124,58,237,0.3); }
         .viewer-pill.role-guest { color: var(--text-muted); }
+        .viewer-pill.role-superadmin .vp-dot, .viewer-pill.role-admin .vp-dot { background: var(--accent); box-shadow: 0 0 0.35rem color-mix(in srgb, var(--accent) 70%, transparent); }
+        .viewer-pill.role-guest .vp-dot { background: var(--text-muted); box-shadow: none; }
         .viewer-pill.is-host { border-color: var(--accent); }
         .viewer-pill.is-host .vp-dot { background: var(--accent); }
         .viewer-pill.is-me { box-shadow: 0 0 0 1px rgba(124,58,237,0.35); }
         .toast {
             position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
-            background: var(--accent); color: white; padding: 0.5rem 1rem;
-            border-radius: 6px; font-size: 0.85rem; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-            opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100;
+            background: var(--surface); color: var(--text); padding: 0.55rem 1rem;
+            border: 1px solid var(--accent); border-radius: var(--radius); font: 600 0.8rem/1.3 var(--font-mono); box-shadow: var(--elev-1), 0 8px 24px rgba(0,0,0,0.48);
+            opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 100;
         }
         .toast.visible { opacity: 1; }
+        @keyframes livePulse { 50% { opacity: 0.58; box-shadow: 0 0 0.25rem var(--live); } }
+        @media (prefers-reduced-motion: reduce) {
+            .btn, .toast { transition: none; }
+            .sync-pill.is-live::before { animation: none; }
+        }
     </style>
 </head>
 <body>
@@ -82,12 +100,14 @@
         </div>
         <div class="watch-stage" id="watchStage">
             <div class="overlay" id="watchOverlay">
-                <h2 id="overlayTitle">Connecting…</h2>
-                <p id="overlayBody">Authenticating with the soundboard.</p>
+                <div class="overlay-card">
+                    <h2 id="overlayTitle">Connecting…</h2>
+                    <p id="overlayBody">Authenticating with the soundboard.</p>
+                </div>
             </div>
         </div>
         <div class="status-line">
-            <span id="statusState">—</span>
+            <span class="sync-pill is-idle" id="statusState">—</span>
             <span class="sep">·</span>
             <span id="statusViewers">0 viewers</span>
             <span class="viewer-pills" id="viewerPills"></span>
@@ -213,6 +233,7 @@
             } else if (msg.type === 'host-pos') {
                 // Iframe-mode position beacon from the host. Just surface it
                 // on the status line so viewers can manually scrub to match.
+                STATUS_STATE.className = 'sync-pill is-warning';
                 STATUS_STATE.textContent = '⏱ Host at ' + fmtTime(msg.position) + ' (manual sync)';
                 showToast('Host is at ' + fmtTime(msg.position) + ' — scrub your player to match.', 3500);
             } else if (msg.type === 'viewers') {
@@ -229,7 +250,9 @@
 
     function applyState(state) {
         if (!state || !player) return;
-        STATUS_STATE.textContent = (state.playing ? '▶ playing' : '⏸ paused') + ' · ' + fmtTime(state.position) + (room.sourceType === 'iframe' ? ' (sync limited)' : '');
+        const syncLimited = room.sourceType === 'iframe';
+        STATUS_STATE.className = 'sync-pill ' + (syncLimited ? 'is-warning' : (state.playing ? 'is-live' : 'is-idle'));
+        STATUS_STATE.textContent = (state.playing ? (syncLimited ? 'MANUAL / sync limited' : 'LIVE / in sync') : 'PAUSED') + ' · ' + fmtTime(state.position);
         suppressEvents = true;
         try {
             if (player.kind === 'youtube') {
