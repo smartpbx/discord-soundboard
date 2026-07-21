@@ -1074,6 +1074,22 @@
         .btn-random { font: inherit; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-text, var(--accent)); background: var(--accent-tint, rgba(124,58,237,0.12)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: var(--r-pill, 999px); padding: 0.28rem 0.7rem; cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
         .btn-random:hover { border-color: var(--accent); }
         .btn-random:active { transform: translateY(1px); box-shadow: var(--press); }
+        /* ---- Feature-card console polish (TTS / URL / Suno / modals) ---- */
+        /* Segmented controls (TTS Single/Conversation, etc.) get tactile depth. */
+        .tts-mode-switch { box-shadow: var(--well); }
+        .tts-mode-switch button { transition: background 0.12s, color 0.12s; }
+        .tts-mode-switch button[aria-selected="true"] { box-shadow: var(--elev-1); }
+        /* Primary action buttons press in like the pads. */
+        .tts-pill-btn, .upload-toggle-btn, .btn.primary, .btn-primary { transition: transform 0.06s ease, box-shadow 0.12s ease, filter 0.12s ease, background 0.15s; }
+        .tts-pill-btn.is-primary, .upload-toggle-btn { box-shadow: var(--elev-1); }
+        .tts-pill-btn:active:not(:disabled), .upload-toggle-btn:active:not(:disabled),
+        .btn.primary:active:not(:disabled), .btn-primary:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--press); }
+        /* Selects / textareas sit carved-in (concave), matching pads-poke-out. */
+        select, .tts-textarea, .add-row input, .sa-field select, .sa-field input { box-shadow: var(--well); }
+        select:focus-visible, .tts-textarea:focus { box-shadow: var(--well), 0 0 0 2px var(--accent-soft); border-color: var(--accent); }
+        /* Feature toggle buttons in the sounds header get a subtle raise. */
+        .tts-toggle-btn { box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s, color 0.12s; }
+        .tts-toggle-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--press); }
         /* Mobile overflow safety: nothing may push the page sideways. clip (vs
            hidden) doesn't create a scroll container, so sticky/fixed still work. */
         html, body { overflow-x: clip; max-width: 100%; }
