@@ -806,24 +806,39 @@
            "mobile view" mode (which otherwise covers every other control). */
         .mobile-bottom-bar {
             position: fixed; bottom: 0; left: 0; right: 0;
-            display: none; align-items: center; gap: 0.5rem;
-            padding: 0.5rem 0.75rem;
+            display: none; align-items: center; gap: 0.6rem;
+            padding: 0.5rem 0.75rem calc(0.5rem + env(safe-area-inset-bottom));
             background: var(--surface);
             border-top: 1px solid var(--border);
-            box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
+            box-shadow: 0 -4px 16px rgba(0,0,0,0.35);
             z-index: 60;
         }
         .mobile-bottom-bar.visible { display: flex; }
+        /* Rackmount mini-player: progress line on the top edge, a LIVE VU meter,
+           now-playing name + a mono time readout, and stop. */
+        .mobile-bottom-bar .mbb-progress { position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--border); }
+        .mobile-bottom-bar .mbb-progress i { display: block; height: 100%; width: 0%; background: var(--live); box-shadow: 0 0 6px var(--live-glow); transition: width 0.25s linear; }
+        .mobile-bottom-bar .mbb-vu { display: none; align-items: flex-end; gap: 2px; height: 20px; width: 22px; flex: none; }
+        .mobile-bottom-bar.is-live .mbb-vu { display: flex; }
+        .mobile-bottom-bar .mbb-vu i { flex: 1; background: var(--live); border-radius: 1px; height: 40%; transform-origin: bottom; animation: mbbVu 0.85s ease-in-out infinite; }
+        .mobile-bottom-bar .mbb-vu i:nth-child(2) { animation-delay: 0.15s; height: 75%; }
+        .mobile-bottom-bar .mbb-vu i:nth-child(3) { animation-delay: 0.3s; height: 50%; }
+        .mobile-bottom-bar .mbb-vu i:nth-child(4) { animation-delay: 0.45s; height: 90%; }
+        @keyframes mbbVu { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+        @media (prefers-reduced-motion: reduce) { .mobile-bottom-bar .mbb-vu i { animation: none; } }
+        .mobile-bottom-bar .mbb-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
         .mobile-bottom-bar .mbb-now {
-            flex: 1; min-width: 0; font-size: 0.85rem;
+            min-width: 0; font-size: 0.85rem; font-weight: 500;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             color: var(--text-muted);
         }
-        .mobile-bottom-bar .mbb-now.is-playing { color: var(--text); }
+        .mobile-bottom-bar.is-live .mbb-now { color: var(--text); }
+        .mobile-bottom-bar .mbb-time { font-size: 0.66rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .mobile-bottom-bar .mbb-stop {
-            padding: 0.45rem 0.85rem; font-size: 0.85rem; font-weight: 600;
+            flex: none; width: 42px; height: 42px; font-size: 1rem; font-weight: 600;
             background: var(--danger); color: white;
             border: none; border-radius: var(--radius-sm); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
         }
         @media (max-width: 900px) { .mobile-bottom-bar.auto-visible { display: flex; } }
         .sounds-card.mobile-active ~ .mobile-bottom-bar { display: flex; }
@@ -8211,10 +8226,27 @@
                 card.classList.toggle('player-idle', !isPlaying);
             }
             if (mbb) {
-                let mbbText = isPlaying ? '▶ ' + (playback.displayName || playback.filename || '') : 'Nothing playing';
-                if (queueLeft > 0) mbbText += ' · Queue: ' + queueLeft + ' left';
-                mbb.textContent = mbbText;
-                mbb.classList.toggle('is-playing', isPlaying || queueLeft > 0);
+                mbb.textContent = isPlaying
+                    ? (playback.displayName || playback.filename || '')
+                    : (queueLeft > 0 ? 'Queue: ' + queueLeft + ' left' : 'Nothing playing');
+            }
+            const bar = document.getElementById('mobileBottomBar');
+            if (bar) {
+                bar.classList.toggle('is-live', isPlaying);
+                const fill = document.getElementById('mbbProgressFill');
+                const timeEl = document.getElementById('mbbTime');
+                if (isPlaying) {
+                    const cur = (typeof getCurrentPlaybackTime === 'function') ? getCurrentPlaybackTime() : 0;
+                    const total = (playback.duration != null && playback.duration > 0) ? playback.duration : 0;
+                    if (fill) fill.style.width = (total > 0 ? Math.max(0, Math.min(100, (cur / total) * 100)) : 0) + '%';
+                    if (timeEl) {
+                        const by = (playback.startedBy && playback.startedBy.username) ? ' · ' + playback.startedBy.username : '';
+                        timeEl.textContent = (total > 0 ? formatTime(cur) + ' / ' + formatTime(total) : formatTime(cur)) + by;
+                    }
+                } else {
+                    if (fill) fill.style.width = '0%';
+                    if (timeEl) timeEl.textContent = queueLeft > 0 ? queueLeft + ' queued' : '';
+                }
             }
         }
 
@@ -12202,8 +12234,13 @@
     </script>
 
     <div id="mobileBottomBar" class="mobile-bottom-bar auto-visible">
-        <button type="button" class="mbb-stop" onclick="stopPlayback()" title="Stop playback">⏹ Stop</button>
-        <div class="mbb-now" id="mbbNowPlaying">Nothing playing</div>
+        <div class="mbb-progress"><i id="mbbProgressFill"></i></div>
+        <div class="mbb-vu" id="mbbVu" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="mbb-info">
+            <div class="mbb-now" id="mbbNowPlaying">Nothing playing</div>
+            <div class="mbb-time lcd" id="mbbTime"></div>
+        </div>
+        <button type="button" class="mbb-stop" onclick="stopPlayback()" title="Stop playback" aria-label="Stop playback">⏹</button>
     </div>
     <div id="toastContainer"></div>
 
