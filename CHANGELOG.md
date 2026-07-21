@@ -5,7 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
-## 2026-07-21 — Mobile fixes
+## 2026-07-21 — Mobile fixes + VU heatmap
+- **Your bangers glow** — the most-played sounds now light up on a VU-meter heat ramp (amber→orange→red) right on the board, all the time — no need to toggle heatmap mode. Only the genuinely hot pads glow; everything else stays clean.
+- **Button row wraps on mobile** — the Play all / Clip / TTS / URL / Song / Upload row now wraps instead of spilling off the screen.
 - **Sound titles are readable on mobile again** — the fav/preview/edit buttons no longer sit permanently on top of the sound name on touch devices. Long-press a tile to reveal them (they're bigger and easier to tap now); a normal tap still just plays.
 - **No more sideways spill** — hardened the layout so long titles/URLs and wide rows can't push the page out of bounds on phones.
 

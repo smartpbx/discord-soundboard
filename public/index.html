@@ -473,7 +473,7 @@
         .volume-expanded-check input { accent-color: var(--accent); }
         .volume-card-row { display: flex; align-items: center; gap: 1rem; }
         .volume-card-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); height: 6px; }
-        .sounds-header-actions { display: flex; align-items: center; gap: 0.5rem; }
+        .sounds-header-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
         .upload-toggle-btn { height: 32px; padding: 0 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--accent); color: white; border: 1px solid var(--accent); border-radius: var(--radius-sm); font-weight: 500; box-sizing: border-box; }
         .upload-toggle-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: white; }
         .upload-btn-icon { display: inline-flex; align-items: center; }
@@ -3631,7 +3631,7 @@
             if (sortSel) sortSel.value = soundSort;
             const zeroCb = document.getElementById('filterZeroPlays');
             if (zeroCb) zeroCb.checked = zeroPlaysOnly;
-            if (heatmapMode || needsPlayCountsForFiltering()) refreshPlayCounts().then(() => renderSoundsGrid());
+            refreshPlayCounts(); // always: powers the always-on VU heatmap (re-renders on load)
             applyVolumeExpanded();
             applyRecentPlayerExpanded();
         }
@@ -3683,15 +3683,16 @@
                 if (!res || !res.ok) { playCountsMap = {}; return; }
                 playCountsMap = await res.json() || {};
             } catch { playCountsMap = {}; }
+            // Re-render so the always-on VU heatmap reflects the loaded counts
+            // (the grid usually renders before this async fetch resolves).
+            try { if (mobileView) renderMobileGrid(); else renderSoundsGrid(); } catch (e) {}
         }
         let _playCountsRefreshTimer = null;
         function schedulePlayCountsRefresh() {
             if (_playCountsRefreshTimer) return;
             _playCountsRefreshTimer = setTimeout(async () => {
                 _playCountsRefreshTimer = null;
-                if (!heatmapMode && !needsPlayCountsForFiltering()) return;
-                await refreshPlayCounts();
-                renderSoundsGrid();
+                await refreshPlayCounts(); // always: heat is always-on
             }, 600);
         }
 
@@ -3699,7 +3700,9 @@
         // played sounds on the board, not the most-played within the current
         // filter (which would make every filtered view look saturated).
         function getGlobalHeatmapMax() {
-            if (!heatmapMode || !Array.isArray(soundsList) || !soundsList.length) return 0;
+            // Heat is always-on now (a subtle VU meter for the board); the
+            // heatmapMode toggle only controls whether play counts show in titles.
+            if (!Array.isArray(soundsList) || !soundsList.length) return 0;
             let m = 0;
             for (const s of soundsList) {
                 const c = playCountsMap[s.filename] || 0;
@@ -3708,13 +3711,20 @@
             return m;
         }
         function heatmapLevelForFilename(filename, maxCount) {
-            if (!heatmapMode || !maxCount) return 0;
+            if (!maxCount) return 0;
             const c = playCountsMap[filename] || 0;
             if (c <= 0) return 0;
             // Log-scale so a handful of dominant sounds don't flatten everything
             // else into hm-1. 8 levels, brighter = more plays, max → hm-8.
             const ratio = Math.log(1 + c) / Math.log(1 + maxCount);
-            return Math.max(1, Math.min(8, Math.ceil(ratio * 8)));
+            if (heatmapMode) {
+                // Explicit heatmap toggle: full 8-level spectrum across all sounds.
+                return Math.max(1, Math.min(8, Math.ceil(ratio * 8)));
+            }
+            // Always-on subtle VU: only the genuinely hot pads (top tier) glow so
+            // the board isn't a wall of color; everyone else stays neutral.
+            if (ratio < 0.66) return 0;
+            return Math.max(4, Math.min(8, Math.round(4 + ((ratio - 0.66) / 0.34) * 4)));
         }
 
         function toggleMobileView() {
