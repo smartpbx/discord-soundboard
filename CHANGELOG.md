@@ -6,6 +6,7 @@ Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
 ## 2026-07-21 — Audit pass 2: console UI, PWA, slash commands, more hardening
+- **🎲 Surprise button** — a new dice button on the soundboard plays a random sound from whatever's currently showing. Great for a "let the board decide" moment.
 - **Favorites & presets follow you now** — your favorite sounds, TTS presets, and sort/filter settings are saved to your account, so they show up the same on your phone and your desktop instead of being stuck in one browser. (Guests stay per-device.)
 - **Install it like an app** — the soundboard is now a PWA: "Add to Home Screen" on your phone gives it its own icon and a full-screen, browser-chrome-free window.
 - **`/stop` and `/skip` slash commands** — stop all playback or skip the current URL stream straight from Discord, without opening the web UI.

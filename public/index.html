@@ -1044,6 +1044,10 @@
         /* Empty-state helper. */
         .empty-state { text-align: center; color: var(--text-muted); padding: 2.5rem 1rem; font-size: 0.9rem; }
         .empty-state .es-emoji { font-size: 2rem; display: block; margin-bottom: 0.5rem; opacity: 0.7; }
+        /* Surprise-me (random) button. */
+        .btn-random { font: inherit; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-text, var(--accent)); background: var(--accent-tint, rgba(124,58,237,0.12)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: var(--r-pill, 999px); padding: 0.28rem 0.7rem; cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
+        .btn-random:hover { border-color: var(--accent); }
+        .btn-random:active { transform: translateY(1px); box-shadow: var(--press); }
         /* Slightly nicer scrollbars to match the console surfaces. */
         * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
         *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -1498,6 +1502,7 @@
                 <button type="button" class="sound-filter-clear" id="soundFilterClear" title="Clear filter" onclick="clearSoundFilter()">×</button>
             </div>
             <div class="sounds-sort-row">
+                <button type="button" class="btn-random" title="Surprise me — play a random sound from the current list" onclick="playRandomSound()">🎲 Surprise</button>
                 <span class="sort-label">Sort</span>
                 <select id="soundSortSelect" title="Sort order" onchange="setSoundSort(this.value)">
                     <option value="default">Custom order</option>
@@ -3958,6 +3963,14 @@
             }
         }
 
+        // Surprise me: play a random sound from the currently filtered list.
+        function playRandomSound() {
+            const pool = (typeof getFilteredSounds === 'function' ? getFilteredSounds() : []).filter(s => s && s.filename);
+            if (!pool.length) { showToast('No sounds to pick from', 'info'); return; }
+            const pick = pool[Math.floor(Math.random() * pool.length)];
+            playSound(pick.filename);
+            showToast('🎲 ' + (pick.displayName || pick.filename), 'info');
+        }
         function getFavorites() {
             const arr = loadPrefs().favorites;
             return Array.isArray(arr) ? arr.slice(0, 9) : [];
