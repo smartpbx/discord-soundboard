@@ -1162,6 +1162,16 @@
             color: var(--text); font: inherit; font-size: 0.85rem;
         }
         .tts-ctrl-row select:focus { outline: none; border-color: var(--accent); }
+        .tts-visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+        .tts-voice-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem; width: 100%; }
+        .tts-voice-card { display: flex; flex-direction: column; justify-content: center; min-height: 54px; padding: 0.5rem 0.65rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--elev-1); cursor: pointer; user-select: none; transition: transform 0.06s ease, box-shadow 0.12s ease, background 0.12s ease, border-color 0.12s ease; }
+        .tts-voice-card:hover { background: var(--surface-hover); border-color: var(--accent); }
+        .tts-voice-card:active { transform: translateY(1px); box-shadow: var(--press); }
+        .tts-voice-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .tts-voice-card.is-active { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-color: var(--accent); box-shadow: var(--elev-1), 0 0 0 1px var(--accent); }
+        .tts-voice-card-label { color: var(--text); font-size: 0.82rem; font-weight: 600; line-height: 1.2; }
+        .tts-voice-card-engine { margin-top: 0.2rem; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.08em; line-height: 1; text-transform: uppercase; }
+        @media (prefers-reduced-motion: reduce) { .tts-voice-card { transition: none; } }
         .tts-act-spacer { flex: 1; }
 
         /* Primary Speak + ghost Again action buttons. Square-cornered to
@@ -1514,7 +1524,8 @@
                     </div>
                     <div class="tts-ctrl-field is-grow" id="ttsCtrlVoiceField">
                         <span class="tts-ctrl-label">Voice</span>
-                        <select id="ttsVoiceSelect"><option value="">Loading voices…</option></select>
+                        <select id="ttsVoiceSelect" class="tts-visually-hidden"><option value="">Loading voices…</option></select>
+                        <div id="ttsVoiceCards" class="tts-voice-cards"></div>
                     </div>
                     <div class="tts-ctrl-field is-slider hidden" id="ttsExpressionWrap" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
                         <span class="tts-ctrl-label">🎭 Expression</span>
@@ -4244,6 +4255,7 @@
             const voiceSel = document.getElementById('ttsVoiceSelect');
             if (textEl) { textEl.value = r.text; textEl.dispatchEvent(new Event('input')); }
             if (voiceSel && voiceSel.querySelector('option[value="' + CSS.escape(r.voiceId) + '"]')) voiceSel.value = r.voiceId;
+            syncVoiceCards();
             const card = document.getElementById('ttsCard');
             if (card && card.classList.contains('hidden') && typeof toggleTtsSection === 'function') toggleTtsSection();
             if (textEl) { textEl.focus(); textEl.setSelectionRange(textEl.value.length, textEl.value.length); }
@@ -7583,6 +7595,7 @@
             const voiceSel = document.getElementById('ttsVoiceSelect');
             if (textEl) { textEl.value = text; textEl.dispatchEvent(new Event('input')); }
             if (voiceSel && voiceSel.querySelector('option[value="' + CSS.escape(voiceId) + '"]')) voiceSel.value = voiceId;
+            syncVoiceCards();
             if (textEl) { textEl.focus(); textEl.setSelectionRange(textEl.value.length, textEl.value.length); }
         }
 
@@ -9050,6 +9063,17 @@
             } catch {}
         }
 
+        function syncVoiceCards() {
+            const sel = document.getElementById('ttsVoiceSelect');
+            const cards = document.getElementById('ttsVoiceCards');
+            if (!sel || !cards) return;
+            cards.querySelectorAll('[data-value]').forEach(card => {
+                const active = card.dataset.value === sel.value;
+                card.classList.toggle('is-active', active);
+                card.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
         function populateTtsVoices() {
             const sel = document.getElementById('ttsVoiceSelect');
             if (!sel) return;
@@ -9067,6 +9091,7 @@
                     const opt = document.createElement('option');
                     opt.value = v.id;
                     opt.textContent = `${v.name} (${v.gender})`;
+                    opt.dataset.engine = v.engine || '';
                     og.appendChild(opt);
                 });
                 sel.appendChild(og);
@@ -9076,6 +9101,28 @@
             if (prefs.ttsVoice && sel.querySelector(`option[value="${prefs.ttsVoice}"]`)) {
                 sel.value = prefs.ttsVoice;
             }
+            const cards = document.getElementById('ttsVoiceCards');
+            if (cards) {
+                cards.innerHTML = Array.from(sel.options).filter(opt => opt.value).map(opt => {
+                    const engine = opt.dataset.engine || '';
+                    return '<div class="tts-voice-card" role="button" tabindex="0" data-value="' + _ttsEscAttr(opt.value) + '" aria-pressed="false">'
+                        + '<span class="tts-voice-card-label">' + _ttsEscAttr(opt.textContent) + '</span>'
+                        + (engine ? '<span class="tts-voice-card-engine">' + _ttsEscAttr(engine) + '</span>' : '')
+                        + '</div>';
+                }).join('');
+                cards.querySelectorAll('[data-value]').forEach(card => {
+                    card.addEventListener('click', () => {
+                        sel.value = card.dataset.value;
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                    card.addEventListener('keydown', (e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        card.click();
+                    });
+                });
+            }
+            syncVoiceCards();
             updateTtsExpressionVisibility();
         }
 
@@ -9179,6 +9226,7 @@
                 voiceSel.value = p.voiceId;
                 savePrefs({ ttsVoice: p.voiceId });
             }
+            syncVoiceCards();
             const exSlider = document.getElementById('ttsExpressionSlider');
             const exLabel = document.getElementById('ttsExpressionLabel');
             if (Number.isFinite(p.exaggeration) && exSlider) {
@@ -9833,6 +9881,7 @@
         }
         const ttsVoiceSelectEl = document.getElementById('ttsVoiceSelect');
         if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', updateTtsExpressionVisibility);
+        if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', syncVoiceCards);
 
         function setTtsStatus(msg, isError) {
             const el = document.getElementById('ttsStatus');

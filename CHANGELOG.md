@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — TTS voice cards
+- **Pick a voice by tapping a card** — the TTS voice picker is now a grid of voice cards (name + engine) instead of a dropdown; the selected one glows, and it's fully keyboard-accessible.
+
 ## 2026-07-21 — Watch party & movie night, console-styled
 - **Watch Together** and **Movie Night** now match the main app's look: tactile buttons, LCD-style readouts, a green "● LIVE / in sync" pill, viewer presence chips, and — for movie night — poster cards with vote-tally bars and a big LCD countdown.
 
