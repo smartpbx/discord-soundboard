@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Desktop console rack
+- **Now Playing is a rackmount rack now** — a live VU meter, a draggable scrub bar, an LCD time readout with who queued it, and round tactile transport buttons; the whole panel lights up green while something's playing.
+- **Online now** shows as presence chips.
+- The header wordmark is now a mono `SOUNDBOARD` with a live LED.
+
 ## 2026-07-21 — Mobile bottom navigation
 - **Bottom tab bar on mobile** — Board / ➕ Create / You, docked below the mini-player.
 - **Features open as full-screen sheets** — Text-to-Speech, Stream URL, Generate Song, and Upload now slide up as proper full-screen sheets (with a ‹ Back button) instead of opening behind the fullscreen soundboard where you couldn't see them.

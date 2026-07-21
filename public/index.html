@@ -159,6 +159,10 @@
         .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
         .header-row { flex-wrap: wrap; }
         .header-row h1 { font-size: 1.5rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+        .rack-wordmark { display: inline-flex; align-items: center; gap: 0.65rem; font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.16em !important; }
+        .rack-live-led { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--live); box-shadow: 0 0 8px var(--live-glow); animation: rackLivePulse 1.8s ease-in-out infinite; }
+        @keyframes rackLivePulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; box-shadow: 0 0 12px var(--live-glow); } }
+        @media (prefers-reduced-motion: reduce) { .rack-live-led { animation: none; } }
         .header-right { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
         .header-hamburger-wrap { position: relative; }
         .header-hamburger-btn { position: relative; width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
@@ -403,9 +407,23 @@
             padding: 1rem 1.25rem;
             margin-bottom: 1rem;
         }
+        #playerCard:not(.player-idle) { border-left-color: var(--live); box-shadow: inset 3px 0 0 var(--live-glow); }
+        .np-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .np-header .card-title { margin-bottom: 0; }
+        .np-vu { display: none; align-items: flex-end; gap: 2px; width: 26px; height: 20px; flex: none; }
+        #playerCard:not(.player-idle) .np-vu { display: flex; }
+        .np-vu i { flex: 1; height: 40%; border-radius: 1px; background: var(--live); transform-origin: bottom; animation: mbbVu 0.85s ease-in-out infinite; }
+        .np-vu i:nth-child(2) { height: 75%; animation-delay: 0.15s; }
+        .np-vu i:nth-child(3) { height: 50%; animation-delay: 0.3s; }
+        .np-vu i:nth-child(4) { height: 90%; animation-delay: 0.45s; }
         .player-idle .player-controls { opacity: 0.6; }
         .player-now-playing { font-size: 0.9rem; font-weight: 500; margin-bottom: 0.5rem; color: var(--text-muted); }
         .player-now-playing strong { color: var(--text); }
+        .np-scrub { position: relative; height: 18px; margin: 0.1rem 7px 0.75rem; cursor: ew-resize; touch-action: none; }
+        .np-scrub::before { content: ''; position: absolute; left: -7px; right: -7px; top: 6px; height: 6px; border-radius: 999px; background: var(--surface-hover); border: 1px solid var(--border); box-shadow: var(--well, inset 0 2px 5px rgba(0,0,0,0.55)); }
+        .np-scrub-fill { position: absolute; left: -6px; top: 7px; width: 0%; height: 4px; border-radius: 999px; background: var(--live); box-shadow: 0 0 7px var(--live-glow); pointer-events: none; }
+        .np-scrub-knob { position: absolute; left: 0%; top: 1px; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid var(--surface); box-shadow: var(--elev-1), 0 1px 5px rgba(0,0,0,0.55); transform: translateX(-50%); pointer-events: none; }
+        .player-idle .np-scrub { cursor: default; opacity: 0.45; }
         .waveform-wrap {
             height: 48px;
             background: rgba(0,0,0,0.2);
@@ -429,10 +447,16 @@
             color: var(--text-muted);
             font-size: 0.8rem;
         }
-        .progress-time { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .progress-time { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; min-height: 26px; padding: 0.25rem 0.5rem; font: 0.7rem/1.2 var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: var(--text); background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--well, inset 0 2px 5px rgba(0,0,0,0.55)); margin-bottom: 0.65rem; }
+        .progress-time .np-queued-by { color: var(--text-muted); }
         .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
+        #playerCard .player-buttons .btn-icon { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 50%; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease, background 0.15s; }
+        #playerCard .player-buttons #playPauseBtn { background: var(--accent); border-color: var(--accent); color: var(--accent-text, #fff); }
+        #playerCard .player-buttons #playPauseBtn:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+        #playerCard .player-buttons .btn-icon:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--press); }
         .player-recent-toggle { margin-left: auto; }
         .player-recent-toggle.expanded { transform: rotate(180deg); }
+        #playerCard .player-buttons .player-recent-toggle.expanded:active:not(:disabled) { transform: rotate(180deg) translateY(-1px); }
         .player-recent { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
         .player-recent.hidden { display: none !important; }
         .player-recent-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.5rem; }
@@ -781,10 +805,14 @@
         .player-online-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.4rem; }
         .online-list { display: flex; flex-wrap: wrap; gap: 0.3rem; }
         .online-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 500; background: var(--surface-hover); border: 1px solid var(--border); color: var(--text); }
-        .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+        .online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex-shrink: 0; }
         .online-pill.role-superadmin { border-color: rgba(124,58,237,0.5); color: var(--accent); }
         .online-pill.role-admin { border-color: rgba(124,58,237,0.3); }
         .online-pill.role-guest { color: var(--text-muted); }
+        .online-pill.role-superadmin .online-dot { background: var(--accent); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent); }
+        .online-pill.role-admin .online-dot { background: color-mix(in srgb, var(--accent) 65%, var(--text)); }
+        .online-pill.role-user .online-dot { background: var(--live); box-shadow: 0 0 5px var(--live-glow); }
+        .online-pill.role-guest .online-dot { background: var(--text-muted); }
 
         /* Now-playing highlight on sound buttons */
         /* Playing = LIVE green (was the same purple as hover/selected, so board
@@ -825,7 +853,7 @@
         .mobile-bottom-bar .mbb-vu i:nth-child(3) { animation-delay: 0.3s; height: 50%; }
         .mobile-bottom-bar .mbb-vu i:nth-child(4) { animation-delay: 0.45s; height: 90%; }
         @keyframes mbbVu { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
-        @media (prefers-reduced-motion: reduce) { .mobile-bottom-bar .mbb-vu i { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .mobile-bottom-bar .mbb-vu i, .np-vu i { animation: none; } }
         .mobile-bottom-bar .mbb-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
         .mobile-bottom-bar .mbb-now {
             min-width: 0; font-size: 0.85rem; font-weight: 500;
@@ -1242,7 +1270,7 @@
     <div class="login-screen" id="loginScreen">
         <div class="login-card">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
-                <h1 style="margin:0">🔊 Soundboard</h1>
+                <h1 class="rack-wordmark" style="margin:0"><span class="rack-live-led" aria-hidden="true"></span>SOUNDBOARD</h1>
                 <button type="button" class="theme-toggle-login" id="themeToggleLogin" title="Toggle light/dark theme" aria-label="Toggle theme" onclick="toggleTheme()">🌙</button>
             </div>
             <form id="loginForm" onsubmit="return doLogin(event)">
@@ -1275,7 +1303,7 @@
 
     <div class="app hidden" id="app">
         <div class="header-row">
-            <h1>🔊 Soundboard</h1>
+            <h1 class="rack-wordmark"><span class="rack-live-led" aria-hidden="true"></span>SOUNDBOARD</h1>
             <div class="header-right header-hamburger-wrap">
                 <button type="button" class="header-hamburger-btn" id="headerHamburgerBtn" onclick="toggleHeaderMenu()" title="Menu" aria-label="Menu">
                     <span style="line-height:1">☰</span>
@@ -1367,9 +1395,10 @@
             </div>
         </div>
 
-        <div class="player" id="playerCard">
-            <div class="card-title">Now Playing</div>
+        <div class="player player-idle" id="playerCard">
+            <div class="np-header"><div class="card-title">Now Playing</div><div class="np-vu" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
             <div class="player-now-playing" id="nowPlayingText">Nothing playing</div>
+            <div class="np-scrub" id="npScrub" role="slider" tabindex="0" aria-label="Playback position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-disabled="true"><div class="np-scrub-fill"></div><span class="np-scrub-knob"></span></div>
             <div class="waveform-placeholder" id="waveformPlaceholder">Waveform will appear when a sound is playing</div>
             <div class="waveform-wrap" id="waveformWrap" style="display: none;">
                 <canvas id="waveformCanvas" width="600" height="48"></canvas>
@@ -1382,7 +1411,7 @@
                 <canvas id="ttsNowPlayingWaveform" width="600" height="48"></canvas>
                 <span class="live-waveform-label">🗣 TTS speaking</span>
             </div>
-            <div class="progress-time" id="progressTime">0:00 / 0:00</div>
+            <div class="progress-time" id="progressTime">0:00 / —</div>
             <div class="multi-track-display hidden" id="multiTrackDisplay"></div>
             <div class="player-buttons">
                 <button type="button" class="btn btn-ghost btn-icon" id="playPauseBtn" onclick="togglePlayPause()" title="Play / Pause" disabled>▶</button>
@@ -8131,8 +8160,7 @@
             pausedAt = 0;
             updateNowPlaying();
             updatePlayPauseButton();
-            const timeEl = document.getElementById('progressTime');
-            if (timeEl) timeEl.textContent = '0:00 / ' + (playback.duration != null ? formatTime(playback.duration) : '0:00');
+            updatePlayerProgress(getCurrentPlaybackTime(), playback.duration);
             if (!isScrub) loadWaveform(filename);
             if (!isScrub) {
                 const newItem = { filename, displayName: playback.displayName || filename, playedBy: (user && user.username) || null, playedAt: Date.now() };
@@ -8335,16 +8363,10 @@
             if (isActive) {
                 const current = getCurrentPlaybackTime();
                 const dur = playback.duration;
-                const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
-                const displayCurrent = trimStart > 0 || (dur != null && dur < waveformDuration - 0.01) ? Math.max(0, current - trimStart) : current;
-                const str = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
-                if (str !== lastProgressTimeStr) {
-                    lastProgressTimeStr = str;
-                    const timeEl = document.getElementById('progressTime');
-                    if (timeEl) timeEl.textContent = str;
-                }
+                updatePlayerProgress(current, dur);
             } else {
                 lastProgressTimeStr = '';
+                updatePlayerProgress(0, null);
             }
             if (waveformData && waveformDuration > 0 && isActive) {
                 const current = getCurrentPlaybackTime();
@@ -8479,16 +8501,14 @@
                 // Escape: displayName is the raw YouTube/stream title (attacker-controllable)
                 // and is broadcast to every client via /api/playback-state polling.
                 html = 'Now playing: <strong>' + String(playback.displayName || playback.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</strong>';
-                if (playback.startedBy && playback.startedBy.username) {
-                    html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
-                }
                 html += queueBadge;
             }
             if (html !== lastNowPlayingHtml) {
                 lastNowPlayingHtml = html;
                 text.innerHTML = html;
-                card.classList.toggle('player-idle', !isPlaying);
             }
+            card.classList.toggle('player-idle', !isPlaying);
+            updatePlayerProgress(isPlaying ? getCurrentPlaybackTime() : 0, isPlaying ? playback.duration : null);
             if (mbb) {
                 mbb.textContent = isPlaying
                     ? (playback.displayName || playback.filename || '')
@@ -8519,6 +8539,40 @@
             const m = Math.floor(s / 60);
             const sec = Math.floor(s % 60);
             return m + ':' + (sec < 10 ? '0' : '') + sec;
+        }
+
+        let npScrubDragging = false;
+        function setNowPlayingScrubFraction(fraction) {
+            const pct = Math.max(0, Math.min(1, Number(fraction) || 0)) * 100;
+            const fill = document.querySelector('#playerCard .np-scrub-fill');
+            const knob = document.querySelector('#playerCard .np-scrub-knob');
+            if (fill) fill.style.width = pct + '%';
+            if (knob) knob.style.left = pct + '%';
+        }
+        function updatePlayerProgress(current, dur) {
+            current = Number.isFinite(Number(current)) ? Number(current) : 0;
+            dur = Number.isFinite(Number(dur)) && Number(dur) > 0 ? Number(dur) : null;
+            const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+            const isTrimmed = trimStart > 0 || (dur != null && waveformDuration > 0 && dur < waveformDuration - 0.01);
+            const displayCurrent = Math.max(0, isTrimmed ? current - trimStart : current);
+            const progressTotal = dur != null ? dur : (waveformDuration > 0 ? waveformDuration : 0);
+            const fraction = progressTotal > 0 ? Math.max(0, Math.min(1, displayCurrent / progressTotal)) : 0;
+            const str = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
+            const queuedBy = playback.startedBy && playback.startedBy.username
+                ? String(playback.startedBy.username).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                : '';
+            const html = str + (queuedBy ? ' <span class="np-queued-by">· queued by ' + queuedBy + '</span>' : '');
+            const timeEl = document.getElementById('progressTime');
+            if (timeEl && timeEl.innerHTML !== html) timeEl.innerHTML = html;
+            lastProgressTimeStr = str;
+            if (!npScrubDragging) setNowPlayingScrubFraction(fraction);
+            const scrub = document.getElementById('npScrub');
+            if (scrub) {
+                scrub.setAttribute('aria-valuemax', String(progressTotal || 0));
+                scrub.setAttribute('aria-valuenow', String(Math.min(progressTotal || 0, displayCurrent).toFixed(2)));
+                scrub.setAttribute('aria-valuetext', str);
+                scrub.setAttribute('aria-disabled', playback.status === 'idle' ? 'true' : 'false');
+            }
         }
 
         let playbackPollingStarted = false;
@@ -8569,7 +8623,8 @@
             if (!user) return;
             const res = await api('/api/online');
             if (!res || !res.ok) return;
-            const list = await res.json().catch(() => []);
+            const data = await res.json().catch(() => []);
+            const list = Array.isArray(data) ? data : (data && Array.isArray(data.online) ? data.online : []);
             renderOnlineUsers(list);
         }
         function renderOnlineUsers(list) {
@@ -8584,7 +8639,7 @@
             el.innerHTML = sorted.map(u => {
                 const label = u.role === 'guest' ? 'Guest' : (u.username || u.role);
                 const roleClass = 'role-' + (u.role || 'user');
-                return '<span class="online-pill ' + roleClass + '"><span class="online-dot"></span>' + label.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
+                return '<span class="online-pill ' + roleClass + '"><span class="online-dot"></span>' + String(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>';
             }).join('');
         }
 
@@ -8605,7 +8660,7 @@
                 playback.displayName = (state.displayName != null ? state.displayName : state.filename);
                 playback.startedBy = (state.startedBy != null ? state.startedBy : null);
                 const amLocal = state.startedBy && state.startedBy.username === (user && user.username);
-                if (!amLocal) {
+                if (!amLocal || playback.startTime == null) {
                     if (state.startTime != null) playback.startTime = Number(state.startTime);
                 }
                 if (state.startTimeOffset != null) playback.startTimeOffset = Number(state.startTimeOffset);
@@ -8664,12 +8719,10 @@
                 updatePlayPauseButton();
                 updateStopButtons();
 
-                const timeEl = document.getElementById('progressTime');
                 let current = getCurrentPlaybackTime();
                 const dur = playback.duration;
                 const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
-                const displayCurrent = trimStart > 0 || (dur != null && dur < (waveformDuration || 999999) - 0.01) ? Math.max(0, current - trimStart) : current;
-                if (timeEl) timeEl.textContent = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
+                updatePlayerProgress(current, dur);
 
                 const totalDur = dur != null ? dur : waveformDuration;
                 const maxPos = trimStart > 0 && dur != null ? trimStart + dur : 999999;
@@ -8699,16 +8752,68 @@
             });
         }
 
+        function seekPlaybackFraction(fraction) {
+            if (!playback.filename) return null;
+            const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
+            const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
+            if (!(trimDuration > 0)) return null;
+            const xNorm = Math.max(0, Math.min(1, Number(fraction) || 0));
+            const t = trimStart + (xNorm * trimDuration);
+            if (t < trimStart + trimDuration - 0.5) return playSound(playback.filename, Number(t), { isScrub: true });
+            return null;
+        }
+
         const ww = document.getElementById('waveformWrap'); if (ww) ww.addEventListener('click', (e) => {
             if (!waveformData || waveformDuration <= 0 || !playback.filename) return;
             const canvas = document.getElementById('waveformCanvas');
             const rect = canvas.getBoundingClientRect();
             const xNorm = (e.clientX - rect.left) / rect.width;
-            const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
-            const trimDuration = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
-            const t = trimStart + Math.max(0, Math.min(trimDuration, xNorm * trimDuration));
-            if (t < trimStart + trimDuration - 0.5) playSound(playback.filename, Number(t), { isScrub: true });
+            seekPlaybackFraction(xNorm);
         });
+
+        const npScrub = document.getElementById('npScrub'); if (npScrub) {
+            const pointerFraction = (e) => {
+                const rect = npScrub.getBoundingClientRect();
+                return rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0;
+            };
+            npScrub.addEventListener('pointerdown', (e) => {
+                if (!playback.filename || !((playback.duration || waveformDuration) > 0)) return;
+                e.preventDefault();
+                npScrubDragging = true;
+                npScrub.setPointerCapture(e.pointerId);
+                setNowPlayingScrubFraction(pointerFraction(e));
+            });
+            npScrub.addEventListener('pointermove', (e) => {
+                if (!npScrubDragging || !npScrub.hasPointerCapture(e.pointerId)) return;
+                setNowPlayingScrubFraction(pointerFraction(e));
+            });
+            npScrub.addEventListener('pointerup', (e) => {
+                if (!npScrubDragging) return;
+                const fraction = pointerFraction(e);
+                setNowPlayingScrubFraction(fraction);
+                if (npScrub.hasPointerCapture(e.pointerId)) npScrub.releasePointerCapture(e.pointerId);
+                const pendingSeek = seekPlaybackFraction(fraction);
+                if (pendingSeek && typeof pendingSeek.finally === 'function') {
+                    pendingSeek.finally(() => { npScrubDragging = false; updatePlayerProgress(getCurrentPlaybackTime(), playback.duration); });
+                } else {
+                    npScrubDragging = false;
+                    updatePlayerProgress(getCurrentPlaybackTime(), playback.duration);
+                }
+            });
+            npScrub.addEventListener('pointercancel', (e) => {
+                if (npScrub.hasPointerCapture(e.pointerId)) npScrub.releasePointerCapture(e.pointerId);
+                npScrubDragging = false;
+                updatePlayerProgress(getCurrentPlaybackTime(), playback.duration);
+            });
+            npScrub.addEventListener('keydown', (e) => {
+                const total = (playback.duration != null && playback.duration > 0) ? playback.duration : waveformDuration;
+                if (!playback.filename || !(total > 0) || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+                e.preventDefault();
+                const current = Number(npScrub.getAttribute('aria-valuenow')) || 0;
+                const fraction = e.key === 'Home' ? 0 : e.key === 'End' ? Math.max(0, 1 - (0.51 / total)) : Math.max(0, Math.min(1, (current + (e.key === 'ArrowRight' ? 5 : -5)) / total));
+                seekPlaybackFraction(fraction);
+            });
+        }
 
         function setVolume(volume, syncOnly) {
             const v = parseFloat(volume);
