@@ -3537,6 +3537,35 @@
                 const merged = { ...loadPrefs(), ...prefs };
                 localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
             } catch (e) {}
+            _syncPrefsToServer();
+        }
+        // Debounced upload of prefs so favorites / TTS presets / sort follow a
+        // logged-in user across devices. Guests stay local-only.
+        let _prefsSyncTimer = null;
+        function _syncPrefsToServer() {
+            if (typeof user === 'undefined' || !user || !user.role || user.role === 'guest') return;
+            if (_prefsSyncTimer) clearTimeout(_prefsSyncTimer);
+            _prefsSyncTimer = setTimeout(() => {
+                try { api('/api/me/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefs: loadPrefs() }) }); } catch (e) {}
+            }, 800);
+        }
+        // On login, pull server prefs and let them win over this browser's local
+        // copy (then push the merge back up so a first-time device seeds the
+        // server). Called from the auth/init flow for non-guests.
+        async function loadServerPrefs() {
+            if (typeof user === 'undefined' || !user || !user.role || user.role === 'guest') return;
+            try {
+                const res = await api('/api/me/prefs');
+                if (!res || !res.ok) return;
+                const data = await res.json().catch(() => ({}));
+                const server = (data && data.prefs) || {};
+                if (server && Object.keys(server).length) {
+                    const merged = { ...loadPrefs(), ...server };
+                    try { localStorage.setItem(PREFS_KEY, JSON.stringify(merged)); } catch (e) {}
+                } else {
+                    _syncPrefsToServer(); // seed the server from this device
+                }
+            } catch (e) {}
         }
         function applyPrefs() {
             const prefs = loadPrefs();
@@ -4458,6 +4487,7 @@
                 return;
             }
             await checkAuth();
+            await loadServerPrefs();
             applyPrefs();
             startPlaybackPolling();
             startSoundsPolling();
@@ -4513,6 +4543,7 @@
                 return false;
             }
             await checkAuth();
+            await loadServerPrefs();
             applyPrefs();
             startPlaybackPolling();
             startSoundsPolling();
@@ -12014,6 +12045,7 @@
             fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;
+            await loadServerPrefs();
             applyPrefs();
             renderRecentlyPlayed();
             startPlaybackPolling();

@@ -6,6 +6,7 @@ Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
 ## 2026-07-21 — Audit pass 2: console UI, PWA, slash commands, more hardening
+- **Favorites & presets follow you now** — your favorite sounds, TTS presets, and sort/filter settings are saved to your account, so they show up the same on your phone and your desktop instead of being stuck in one browser. (Guests stay per-device.)
 - **Install it like an app** — the soundboard is now a PWA: "Add to Home Screen" on your phone gives it its own icon and a full-screen, browser-chrome-free window.
 - **`/stop` and `/skip` slash commands** — stop all playback or skip the current URL stream straight from Discord, without opening the web UI.
 - **The console look, deeper** — most-played pads now glow on a VU-style amber→orange→red heat ramp (the hottest one gently pulses); numbers (durations, timers, counts, the version stamp) render in a fixed-width "LCD" font so they stop wiggling; sound tiles on mobile press in like real pads; inputs and waveforms look carved-in; and there are proper keyboard focus rings throughout.

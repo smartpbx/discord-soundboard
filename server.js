@@ -4470,6 +4470,31 @@ app.get('/api/me', (req, res) => {
     res.json(u);
 });
 
+// Per-account preferences (favorites, TTS presets, sort/filter, theme) so they
+// follow a user across devices instead of being trapped in one browser's
+// localStorage. Guests stay local-only.
+const USER_PREFS_FILE = path.join(DATA_DIR, 'user-prefs.json');
+function loadAllUserPrefs() { try { return JSON.parse(fs.readFileSync(USER_PREFS_FILE, 'utf8')); } catch { return {}; } }
+function saveAllUserPrefs(all) { try { fs.writeFileSync(USER_PREFS_FILE, JSON.stringify(all)); } catch (e) { console.warn('[prefs] save failed:', e.message); } }
+app.get('/api/me/prefs', requireAuth, (req, res) => {
+    const u = req.session.user;
+    if (!u || u.role === 'guest') return res.json({ prefs: {} });
+    const all = loadAllUserPrefs();
+    res.json({ prefs: all[(u.username || '').toLowerCase()] || {} });
+});
+app.patch('/api/me/prefs', requireAuth, (req, res) => {
+    const u = req.session.user;
+    if (!u || u.role === 'guest') return res.json({ ok: true }); // guests stay local-only
+    const incoming = (req.body && typeof req.body.prefs === 'object' && req.body.prefs) ? req.body.prefs : {};
+    const key = (u.username || '').toLowerCase();
+    const all = loadAllUserPrefs();
+    const merged = { ...(all[key] || {}), ...incoming };
+    if (JSON.stringify(merged).length > 20000) return res.status(413).json({ error: 'Preferences too large' });
+    all[key] = merged;
+    saveAllUserPrefs(all);
+    res.json({ ok: true });
+});
+
 app.get('/api/channels', requireAdmin, (req, res) => {
     const channels = [];
     client.guilds.cache.forEach(guild => {

@@ -15,7 +15,11 @@
             --accent: #7c3aed;
             --danger: #dc2626;
             --radius: 10px;
+            --live: #2ee06a;
+            --live-tint: rgba(46,224,106,0.13);
+            --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
         }
+        .watch-meta, .sync-pill, .vp-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         .watch-shell { display: flex; flex-direction: column; height: 100dvh; }
