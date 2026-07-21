@@ -59,7 +59,7 @@ User=root
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${APP_DIR}/.env
 ExecStart=/usr/bin/node server.js
-Restart=unless-stopped
+Restart=on-failure
 RestartSec=5
 
 [Install]

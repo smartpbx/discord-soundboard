@@ -59,7 +59,11 @@ def load_config():
     return dict(DEFAULT_CONFIG)
 
 def save_config(cfg):
-    with open(CONFIG_PATH, 'w') as f:
+    # config.json holds the companion bearer token, which the server treats as a
+    # full admin session. Write it 0600 so other local users can't read it.
+    import os as _os
+    fd = _os.open(CONFIG_PATH, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+    with _os.fdopen(fd, 'w') as f:
         json.dump(cfg, f, indent=2)
 
 # --- API calls ---

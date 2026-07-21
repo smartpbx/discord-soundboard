@@ -717,10 +717,11 @@ def delete_engine_voice(engine: str, voice_id: str, x_admin_token: Optional[str]
 
 
 @app.post("/admin/voices/fish/clone-from-chatterbox/{voice_id}")
-def clone_fish_from_chatterbox(voice_id: str):
+def clone_fish_from_chatterbox(voice_id: str, x_admin_token: Optional[str] = Header(None)):
     """Create a fish_<voice> by reusing the Chatterbox reference clip
     (no trim — Fish handles 5–30 s refs). Whisper-transcribes for
     ref_text. Drops the engine cache so /voices picks it up."""
+    _check_admin(x_admin_token)
     import os as _os, shutil as _shutil, subprocess as _sp
     cb_id = voice_id.replace("cb_", "", 1)
     cb_dir = _os.path.join(chatterbox_engine.get_models_dir(), cb_id)
@@ -774,7 +775,8 @@ def clone_fish_from_chatterbox(voice_id: str):
 
 
 @app.post("/admin/voices/gsv/clone-from-chatterbox/{voice_id}")
-def clone_gsv_from_chatterbox(voice_id: str, req: CloneToGsvRequest = CloneToGsvRequest()):
+def clone_gsv_from_chatterbox(voice_id: str, req: CloneToGsvRequest = CloneToGsvRequest(), x_admin_token: Optional[str] = Header(None)):
+    _check_admin(x_admin_token)
     import os as _os, shutil as _shutil, json as _json
     cb_id = voice_id.replace("cb_", "", 1)
     cb_dir = _os.path.join(chatterbox_engine.get_models_dir(), cb_id)

@@ -24,3 +24,12 @@ tts-server/__pycache__/
 tts-server/engines/__pycache__/
 tts-server/models/
 data/tts-cache/
+
+# Secrets / large local-only artifacts (audit 2026-07-20)
+models/
+yt-profile/
+data/yt-profile/
+backups/
+*.tar.gz
+*.bak
+companion/config.json

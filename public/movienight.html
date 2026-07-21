@@ -203,7 +203,7 @@
             const allowVote = room.phase === 'voting';
             const allowRemove = room.phase === 'gathering' && (c.addedBy === me || isHost);
             const poster = c.poster
-                ? '<div class="poster" style="background-image:url(' + JSON.stringify(c.poster) + ')"></div>'
+                ? '<div class="poster" style="background-image:url(&quot;' + esc(c.poster) + '&quot;)"></div>'
                 : '<div class="poster placeholder">🎞️</div>';
             return ''
                 + '<div class="card' + (isWinner ? ' winner' : '') + '">'
@@ -404,7 +404,7 @@
         if (!data.items || !data.items.length) { results.innerHTML = '<div class="empty">No matches.</div>'; return; }
         results.innerHTML = '<div class="grid">' + data.items.slice(0, 12).map(it =>
             '<div class="card" style="cursor:pointer" onclick="addCatalogCandidate(' + JSON.stringify(it.url).replace(/"/g, '&quot;') + ')">'
-            + (it.poster ? '<div class="poster" style="background-image:url(' + JSON.stringify(it.poster) + ')"></div>' : '<div class="poster placeholder">🎞️</div>')
+            + (it.poster ? '<div class="poster" style="background-image:url(&quot;' + esc(it.poster) + '&quot;)"></div>' : '<div class="poster placeholder">🎞️</div>')
             + '<div class="body"><div class="title">' + esc(it.title) + '</div><div class="meta">click to add</div></div>'
             + '</div>'
         ).join('') + '</div>';

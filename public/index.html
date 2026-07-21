@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Discord Soundboard</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔊</text></svg>">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg: #0f0f12;
@@ -24,6 +21,14 @@
             --radius: 12px;
             --radius-sm: 8px;
             --shadow: 0 4px 24px rgba(0,0,0,0.4);
+            /* --- console kit: signal + tactile tokens --- */
+            --live: #2ee06a;                 /* making noise RIGHT NOW (distinct from --accent) */
+            --live-tint: rgba(46,224,106,0.13);
+            --live-glow: rgba(46,224,106,0.38);
+            --heat-1: #f59e0b; --heat-2: #f97316; --heat-3: #ef4444;  /* VU heatmap */
+            --elev-1: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 5px rgba(0,0,0,0.45);
+            --press: inset 0 3px 8px rgba(0,0,0,0.55);
+            --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
         }
         [data-theme="light"] {
             --bg: #f4f4f5;
@@ -38,6 +43,13 @@
             --danger-hover: #b91c1c;
             --success: #22c55e;
             --shadow: 0 4px 24px rgba(0,0,0,0.08);
+            --live: #16a34a;
+            --live-tint: rgba(22,163,74,0.12);
+            --live-glow: rgba(22,163,74,0.3);
+            --heat-1: #f59e0b; --heat-2: #ea580c; --heat-3: #dc2626;
+            --elev-1: 0 1px 0 rgba(255,255,255,0.8) inset, 0 1px 3px rgba(20,18,14,0.14);
+            --press: inset 0 3px 7px rgba(20,18,14,0.18);
+            --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
         }
         [data-theme="light"] .waveform-placeholder { color: var(--text-muted); }
         [data-theme="light"] .sound-btn:hover:not(:disabled) { background: var(--border); }
@@ -48,7 +60,7 @@
         .theme-toggle-login:hover { color: var(--accent); border-color: var(--accent); }
         * { box-sizing: border-box; }
         body {
-            font-family: 'DM Sans', system-ui, sans-serif;
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             margin: 0;
             min-height: 100vh;
             background: var(--bg);
@@ -466,16 +478,18 @@
         .sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.25rem; }
         .sound-item { position: relative; display: flex; flex-direction: column; align-items: stretch; min-height: 100px; }
         .sound-btn {
-            background: var(--surface-hover);
+            /* Tactile "pad": raised out of the panel, presses IN on tap. */
+            background: linear-gradient(180deg, var(--surface-hover), var(--surface));
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
+            box-shadow: var(--elev-1);
             padding: 0.6rem 0.5rem 0.4rem;
             color: var(--text);
             font: inherit;
             font-size: 0.85rem;
             font-weight: 500;
             cursor: pointer;
-            transition: background 0.15s, border-color 0.15s;
+            transition: transform 0.06s ease, box-shadow 0.12s ease, border-color 0.12s ease, background 0.15s;
             text-align: center;
             word-break: break-word;
             min-height: 100px;
@@ -487,8 +501,8 @@
         }
         .sound-btn-label { flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.2; width: 100%; word-break: break-word; }
         .sound-btn-duration { font-size: 0.7rem; color: var(--text-muted); flex-shrink: 0; }
-        .sound-btn:hover:not(:disabled) { background: var(--border); border-color: var(--accent); }
-        .sound-btn:active:not(:disabled) { transform: scale(0.98); }
+        .sound-btn:hover:not(:disabled) { border-color: var(--accent); }
+        .sound-btn:active:not(:disabled) { transform: translateY(2px); box-shadow: var(--press); }
         .sound-btn.disabled { opacity: 0.5; cursor: not-allowed; }
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions,
@@ -751,8 +765,12 @@
         .online-pill.role-guest { color: var(--text-muted); }
 
         /* Now-playing highlight on sound buttons */
-        .sound-btn.is-playing { border-color: var(--accent) !important; border-width: 2px !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.35), inset 0 0 0 1px rgba(124,58,237,0.15); background: rgba(124,58,237,0.1) !important; }
-        .mobile-grid-btn.is-playing { border-color: var(--accent) !important; border-width: 3px !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.35); background: rgba(124,58,237,0.1) !important; }
+        /* Playing = LIVE green (was the same purple as hover/selected, so board
+           state was unreadable). A pulsing corner LED marks the pad making noise. */
+        .sound-btn.is-playing, .mobile-grid-btn.is-playing { position: relative; border-color: var(--live) !important; box-shadow: 0 0 0 1px var(--live), 0 0 18px var(--live-glow) !important; background: linear-gradient(180deg, var(--live-tint), var(--surface)) !important; }
+        .sound-btn.is-playing::after, .mobile-grid-btn.is-playing::after { content: ''; position: absolute; top: 6px; left: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 8px var(--live); animation: padLed 1.1s ease-in-out infinite; pointer-events: none; }
+        @keyframes padLed { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @media (prefers-reduced-motion: reduce) { .sound-btn.is-playing::after, .mobile-grid-btn.is-playing::after { animation: none; } }
 
         /* Toast notifications */
         /* Toast z-index sits above every modal overlay (the highest of which
@@ -2765,6 +2783,15 @@
         let waveformDuration = 0;
         let waveformFilename = null;
         let reorderMode = false;
+        // Shared AudioContext for all waveform decodes. Browsers cap concurrent
+        // contexts at ~6, and the old code created a fresh one per decode and
+        // never closed it — so after ~6 distinct sounds every waveform silently
+        // stopped rendering. One long-lived context fixes that.
+        let _sharedAudioCtx = null;
+        function getAudioCtx() {
+            if (!_sharedAudioCtx) _sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            return _sharedAudioCtx;
+        }
         let playbackLocked = false;
         let soundsList = [];
         let tagsList = [];
@@ -3186,7 +3213,7 @@
                 const res = await fetch('/api/clips/' + encodeURIComponent(id) + '/audio', { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 const buf = await res.arrayBuffer();
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = getAudioCtx();
                 const decoded = await ctx.decodeAudioData(buf);
                 const ch = decoded.getChannelData(0);
                 state.duration = decoded.duration;
@@ -3205,7 +3232,7 @@
                     peaks.push({ min, max });
                 }
                 state.peaks = peaks;
-                try { ctx.close(); } catch {}
+                // (shared AudioContext — do not close; reused across all decodes)
             } catch (e) {
                 console.warn('[clip] waveform load failed for', id, e);
             }
@@ -3643,7 +3670,7 @@
                 var res = await fetch('/api/sounds/audio/' + encodeURIComponent(filename), { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 var buf = await res.arrayBuffer();
-                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                var ctx = getAudioCtx();
                 var decoded = await ctx.decodeAudioData(buf);
                 var ch = decoded.getChannelData(0);
                 var duration = decoded.duration;
@@ -4051,7 +4078,16 @@
         }
 
         async function api(path, opts = {}) {
-            const res = await fetch(path, { credentials: CREDENTIALS, ...opts });
+            let res;
+            try {
+                res = await fetch(path, { credentials: CREDENTIALS, ...opts });
+            } catch (e) {
+                // Network-level failure (tunnel hiccup, flaky LTE, offline). Every
+                // caller already handles a null return; without this the rejection
+                // was a silent unhandled promise and the button just did nothing.
+                try { showToast('Network error — check your connection', 'error'); } catch (_) {}
+                return null;
+            }
             if (res.status === 401) { showLogin(); return null; }
             return res;
         }
@@ -4460,7 +4496,10 @@
             const serverLastChannel = data.lastChannelId || null;
             const lastChannel = loadPrefs().lastChannelId || serverLastChannel;
             const select = document.getElementById('channelSelect');
-            select.innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+            // new Option() sets the label via textContent (no HTML parsing), so a
+            // Discord voice-channel renamed to an <img onerror=...> payload can't
+            // execute in the admin session that renders this dropdown.
+            select.replaceChildren(...channels.map(c => new Option(String(c.name == null ? '' : c.name), String(c.id == null ? '' : c.id))));
             if (lastChannel && channels.some(c => c.id === lastChannel)) {
                 select.value = lastChannel;
                 if (!loadPrefs().lastChannelId) savePrefs({ lastChannelId: lastChannel });
@@ -5190,7 +5229,7 @@
                 const buf = await fetchRes.arrayBuffer();
                 const blob = new Blob([buf], { type: 'audio/wav' });
                 audio.src = URL.createObjectURL(blob);
-                const ac = new (window.AudioContext || window.webkitAudioContext)();
+                const ac = getAudioCtx();
                 const decoded = await ac.decodeAudioData(buf.slice(0));
                 const ch = decoded.getChannelData(0);
                 // High-res peaks — one bar per ~1.5 CSS pixels at 1920 wide is plenty.
@@ -6875,7 +6914,7 @@
                 const res = await fetch(url, { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 const buf = await res.arrayBuffer();
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = getAudioCtx();
                 const decoded = await ctx.decodeAudioData(buf);
                 const ch = decoded.getChannelData(0);
                 const duration = decoded.duration;
@@ -7649,6 +7688,18 @@
         }
 
         async function loadWaveform(filename, cacheBust) {
+            // Already showing this exact waveform — don't wipe it and re-decode
+            // (that flashed the placeholder on every filename change / poll tick).
+            if (filename && filename === waveformFilename && waveformData && !cacheBust) return;
+            // Synthetic filenames (URL streams 'url:...', TTS) have no
+            // /api/sounds/audio entry, so fetching one is a guaranteed 404 every
+            // poll. Show the placeholder and skip the doomed request.
+            if (filename && (filename.startsWith('url:') || filename === 'tts' || filename.startsWith('tts:'))) {
+                waveformData = null; waveformDuration = 0; waveformFilename = null;
+                document.getElementById('waveformPlaceholder').style.display = 'block';
+                document.getElementById('waveformWrap').style.display = 'none';
+                return;
+            }
             waveformData = null;
             waveformDuration = 0;
             waveformFilename = null;
@@ -7671,7 +7722,7 @@
                 const res = await fetch(url, { credentials: CREDENTIALS });
                 if (!res.ok) return;
                 const buf = await res.arrayBuffer();
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = getAudioCtx();
                 const decoded = await ctx.decodeAudioData(buf);
                 const ch = decoded.getChannelData(0);
                 const duration = decoded.duration;
@@ -7970,7 +8021,9 @@
                     : 'Nothing playing';
             } else {
                 isPlaying = true;
-                html = 'Now playing: <strong>' + (playback.displayName || playback.filename || '') + '</strong>';
+                // Escape: displayName is the raw YouTube/stream title (attacker-controllable)
+                // and is broadcast to every client via /api/playback-state polling.
+                html = 'Now playing: <strong>' + String(playback.displayName || playback.filename || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</strong>';
                 if (playback.startedBy && playback.startedBy.username) {
                     html += ' <span style="color:var(--text-muted);font-weight:400">by ' + (playback.startedBy.username || '').replace(/&/g, '&amp;').replace(/</g, '&lt;') + (playback.startedBy.role ? ' (' + playback.startedBy.role + ')' : '') + '</span>';
                 }
@@ -8010,7 +8063,15 @@
             if (playbackPollingStarted) return;
             playbackPollingStarted = true;
             refreshPlaybackState();
-            setTimeout(() => setInterval(refreshPlaybackState, 1000), 600);
+            // Poll 1s while visible, back off to 5s while the tab is hidden
+            // (this runs on the same event loop as Discord audio on the server;
+            // hidden tabs were hammering it every second for nothing). Refresh
+            // immediately when the tab becomes visible again so state is fresh.
+            setTimeout(function _pollPlayback() {
+                refreshPlaybackState();
+                setTimeout(_pollPlayback, document.hidden ? 5000 : 1000);
+            }, 600);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshPlaybackState(); });
         }
         function startPendingCountPolling() {
             if (pendingCountPollingStarted || (user && user.role) !== 'superadmin') return;

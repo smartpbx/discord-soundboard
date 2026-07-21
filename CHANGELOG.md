@@ -5,6 +5,16 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-20 — Audit pass: security, stability, speed & a console look
+- **Playing sounds now glow green, not purple** — a sound that's making noise lights up in a distinct "LIVE" green with a pulsing corner LED, so you can tell at a glance what's actually playing versus just hovered/selected. Sound tiles also became tactile "pads" that visibly press in when you tap them.
+- **Waveforms stop breaking** — the now-playing waveform no longer silently dies after playing ~6 different sounds, no longer flashes/blanks every time the track changes, and no longer fires a doomed request every second for URL streams and TTS (which never had a waveform anyway).
+- **Faster, quieter background** — the app backs its 1-second playback poll down to every 5 seconds when its browser tab is hidden, easing load on the server that also streams Discord audio. Dropped a render-blocking web-font download from page load.
+- **Network errors no longer fail silently** — if the connection hiccups, a button press now shows a "Network error" message instead of just doing nothing.
+- **Normalize respects your trim** — normalizing a sound that has start/stop points set now measures loudness from the selected section instead of the whole file, so the part you actually play is leveled correctly.
+- **TTS won't guarantee-fail on a cold voice** — raised the synthesis timeout above the ~3-minute cold-start of the heaviest voice engine, so switching to a not-yet-loaded voice no longer times out.
+- **Security hardening** — fixed cross-site-scripting holes (a malicious stream/video title, movie-night poster, or Discord channel name could run code in your browser); added signup/guest rate limiting; role changes (e.g. demoting an admin) now take effect immediately instead of lingering for days; direct uploads no longer silently overwrite an existing sound; the Suno "discard" refund can no longer be abused to bypass the daily limit; and added baseline security headers.
+- **More stable bot** — fixed a crash-handler that could spin forever instead of restarting, a bad TTS pronunciation rule that could crash-loop the bot, and a slash-command error path that could take the whole bot down.
+
 ## 2026-07-17
 - **Crossfade on URL-queue skip** — skipping now pre-spools the next queued stream until it's actually producing audio, fades the current one down (~1.2s), swaps, and fades the next one up (~0.9s). No hard cut, no dead air — with an empty queue, skip becomes a smooth fade-to-stop. Applies to the Skip button and vote-skips alike.
 - **🗳 Vote skip** — everyone (guests included) gets a "Vote skip" button while a URL stream plays. Votes show live with names ("skip requested by alice, bob") in the URL card, plus a 🗳2/3 counter on the URL toggle button so requests are visible even with the card closed. When votes reach half the users active on the web UI (last 45s), the skip fires automatically — with the crossfade. Click again to withdraw your vote; the stream's owner voting skips instantly; votes reset when the track changes.
