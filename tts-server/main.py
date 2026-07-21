@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -504,10 +505,10 @@ async def upsert_engine_voice(
     if (new_audio_written and "ref_text" not in user_meta) or user_meta.get("regenerate_ref_text"):
         if not os.path.exists(ref_path):
             raise HTTPException(status_code=400, detail="No reference.wav present and none uploaded")
-        user_meta["ref_text"] = _whisper_transcribe(ref_path)
+        user_meta["ref_text"] = await run_in_threadpool(_whisper_transcribe, ref_path)
     elif "ref_text" not in user_meta and "ref_text" not in existing_meta:
         if os.path.exists(ref_path):
-            user_meta["ref_text"] = _whisper_transcribe(ref_path)
+            user_meta["ref_text"] = await run_in_threadpool(_whisper_transcribe, ref_path)
     user_meta.pop("regenerate_ref_text", None)
     merged = {**existing_meta, **user_meta}
     # Default sane fields
@@ -623,7 +624,7 @@ async def isolate_vocals_endpoint(
         spec = _iu.spec_from_file_location("isolate_vocals", tool_path)
         mod = _iu.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        result = mod.isolate(in_path, out_path, device="cpu", target_sr=target_sr)
+        result = await run_in_threadpool(mod.isolate, in_path, out_path, device="cpu", target_sr=target_sr)
         with open(out_path, "rb") as f:
             vocals_bytes = f.read()
         log.info("isolate-vocals: %d bytes in → %d bytes out, %.1fs", len(audio_bytes), len(vocals_bytes), result["elapsed_sec"])
@@ -1470,7 +1471,7 @@ async def upload_fish_emotion_ref(
         except OSError: pass
     # Whisper-transcribe so Fish gets the ref_text paired with this clip.
     try:
-        ref_text = _whisper_transcribe(final_path)
+        ref_text = await run_in_threadpool(_whisper_transcribe, final_path)
         with open(os.path.join(refs_dir, f"{emo}.txt"), "w") as f: f.write(ref_text)
     except Exception as e:
         ref_text = ""

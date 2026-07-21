@@ -5,6 +5,14 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Audit pass 2: console UI, PWA, slash commands, more hardening
+- **Install it like an app** — the soundboard is now a PWA: "Add to Home Screen" on your phone gives it its own icon and a full-screen, browser-chrome-free window.
+- **`/stop` and `/skip` slash commands** — stop all playback or skip the current URL stream straight from Discord, without opening the web UI.
+- **The console look, deeper** — most-played pads now glow on a VU-style amber→orange→red heat ramp (the hottest one gently pulses); numbers (durations, timers, counts, the version stamp) render in a fixed-width "LCD" font so they stop wiggling; sound tiles on mobile press in like real pads; inputs and waveforms look carved-in; and there are proper keyboard focus rings throughout.
+- **Taps feel instant** — pressing a pad lights it green (and buzzes on phones) immediately, before the server even answers.
+- **Snappier + safer streaming** — watch/movie-night rooms now heartbeat their viewers, so a viewer who drops off Wi-Fi no longer keeps a room (and its screen-capture) running forever; and picking a movie/stream URL is now blocked from pointing at private/internal addresses.
+- **More resilient bot** — the bot retries the Discord login with backoff instead of crash-looping during a Discord outage, and voice uploads/vocal-isolation no longer freeze the TTS server while they run.
+
 ## 2026-07-20 — Audit pass: security, stability, speed & a console look
 - **Playing sounds now glow green, not purple** — a sound that's making noise lights up in a distinct "LIVE" green with a pulsing corner LED, so you can tell at a glance what's actually playing versus just hovered/selected. Sound tiles also became tactile "pads" that visibly press in when you tap them.
 - **Waveforms stop breaking** — the now-playing waveform no longer silently dies after playing ~6 different sounds, no longer flashes/blanks every time the track changes, and no longer fires a doomed request every second for URL streams and TTS (which never had a waveform anyway).

@@ -2,6 +2,13 @@
   "name": "discord-soundboard",
   "version": "1.1.0",
   "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js",
+    "lint": "npx --yes @biomejs/biome check .",
+    "format": "npx --yes @biomejs/biome format --write ."
+  },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",

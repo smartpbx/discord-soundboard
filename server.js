@@ -2256,6 +2256,12 @@ async function registerSlashCommands() {
         new SlashCommandBuilder()
             .setName('wheel')
             .setDescription('Spin a wheel for any decision — opens a modal where you type options'),
+        new SlashCommandBuilder()
+            .setName('stop')
+            .setDescription('Stop all soundboard playback (sounds, TTS, and the URL queue)'),
+        new SlashCommandBuilder()
+            .setName('skip')
+            .setDescription('Skip the current URL stream'),
     ].map(c => c.toJSON());
     for (const [, guild] of client.guilds.cache) {
         try {
@@ -2333,6 +2339,42 @@ async function handleRejoinCommand(interaction) {
     return interaction.reply({ content: `Joined **${channel.name}**.`, flags: MessageFlags.Ephemeral });
 }
 
+async function handleStopCommand(interaction) {
+    const wasPlaying = playbackState.status !== 'idle' || !!activeUrlStream || ttsQueue.length > 0 || urlStreamQueue.length > 0;
+    stopAllPlayback();
+    try {
+        statsDb.recordAdminAction({
+            actor: interaction.user?.tag || interaction.user?.id || 'discord',
+            actorRole: 'discord', action: 'stop.slash', target: 'all', details: {},
+        });
+    } catch {}
+    console.log(`[slash] /stop by ${interaction.user?.tag ?? interaction.user?.id}`);
+    return interaction.reply({ content: wasPlaying ? '⏹ Stopped all playback.' : 'Nothing was playing.', flags: MessageFlags.Ephemeral });
+}
+
+async function handleSkipCommand(interaction) {
+    if (!activeUrlStream) {
+        return interaction.reply({ content: 'No URL stream is playing to skip.', flags: MessageFlags.Ephemeral });
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const skippedTitle = playbackState.displayName || 'the current stream';
+    try {
+        statsDb.recordAdminAction({
+            actor: interaction.user?.tag || interaction.user?.id || 'discord',
+            actorRole: 'discord', action: 'skip.slash', target: playbackState.filename || 'url', details: {},
+        });
+    } catch {}
+    try {
+        await performUrlSkip();
+        console.log(`[slash] /skip by ${interaction.user?.tag ?? interaction.user?.id}`);
+        return interaction.editReply({ content: `⏭ Skipped ${skippedTitle}.` });
+    } catch (err) {
+        if (err.statusCode === 409) return interaction.editReply({ content: 'A skip is already in progress — try again in a moment.' });
+        console.error('[slash] /skip failed:', err.message || err);
+        return interaction.editReply({ content: 'Could not skip the stream.' });
+    }
+}
+
 client.on('interactionCreate', async (interaction) => {
     try {
         // Each handler is awaited: `return handler()` (without await) lets the
@@ -2348,6 +2390,8 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.commandName === 'watch') return await handleWatchCommand(interaction);
             if (interaction.commandName === 'movienight') return await handleMovieNightCommand(interaction);
             if (interaction.commandName === 'wheel') return await handleWheelCommand(interaction);
+            if (interaction.commandName === 'stop') return await handleStopCommand(interaction);
+            if (interaction.commandName === 'skip') return await handleSkipCommand(interaction);
         } else if (interaction.isAutocomplete?.()) {
             if (interaction.commandName === 'play') return await handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
@@ -2865,6 +2909,11 @@ function _watchDetectSource(url) {
     const drm = /(^|\.)(netflix\.com|disneyplus\.com|max\.com|hbomax\.com|hulu\.com|primevideo\.com|amazon\.com\/.*\bdp\b|paramountplus\.com|peacocktv\.com|appletv\.com|apple\.com\/tv)/i;
     try {
         const parsed = new URL(u);
+        // SSRF guard: don't let a user point the watch/capture/scrape pipeline at
+        // internal hosts (169.254.169.254, Proxmox :8006, other LXCs, the router…).
+        if (_isPrivateHost(parsed.hostname)) {
+            return { sourceType: 'invalid', error: 'Private / loopback addresses are not allowed.' };
+        }
         if (drm.test(parsed.hostname + parsed.pathname)) {
             return { sourceType: 'drm-blocked', error: 'This service uses DRM — the bot can\'t decrypt or re-stream it (industry-wide). Use Discord\'s built-in **Go Live / Screenshare** in voice instead: open the video in your browser, hit Go Live in the voice channel, friends in voice see your screen with the video.' };
         }
@@ -3434,6 +3483,9 @@ function _mnTallies(room) {
 // the URL's pathname if no og:title. Skipped for known DRM hosts.
 async function scrapeOgMeta(url) {
     try {
+        // SSRF guard: resolve + reject private/loopback targets before fetching
+        // (this reflects og:title/description back to the user).
+        if (!(await _assertPublicUrl(url))) return null;
         const res = await fetch(url, {
             headers: {
                 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -7016,14 +7068,42 @@ function sweepUrlPreviews() {
 }
 setInterval(sweepUrlPreviews, 10 * 60 * 1000).unref();
 
+// Shared SSRF guard: is this hostname a private / loopback / link-local target
+// that a user shouldn't be able to make the server fetch or capture? Covers
+// IPv4 literals, IPv6 loopback/ULA/link-local, IPv4-mapped IPv6, 0.0.0.0, and
+// CGNAT. DNS-rebinding (a public name resolving to a private IP) is caught by
+// _assertPublicUrl below, which resolves the name first.
+function _isPrivateHost(hostname) {
+    const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return true;
+    if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '0.0.0.0') return true;
+    if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true;
+    if (host.startsWith('::ffff:127.') || host.startsWith('::ffff:10.') || host.startsWith('::ffff:192.168.') || host.startsWith('::ffff:169.254.') || host.startsWith('::ffff:172.')) return true;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) || /^0\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return true;
+    if (/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./.test(host)) return true; // CGNAT 100.64/10
+    return false;
+}
+// Async: reject the URL if its host is private OR resolves to a private IP
+// (DNS rebinding). Returns true if safe to fetch, false otherwise.
+async function _assertPublicUrl(raw) {
+    let u;
+    try { u = new URL(String(raw || '').trim()); } catch { return false; }
+    if (!/^https?:$/.test(u.protocol)) return false;
+    if (_isPrivateHost(u.hostname)) return false;
+    try {
+        const dns = require('dns').promises;
+        const results = await dns.lookup(u.hostname, { all: true });
+        if (results.some(r => _isPrivateHost(r.address))) return false;
+    } catch { /* resolution failure — let the actual fetch fail normally */ }
+    return true;
+}
+
 function validateStreamUrl(raw) {
     let u;
     try { u = new URL(String(raw || '').trim()); } catch { return null; }
     if (!/^https?:$/.test(u.protocol)) return null;
-    const host = u.hostname.toLowerCase();
-    if (host === 'localhost' || host === '::1') return null;
-    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return null;
-    if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return null;
+    if (_isPrivateHost(u.hostname)) return null;
     return u.toString();
 }
 
@@ -8080,15 +8160,12 @@ app.get('/api/stats/admin-actions', requireAdmin, (req, res) => {
     res.json(statsDb.listAdminActions({ from, to, actor, action, limit, offset }));
 });
 
-app.post('/api/stop', requireAdmin, (req, res) => {
-    const role = req.session.user.role;
-    const startedBy = playbackState.startedBy;
-    if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
-        return res.status(403).json({ error: 'Only superadmin can stop superadmin playback.' });
-    }
-    // Clear the queues and the active URL stream before player.stop() —
-    // the Idle handler it fires synchronously would otherwise start the
-    // next queued URL stream we're trying to stop.
+// Stop everything: active URL stream, both queues, the mixer, and reset state.
+// Shared by POST /api/stop and the /stop slash command.
+function stopAllPlayback() {
+    // Clear the queues and the active URL stream before player.stop() — the Idle
+    // handler it fires synchronously would otherwise start the next queued URL
+    // stream we're trying to stop.
     if (urlSkipInProgress) urlSkipAbort = true; // cancel an in-flight crossfade
     killActiveUrlStream();
     urlStreamQueue.length = 0;
@@ -8099,6 +8176,15 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, startTimeOffset: null, duration: null, startedBy: null, pausedAt: null };
+}
+
+app.post('/api/stop', requireAdmin, (req, res) => {
+    const role = req.session.user.role;
+    const startedBy = playbackState.startedBy;
+    if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
+        return res.status(403).json({ error: 'Only superadmin can stop superadmin playback.' });
+    }
+    stopAllPlayback();
     res.json({ ok: true });
 });
 
@@ -10615,10 +10701,34 @@ if (!token || token === 'your_bot_token_here') {
     console.error('DISCORD_TOKEN is missing or still the placeholder. Set it in .env from Discord Developer Portal → Your App → Bot → Token');
     process.exit(1);
 }
-client.login(token);
+// Log in with retry/backoff so a transient Discord outage or network blip at
+// startup doesn't reject an uncaught promise and crash-loop the whole web UI
+// (uploads, TTS, watch parties — none of which need Discord). An invalid token
+// still exits immediately.
+function loginWithRetry(attempt = 0) {
+    client.login(token).catch((err) => {
+        if (err && (err.code === 'TokenInvalid' || /invalid token/i.test(err.message || ''))) {
+            console.error('[discord] invalid bot token — exiting');
+            process.exit(1);
+        }
+        const delay = Math.min(60_000, 5_000 * 2 ** attempt);
+        console.error(`[discord] login failed (${err && err.message}), retrying in ${Math.round(delay / 1000)}s`);
+        setTimeout(() => loginWithRetry(attempt + 1), delay).unref();
+    });
+}
+loginWithRetry();
 // Start the voice-training queue scheduler so queued/scheduled jobs get picked
 // up automatically when the GPU is free.
 try { voiceTrainer.startScheduler(); } catch (e) { console.error('[voice-trainer] scheduler failed to start:', e.message); }
+// Global error handler (registered after all routes). Catches synchronous
+// throws in handlers and anything passed to next(err); returns a clean JSON
+// error instead of leaking a stack trace, and logs the real error server-side.
+app.use((err, req, res, next) => {
+    console.error('[route error]', req.method, req.path, '-', err && (err.stack || err.message || err));
+    if (res.headersSent) return next(err);
+    res.status(err && err.status ? err.status : 500).json({ error: 'Internal error' });
+});
+
 const PORT = process.env.PORT || 3000;
 const httpServer = app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);
@@ -10630,6 +10740,8 @@ const watchWss = new WebSocketServer({ noServer: true });
 watchWss.on('connection', (ws, req, room, username, role) => {
     ws._un = username;
     ws._role = role || null;
+    ws._alive = true;
+    ws.on('pong', () => { ws._alive = true; });
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10655,6 +10767,8 @@ const mnWss = new WebSocketServer({ noServer: true });
 mnWss.on('connection', (ws, req, room, username, role) => {
     ws._un = username;
     ws._role = role || null;
+    ws._alive = true;
+    ws.on('pong', () => { ws._alive = true; });
     room.viewers.add(ws);
     room.lastActivity = Date.now();
     try {
@@ -10674,6 +10788,21 @@ mnWss.on('connection', (ws, req, room, username, role) => {
     ws.on('close', cleanup);
     ws.on('error', cleanup);
 });
+
+// Heartbeat: ping every watch/movie-night viewer; terminate any that miss a
+// round so a viewer whose network dropped uncleanly stops pinning the room —
+// and its Xvfb+Chromium+ffmpeg capture quartet — open forever. Once the last
+// real viewer is gone the room sweep can reclaim everything.
+const _roomWssHeartbeat = setInterval(() => {
+    for (const wss of [watchWss, mnWss]) {
+        wss.clients.forEach((ws) => {
+            if (ws._alive === false) { try { ws.terminate(); } catch {} return; }
+            ws._alive = false;
+            try { ws.ping(); } catch {}
+        });
+    }
+}, 30000);
+_roomWssHeartbeat.unref();
 
 // WebSocket upgrade tunnel for the yt-session noVNC proxy. Authenticates the
 // upgrade using the same session cookie as the rest of the app, then pipes
