@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Mobile bottom navigation
+- **Bottom tab bar on mobile** — Board / ➕ Create / You, docked below the mini-player.
+- **Features open as full-screen sheets** — Text-to-Speech, Stream URL, Generate Song, and Upload now slide up as proper full-screen sheets (with a ‹ Back button) instead of opening behind the fullscreen soundboard where you couldn't see them.
+- **➕ Create sheet** gathers TTS / URL / Song / Upload / Clip in one place; **You sheet** shows your account + a theme toggle.
+
 ## 2026-07-21 — Mini-player + VU heatmap
 - **Real mini-player on mobile** — the bottom bar is now a proper mini-player: a green progress line across the top edge, a live VU meter while something's playing, the sound name, a mono time readout (`0:03 / 0:07 · who queued it`), and a stop button.
 - **Your bangers glow** — the most-played sounds now light up on a VU-meter heat ramp (amber→orange→red) right on the board, all the time — no need to toggle heatmap mode. Only the genuinely hot pads glow; everything else stays clean.
