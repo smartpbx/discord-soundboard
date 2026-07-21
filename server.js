@@ -48,6 +48,12 @@ process.on('uncaughtException', (err) => {
         return;
     }
     console.error('[fatal] uncaughtException:', err && err.stack || err);
+    // Crash for real so systemd (Restart=on-failure) restarts us. The handlers
+    // MUST be removed first — otherwise the re-thrown error re-enters this same
+    // handler and loops forever, and the process never actually exits.
+    process.exitCode = 1;
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
     setImmediate(() => { throw err; });
 });
 process.on('unhandledRejection', (reason) => {
@@ -56,9 +62,12 @@ process.on('unhandledRejection', (reason) => {
         return;
     }
     console.error('[fatal] unhandledRejection:', reason && reason.stack || reason);
-    // Re-throw asynchronously to be symmetric with uncaughtException. Stops
-    // the process from silently limping on after a real async bug (the kind
-    // of state-drift that bit us in the /rejoin ENOBUFS incident).
+    // Re-throw asynchronously to be symmetric with uncaughtException. Remove the
+    // listeners first so the throw actually crashes the process instead of
+    // re-entering these handlers in an infinite loop.
+    process.exitCode = 1;
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
     setImmediate(() => { throw reason; });
 });
 
@@ -730,7 +739,16 @@ function applyTtsPronunciationOverrides(text) {
     if (!keys.length) return text;
     let out = text;
     for (const from of keys) {
-        const re = new RegExp('\\b' + from.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&') + '\\b', 'gi');
+        let re;
+        try {
+            // NOTE: the char class must be [.*+?^${}()|[\]\\] — the previous
+            // version closed the class early so keys were never escaped, and a
+            // key like "c++" threw here and crash-looped the bot on every speak.
+            re = new RegExp('\\b' + from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+        } catch (e) {
+            console.warn('[tts] skipping bad pronunciation override key:', from, e.message);
+            continue;
+        }
         out = out.replace(re, overrides[from]);
     }
     return out;
@@ -1260,10 +1278,25 @@ if (!SESSION_SECRET || SESSION_SECRET === 'soundboard-secret-change-me') {
     process.exit(1);
 }
 
-// Behind Caddy (CT 106) reverse proxy. Without this, req.ip is the proxy's
-// loopback address and X-Forwarded-For is unverified, so any direct hit
-// could spoof the header to dodge IP-based cooldowns / blocks.
-app.set('trust proxy', 1);
+// Cloudflare Tunnel terminates at a local cloudflared on this container, so the
+// only trustworthy proxy hop is loopback. 'trust proxy: 1' would trust ANY
+// immediate peer (LAN/ZeroTier/other CT), letting them spoof X-Forwarded-For to
+// dodge IP cooldowns/blocks and the login limiter. 'loopback' ignores XFF from
+// non-loopback peers so their req.ip is the real socket address.
+app.set('trust proxy', 'loopback');
+
+// Baseline security headers. A restrictive script-src CSP is deferred until the
+// inline handlers/scripts move out of index.html; these directives are safe now
+// and are the backstop for the XSS sinks fixed in this change. frame-ancestors
+// 'self' + X-Frame-Options stop clickjacking; nosniff stops MIME confusion.
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy',
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'");
+    next();
+});
 
 // gzip / brotli all eligible responses. /api/sounds (~130 KB JSON) and the
 // single-file frontend (~660 KB) compress to roughly 1/5th, which is the
@@ -1655,7 +1688,10 @@ function requireAdmin(req, res, next) {
         req.session.destroy(() => {});
         return res.status(401).json({ error: 'Account is disabled. Contact an admin.' });
     }
-    if (req.session.user.role !== 'admin' && req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
+    // Authorize against the LIVE record, not the session snapshot, so a demoted
+    // admin loses access immediately instead of keeping it until the 7-day
+    // cookie expires.
+    if (entry.role !== 'admin' && entry.role !== 'superadmin') return res.status(403).json({ error: 'Admin or superadmin only' });
     next();
 }
 
@@ -1667,7 +1703,7 @@ function requireSuperadmin(req, res, next) {
         req.session.destroy(() => {});
         return res.status(401).json({ error: 'Account is disabled. Contact an admin.' });
     }
-    if (req.session.user.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin only' });
+    if (entry.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin only' });
     next();
 }
 
@@ -2299,26 +2335,30 @@ async function handleRejoinCommand(interaction) {
 
 client.on('interactionCreate', async (interaction) => {
     try {
+        // Each handler is awaited: `return handler()` (without await) lets the
+        // returned promise reject OUTSIDE this try/catch, which then hits the
+        // global unhandledRejection handler and crashes the process (e.g. a late
+        // reply throwing DiscordAPIError 10062 under event-loop lag).
         if (interaction.isChatInputCommand?.()) {
-            if (interaction.commandName === 'votekick') return handleVoteStart(interaction, 'kick');
-            if (interaction.commandName === 'votetimeout') return handleVoteStart(interaction, 'timeout');
-            if (interaction.commandName === 'rejoin') return handleRejoinCommand(interaction);
-            if (interaction.commandName === 'clip') return handleClipCommand(interaction);
-            if (interaction.commandName === 'play') return handlePlayCommand(interaction);
-            if (interaction.commandName === 'watch') return handleWatchCommand(interaction);
-            if (interaction.commandName === 'movienight') return handleMovieNightCommand(interaction);
-            if (interaction.commandName === 'wheel') return handleWheelCommand(interaction);
+            if (interaction.commandName === 'votekick') return await handleVoteStart(interaction, 'kick');
+            if (interaction.commandName === 'votetimeout') return await handleVoteStart(interaction, 'timeout');
+            if (interaction.commandName === 'rejoin') return await handleRejoinCommand(interaction);
+            if (interaction.commandName === 'clip') return await handleClipCommand(interaction);
+            if (interaction.commandName === 'play') return await handlePlayCommand(interaction);
+            if (interaction.commandName === 'watch') return await handleWatchCommand(interaction);
+            if (interaction.commandName === 'movienight') return await handleMovieNightCommand(interaction);
+            if (interaction.commandName === 'wheel') return await handleWheelCommand(interaction);
         } else if (interaction.isAutocomplete?.()) {
-            if (interaction.commandName === 'play') return handlePlayAutocomplete(interaction);
+            if (interaction.commandName === 'play') return await handlePlayAutocomplete(interaction);
         } else if (interaction.isButton?.()) {
             const m = String(interaction.customId || '').match(/^vote:([^:]+):(yes|no)$/);
-            if (m) return handleVoteButton(interaction, m[1], m[2]);
+            if (m) return await handleVoteButton(interaction, m[1], m[2]);
             const w = String(interaction.customId || '').match(/^watch:post:(w_[a-f0-9]{8})$/i);
-            if (w) return handleWatchPostButton(interaction, w[1]);
+            if (w) return await handleWatchPostButton(interaction, w[1]);
             const mn = String(interaction.customId || '').match(/^mn:post:(mn_[a-f0-9]{8})$/i);
-            if (mn) return handleMovieNightPostButton(interaction, mn[1]);
+            if (mn) return await handleMovieNightPostButton(interaction, mn[1]);
         } else if (interaction.isModalSubmit?.()) {
-            if (interaction.customId === 'wheel:modal') return handleWheelModalSubmit(interaction);
+            if (interaction.customId === 'wheel:modal') return await handleWheelModalSubmit(interaction);
         }
     } catch (err) {
         console.error('[voting] interaction error:', err);
@@ -4270,6 +4310,30 @@ function checkLoginRateLimit(ip) {
     return { allowed: true };
 }
 
+// Generic per-IP sliding-window limiter for cheap-to-abuse unauthenticated
+// endpoints (register, guest-start). Keeps a bounded map (evicts empty recs).
+const _ipHits = new Map(); // key -> { hits: number[] }
+function checkIpRateLimit(key, ip, max, windowMs) {
+    const now = Date.now();
+    const k = key + ':' + ip;
+    const rec = _ipHits.get(k) || { hits: [] };
+    rec.hits = rec.hits.filter(t => now - t < windowMs);
+    if (rec.hits.length >= max) {
+        _ipHits.set(k, rec);
+        return { allowed: false, retryAfterSec: Math.ceil((windowMs - (now - rec.hits[0])) / 1000) };
+    }
+    rec.hits.push(now);
+    _ipHits.set(k, rec);
+    return { allowed: true };
+}
+// Periodically drop stale entries so the map can't grow unbounded.
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, rec] of _ipHits) {
+        if (!rec.hits.some(t => now - t < 15 * 60 * 1000)) _ipHits.delete(k);
+    }
+}, 5 * 60 * 1000).unref();
+
 app.post('/api/login', (req, res) => {
     const ip = getClientIP(req);
     const limit = checkLoginRateLimit(ip);
@@ -4300,6 +4364,15 @@ app.post('/api/logout', (req, res) => {
 
 const USERNAME_RE = /^[a-zA-Z0-9_-]{2,32}$/;
 app.post('/api/register', (req, res) => {
+    const ip = getClientIP(req);
+    if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
+    // Throttle: register hashes a password (blocking scrypt) and appends to a
+    // file, so an unthrottled loop is an event-loop + disk DoS.
+    const rl = checkIpRateLimit('register', ip, 5, 10 * 60 * 1000);
+    if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        return res.status(429).json({ error: 'Too many signup attempts. Try again later.' });
+    }
     const { username, password } = req.body || {};
     const un = String(username || '').trim();
     const pw = String(password || '');
@@ -4309,6 +4382,7 @@ app.post('/api/register', (req, res) => {
     const unLower = un.toLowerCase();
     if (USERS.has(unLower)) return res.status(400).json({ error: 'Username already taken' });
     const pending = loadPendingUsers();
+    if (pending.length >= 200) return res.status(429).json({ error: 'The signup queue is full. Please try again later.' });
     if (pending.some(p => String(p.username || '').toLowerCase() === unLower)) return res.status(400).json({ error: 'Registration already pending' });
     pending.push({ username: unLower, password: hashPassword(pw), createdAt: Date.now() });
     savePendingUsers(pending);
@@ -4323,6 +4397,11 @@ app.post('/api/guest/start', (req, res) => {
     if (!getGuestEnabled()) return res.status(403).json({ error: 'Guest access is disabled.' });
     const ip = getClientIP(req);
     if (isIPBlocked(ip)) return res.status(403).json({ error: 'Your IP has been blocked.' });
+    const rl = checkIpRateLimit('guest-start', ip, 20, 10 * 60 * 1000);
+    if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        return res.status(429).json({ error: 'Too many guest sessions from this address. Try again later.' });
+    }
     req.session.user = { username: 'guest', role: 'guest', ip };
     req.session.save((err) => {
         if (err) return res.status(500).json({ error: 'Session error' });
@@ -4903,8 +4982,23 @@ app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
 // Peak-based normalization using volumedetect. Writes to a .tmp.mp3 and
 // renames over the original on success. Callback: cb(err, { skipped, gain }).
 // Deterministic and idempotent — short files are safe (unlike loudnorm).
-function normalizeFileInPlace(filePath, cb) {
-    const measure = spawn('ffmpeg', ['-nostdin', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
+function normalizeFileInPlace(filePath, opts, cb) {
+    // Back-compat: allow normalizeFileInPlace(path, cb).
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    opts = opts || {};
+    const start = (typeof opts.start === 'number' && opts.start > 0) ? opts.start : 0;
+    const end = (typeof opts.end === 'number' && opts.end > start) ? opts.end : null;
+    // Measure peak volume over the SELECTED [start, end] window — the section
+    // that actually plays — instead of the whole file. Trim is non-destructive
+    // (applied at play time), so measuring the whole file computed the gain from
+    // audio the user trimmed away. The gain pass below stays whole-file so the
+    // trim stays re-editable.
+    const measureArgs = ['-nostdin'];
+    if (start > 0) measureArgs.push('-ss', String(start));
+    measureArgs.push('-i', filePath);
+    if (end != null) measureArgs.push('-t', String(end - start));
+    measureArgs.push('-af', 'volumedetect', '-f', 'null', '-');
+    const measure = spawn('ffmpeg', measureArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
     let measureErr = '';
     measure.stderr.on('data', chunk => { measureErr += chunk.toString(); });
     measure.on('error', err => cb(err));
@@ -4940,7 +5034,12 @@ app.post('/api/sounds/normalize/:filename', requireAdmin, (req, res) => {
     if (!safeFilename || !/\.(mp3|wav|ogg)$/i.test(safeFilename)) return res.status(400).json({ error: 'Invalid filename' });
     const filePath = path.join(SOUNDS_DIR, safeFilename);
     if (!path.resolve(filePath).startsWith(path.resolve(SOUNDS_DIR)) || !fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-    normalizeFileInPlace(filePath, (err, result) => {
+    // Respect the sound's trim points so the gain is measured from the section
+    // that actually plays, not the whole file.
+    const nMeta = loadSoundsMeta();
+    const nStart = getSoundStartTime(nMeta, safeFilename) || 0;
+    const nEnd = getSoundEndTime(nMeta, safeFilename);
+    normalizeFileInPlace(filePath, { start: nStart, end: nEnd }, (err, result) => {
         if (err) return res.status(500).json({ error: err.message || 'Normalization failed' });
         if (result.skipped) return res.json({ ok: true, skipped: true, message: 'Already normalized' });
         const duration = probeDuration(filePath);
@@ -6347,6 +6446,14 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
     };
 
     if (mode === 'direct') {
+        // Don't silently overwrite an existing sound — POSIX rename would clobber
+        // it irreversibly while the old filename-keyed metadata (tags/trim) stays
+        // attached to the new audio. Pick the next free name instead, matching the
+        // pending path's behavior.
+        if (fs.existsSync(path.join(SOUNDS_DIR, safeName))) {
+            const dExt = path.extname(safeName);
+            safeName = findAvailableSoundName(path.basename(safeName, dExt), dExt, [SOUNDS_DIR, PENDING_DIR]);
+        }
         const targetPath = path.join(SOUNDS_DIR, safeName);
         const resolvedPath = path.resolve(targetPath);
         if (!resolvedPath.startsWith(path.resolve(SOUNDS_DIR))) return res.status(403).json({ error: 'Invalid filename' });
@@ -8321,7 +8428,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(synthPayload),
-                    timeout: 120000,
+                    timeout: 200000, // > fish-speech ~180s cold start (was 120000, guaranteed 504 on cold engine load)
                 });
             });
         } catch (e) {
@@ -9302,7 +9409,7 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
             } else {
                 const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(synthPayload), timeout: 120000,
+                    body: JSON.stringify(synthPayload), timeout: 200000, // > fish-speech ~180s cold start (was 120000, guaranteed 504 on cold engine load)
                 }));
                 if (!ttsRes || !ttsRes.ok) {
                     const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
@@ -9820,9 +9927,19 @@ app.post('/api/suno/save/:taskId', requireAuth, requireValidSunoTaskId, (req, re
 
 app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
-    // Optional: refund the day's usage counter if user cancels early.
-    const refunded = req.query.refund === '1';
-    if (refunded) decrementSunoUsage(req.session.user.username);
+    const wantRefund = req.query.refund === '1';
+    // Only refund a GENUINE early-cancel: the staging must still exist and have
+    // produced no audio yet. This stops generate→save→discard?refund=1 from
+    // zeroing out usage (and burning credits) after the user already got the
+    // song. A repeat discard finds no staging (deleted below) → no double refund.
+    let refunded = false;
+    if (wantRefund) {
+        const meta = sunoGen.getStagingMeta(taskId);
+        if (meta) {
+            const hasAudio = [0, 1].some(s => { try { return !!sunoGen.getSlotAudioPath(taskId, s); } catch { return false; } });
+            if (!hasAudio) { decrementSunoUsage(req.session.user.username); refunded = true; }
+        }
+    }
     try { sunoGen.deleteStaging(taskId); } catch {}
     statsDb.recordAdminAction({
         actor: req.session.user.username,
@@ -9831,7 +9948,7 @@ app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (re
         target: taskId,
         details: { refunded },
     });
-    res.json({ ok: true });
+    res.json({ ok: true, refunded });
 });
 
 // Play a Suno staging track straight to Discord without requiring Save first.
