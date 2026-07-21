@@ -514,10 +514,21 @@
         .sound-item-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
         .sound-item:hover .sound-item-actions,
         .sound-item:focus-within .sound-item-actions { opacity: 1; pointer-events: auto; }
-        /* Touch devices don't fire hover — show actions persistently so the
-           edit/preview controls aren't undiscoverable on phones. */
+        /* Touch devices don't fire hover. The old rule forced the fav/preview/
+           edit buttons permanently visible over the top-right of the tile, which
+           covered the sound title. Instead, keep tiles clean and reveal the
+           actions on LONG-PRESS (see the grid long-press handler in JS). */
         @media (hover: none) {
-            .sound-item-actions { opacity: 1; pointer-events: auto; }
+            .sound-item-actions { opacity: 0; pointer-events: none; }
+            .sound-item.actions-open .sound-item-actions { opacity: 1; pointer-events: auto; }
+            .sound-item.actions-open .sound-btn { filter: brightness(0.55); }
+            /* Bigger, easier-to-hit action buttons on touch. */
+            .sound-item.actions-open .sound-preview,
+            .sound-item.actions-open .sound-edit,
+            .sound-item.actions-open .sound-fav { width: 34px; height: 34px; background: var(--surface-2, var(--surface)); box-shadow: var(--elev-1); }
+            .sound-item.actions-open .sound-preview svg,
+            .sound-item.actions-open .sound-edit svg,
+            .sound-item.actions-open .sound-fav svg { width: 16px; height: 16px; }
         }
         /* Preview button: shows play arrow normally, swaps to stop square
            while the local preview is active so a second click is obviously
@@ -1048,6 +1059,19 @@
         .btn-random { font: inherit; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-text, var(--accent)); background: var(--accent-tint, rgba(124,58,237,0.12)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: var(--r-pill, 999px); padding: 0.28rem 0.7rem; cursor: pointer; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease; }
         .btn-random:hover { border-color: var(--accent); }
         .btn-random:active { transform: translateY(1px); box-shadow: var(--press); }
+        /* Mobile overflow safety: nothing may push the page sideways. clip (vs
+           hidden) doesn't create a scroll container, so sticky/fixed still work. */
+        html, body { overflow-x: clip; max-width: 100%; }
+        .app, .sounds-card, .player, .main-view { max-width: 100%; }
+        /* Long unbreakable strings (video/stream titles, URLs, usernames) wrap
+           instead of forcing the layout wide. */
+        .now-playing-text, #nowPlayingText, .mbb-now, .player-recent-tts-text,
+        .url-queue-title, .watch-title, .toast, .sound-btn-label { overflow-wrap: anywhere; word-break: break-word; }
+        /* Wide form/data rows scroll inside their own box on phones rather than
+           spilling the page. */
+        @media (max-width: 700px) {
+            .sa-table-wrap, .stats-table-wrap, .admin-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        }
         /* Slightly nicer scrollbars to match the console surfaces. */
         * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
         *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -3961,6 +3985,47 @@
                 closeSoundsOptionsMenu();
                 document.removeEventListener('click', closeSoundsOptionsMenuOnce);
             }
+        }
+
+        // On touch devices, long-press a sound tile to reveal its fav/preview/
+        // edit actions (they're hidden by default so they don't cover the title).
+        // A short tap still plays. Delegated on the persistent #soundsList so it
+        // survives grid re-renders.
+        function setupSoundLongPress() {
+            const grid = document.getElementById('soundsList');
+            if (!grid || grid._lpBound) return;
+            grid._lpBound = true;
+            let timer = null, longFired = false, startX = 0, startY = 0;
+            const isTouch = () => window.matchMedia && window.matchMedia('(hover: none)').matches;
+            const closeAll = (except) => document.querySelectorAll('.sound-item.actions-open').forEach(el => { if (el !== except) el.classList.remove('actions-open'); });
+            grid.addEventListener('pointerdown', (e) => {
+                if (!isTouch() || reorderMode || selectMode) return;
+                if (e.target.closest('.sound-item-actions')) return; // pressing a revealed button
+                const item = e.target.closest('.sound-item');
+                if (!item) return;
+                startX = e.clientX; startY = e.clientY; longFired = false;
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    longFired = true;
+                    closeAll(item);
+                    item.classList.toggle('actions-open');
+                    if (navigator.vibrate) navigator.vibrate(15);
+                }, 450);
+            });
+            const cancel = (e) => {
+                if (e && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) { clearTimeout(timer); }
+            };
+            grid.addEventListener('pointermove', cancel);
+            grid.addEventListener('pointerup', () => clearTimeout(timer));
+            grid.addEventListener('pointercancel', () => clearTimeout(timer));
+            // Swallow the click that follows a long-press so it doesn't also play.
+            grid.addEventListener('click', (e) => {
+                if (longFired) { e.stopPropagation(); e.preventDefault(); longFired = false; }
+            }, true);
+            // Tap anywhere outside a tile closes any open action row.
+            document.addEventListener('pointerdown', (e) => {
+                if (!e.target.closest('.sound-item')) closeAll(null);
+            });
         }
 
         // Surprise me: play a random sound from the currently filtered list.
@@ -12055,6 +12120,7 @@
 
         (async function init() {
             setupSoundGridDragDrop(document.getElementById('soundsList'));
+            setupSoundLongPress();
             fetchGuestStatus();
             const ok = await checkAuth();
             if (!ok) return;

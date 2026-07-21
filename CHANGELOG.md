@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Mobile fixes
+- **Sound titles are readable on mobile again** — the fav/preview/edit buttons no longer sit permanently on top of the sound name on touch devices. Long-press a tile to reveal them (they're bigger and easier to tap now); a normal tap still just plays.
+- **No more sideways spill** — hardened the layout so long titles/URLs and wide rows can't push the page out of bounds on phones.
+
 ## 2026-07-21 — Audit pass 2: console UI, PWA, slash commands, more hardening
 - **🎲 Surprise button** — a new dice button on the soundboard plays a random sound from whatever's currently showing. Great for a "let the board decide" moment.
 - **Favorites & presets follow you now** — your favorite sounds, TTS presets, and sort/filter settings are saved to your account, so they show up the same on your phone and your desktop instead of being stuck in one browser. (Guests stay per-device.)
