@@ -5,6 +5,12 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Re-audit fixes
+- **Security:** closed an SSRF bypass — IPv4-mapped IPv6 addresses (e.g. `[::ffff:127.0.0.1]`) could reach internal/loopback hosts through the URL/stream/scrape guards.
+- **`/stop` and `/skip`** now require the same permissions as the web buttons: `/stop` needs a linked admin, `/skip` needs the stream's owner or an admin (previously any Discord member could use them).
+- A sound you tap that fails to play no longer stays lit green.
+- Per-account preferences are now written atomically, so a crash mid-save can't wipe everyone's settings.
+
 ## 2026-07-21 — TTS voice cards
 - **Pick a voice by tapping a card** — the TTS voice picker is now a grid of voice cards (name + engine) instead of a dropdown; the selected one glows, and it's fully keyboard-accessible.
 

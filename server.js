@@ -2340,6 +2340,13 @@ async function handleRejoinCommand(interaction) {
 }
 
 async function handleStopCommand(interaction) {
+    // Gate the same way POST /api/stop does (requireAdmin): resolve the Discord
+    // user to a linked account and require admin/superadmin.
+    const un = findUsernameByDiscordId(interaction.user?.id);
+    const role = un ? USERS.get(un)?.role : null;
+    if (role !== 'admin' && role !== 'superadmin') {
+        return interaction.reply({ content: 'Only linked admins can stop playback — link your account in the web UI first.', flags: MessageFlags.Ephemeral });
+    }
     const wasPlaying = playbackState.status !== 'idle' || !!activeUrlStream || ttsQueue.length > 0 || urlStreamQueue.length > 0;
     stopAllPlayback();
     try {
@@ -2355,6 +2362,19 @@ async function handleStopCommand(interaction) {
 async function handleSkipCommand(interaction) {
     if (!activeUrlStream) {
         return interaction.reply({ content: 'No URL stream is playing to skip.', flags: MessageFlags.Ephemeral });
+    }
+    // Gate the same way POST /api/stream-url/skip does: the stream's owner or an
+    // admin (and only superadmin can skip superadmin playback).
+    const un = findUsernameByDiscordId(interaction.user?.id);
+    const role = un ? USERS.get(un)?.role : null;
+    const isAdmin = role === 'admin' || role === 'superadmin';
+    const current = playbackState.startedBy;
+    const isOwn = !!(current && un && current.username === un);
+    if (!isOwn && !isAdmin) {
+        return interaction.reply({ content: 'You can only skip your own stream — ask an admin, or use the Vote-skip button in the web UI.', flags: MessageFlags.Ephemeral });
+    }
+    if (!isOwn && role === 'admin' && current?.role === 'superadmin') {
+        return interaction.reply({ content: 'Only superadmin can skip superadmin playback.', flags: MessageFlags.Ephemeral });
     }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const skippedTitle = playbackState.displayName || 'the current stream';
@@ -4475,7 +4495,7 @@ app.get('/api/me', (req, res) => {
 // localStorage. Guests stay local-only.
 const USER_PREFS_FILE = path.join(DATA_DIR, 'user-prefs.json');
 function loadAllUserPrefs() { try { return JSON.parse(fs.readFileSync(USER_PREFS_FILE, 'utf8')); } catch { return {}; } }
-function saveAllUserPrefs(all) { try { fs.writeFileSync(USER_PREFS_FILE, JSON.stringify(all)); } catch (e) { console.warn('[prefs] save failed:', e.message); } }
+function saveAllUserPrefs(all) { try { writeJsonAtomic(USER_PREFS_FILE, all); } catch (e) { console.warn('[prefs] save failed:', e.message); } }
 app.get('/api/me/prefs', requireAuth, (req, res) => {
     const u = req.session.user;
     if (!u || u.role === 'guest') return res.json({ prefs: {} });
@@ -7099,11 +7119,24 @@ setInterval(sweepUrlPreviews, 10 * 60 * 1000).unref();
 // CGNAT. DNS-rebinding (a public name resolving to a private IP) is caught by
 // _assertPublicUrl below, which resolves the name first.
 function _isPrivateHost(hostname) {
-    const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    let host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
     if (!host) return true;
-    if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '0.0.0.0') return true;
-    if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) return true;
-    if (host.startsWith('::ffff:127.') || host.startsWith('::ffff:10.') || host.startsWith('::ffff:192.168.') || host.startsWith('::ffff:169.254.') || host.startsWith('::ffff:172.')) return true;
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    // IPv6 loopback / unspecified / ULA (fc00::/7) / link-local (fe80::/10)
+    if (host === '::1' || host === '::' || host === '0:0:0:0:0:0:0:1' || host === '0:0:0:0:0:0:0:0') return true;
+    if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') || host.startsWith('fea') || host.startsWith('feb')) return true;
+    // IPv4-mapped IPv6: Node's URL parser normalizes [::ffff:127.0.0.1] to the
+    // hex form ::ffff:7f00:1, which slips past dotted-quad prefix checks. Extract
+    // the embedded IPv4 (hex OR dotted) and fall through to the v4 rules.
+    let m = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (m) {
+        const a = parseInt(m[1], 16), b = parseInt(m[2], 16);
+        host = `${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}`;
+    } else {
+        m = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+        if (m) host = m[1];
+    }
+    if (host === '0.0.0.0') return true;
     if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) || /^0\./.test(host)) return true;
     if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return true;
     if (/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./.test(host)) return true; // CGNAT 100.64/10

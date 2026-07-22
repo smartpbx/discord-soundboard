@@ -8136,6 +8136,14 @@
             if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                // The play didn't start — clear the optimistic LIVE-green glow we
+                // added on tap (the poll won't re-render since nothing changed).
+                if (!isScrub && !opts.isScrub) {
+                    try {
+                        const escF2 = (window.CSS && CSS.escape) ? CSS.escape(filename) : filename;
+                        document.querySelectorAll('.sound-btn[data-filename="' + escF2 + '"], .mobile-grid-btn[data-filename="' + escF2 + '"]').forEach(b => b.classList.remove('is-playing'));
+                    } catch (_) {}
+                }
                 if (data.captchaRequired && !opts.absurdCaptchaToken) {
                     const token = await requestAbsurdCaptchaToken(filename);
                     if (token) return playSound(filename, startTime, { ...opts, absurdCaptchaToken: token });
