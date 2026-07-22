@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-21 — Mobile "You" menu
+- The mobile **You** tab now has all your account actions — Entrance/exit sounds, Clips, Keyboard shortcuts, What's new, Change password, Superadmin, and Log out — which were unreachable before when the fullscreen soundboard was open (they lived in the header menu the grid covers).
+
 ## 2026-07-21 — Re-audit fixes
 - **Security:** closed an SSRF bypass — IPv4-mapped IPv6 addresses (e.g. `[::ffff:127.0.0.1]`) could reach internal/loopback hosts through the URL/stream/scrape guards.
 - **`/stop` and `/skip`** now require the same permissions as the web buttons: `/stop` needs a linked admin, `/skip` needs the stream's owner or an admin (previously any Discord member could use them).

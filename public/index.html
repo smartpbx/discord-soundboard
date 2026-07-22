@@ -4032,6 +4032,15 @@
             if (label) label.innerHTML = username;
             const sheet = document.getElementById('mobileYouSheet');
             sheet?.classList.remove('hidden');
+            [
+                ['mobileYouChangePassword', 'headerMenuChangePassword'],
+                ['mobileYouEntranceExit', 'headerMenuEntranceExit'],
+                ['mobileYouSuperadmin', 'headerMenuSuperadmin'],
+            ].forEach(([mobileId, headerId]) => {
+                const mobileButton = document.getElementById(mobileId);
+                const headerButton = document.getElementById(headerId);
+                mobileButton?.classList.toggle('hidden', !headerButton || headerButton.classList.contains('hidden'));
+            });
             runMobileSheetEntry(sheet?.querySelector('.mobile-action-sheet-panel'));
             setMobileTabActive('you');
         }
@@ -12695,7 +12704,16 @@
                 <button type="button" class="mobile-action-sheet-close" onclick="switchMobileTab('board')">Close</button>
             </div>
             <div class="mobile-you-user">Signed in as <strong id="mobileYouUsername">Guest</strong></div>
-            <button type="button" class="mobile-create-pad" onclick="toggleTheme()"><span class="mobile-create-icon">◐</span><span>Toggle theme</span></button>
+            <div class="mobile-create-list">
+                <button type="button" class="mobile-create-pad" onclick="toggleTheme()"><span class="mobile-create-icon">◐</span><span>Toggle theme</span></button>
+                <button type="button" class="mobile-create-pad hidden" id="mobileYouChangePassword" onclick="switchMobileTab('board'); openChangePasswordModal();"><span class="mobile-create-icon">🔑</span><span>Change password</span></button>
+                <button type="button" class="mobile-create-pad hidden" id="mobileYouEntranceExit" onclick="switchMobileTab('board'); openEntranceExitModal();"><span class="mobile-create-icon">🔊</span><span>Entrance / exit sounds</span></button>
+                <button type="button" class="mobile-create-pad" id="mobileYouClips" onclick="switchMobileTab('board'); openClips();"><span class="mobile-create-icon">✂️</span><span>Clips</span></button>
+                <button type="button" class="mobile-create-pad" id="mobileYouShortcuts" onclick="switchMobileTab('board'); openShortcuts();"><span class="mobile-create-icon">⌨️</span><span>Keyboard shortcuts</span></button>
+                <button type="button" class="mobile-create-pad" id="mobileYouWhatsNew" onclick="switchMobileTab('board'); openWhatsNew();"><span class="mobile-create-icon">✨</span><span>What's new</span></button>
+                <button type="button" class="mobile-create-pad hidden" id="mobileYouSuperadmin" onclick="switchMobileTab('board'); switchMainTab('superadmin');"><span class="mobile-create-icon">🛡️</span><span>Superadmin</span></button>
+                <button type="button" class="mobile-create-pad" id="mobileYouLogout" style="margin-top:0.25rem; border-color:var(--danger); color:var(--danger);" onclick="switchMobileTab('board'); logout();"><span class="mobile-create-icon">🚪</span><span>Log out</span></button>
+            </div>
         </div>
     </div>
     <div id="toastContainer"></div>
