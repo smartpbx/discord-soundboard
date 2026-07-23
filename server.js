@@ -7476,6 +7476,7 @@ app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     const url = validateStreamUrl(req.body?.url);
     if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+    if (!(await _assertPublicUrl(url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     sweepUrlPreviews();
 
     const probe = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
@@ -7575,6 +7576,7 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
     const entry = urlPreviewCache.get(previewId);
     if (!entry || !fs.existsSync(entry.filePath)) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
     if (entry.username && entry.username !== req.session.user.username) return res.status(400).json({ error: 'Preview expired. Load the URL again.' });
+    if (!(await _assertPublicUrl(entry.url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
 
     let trimStart = Number(body.trimStart);
     let trimEnd = Number(body.trimEnd);
@@ -7655,6 +7657,7 @@ app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     const url = validateStreamUrl(req.body?.url);
     if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+    if (!(await _assertPublicUrl(url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     const r = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', url], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
     if (r.code !== 0) {
         const msg = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' / ');
@@ -7696,6 +7699,7 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
     } else {
         url = validateStreamUrl(body.url);
         if (!url) return res.status(400).json({ error: 'Invalid URL.' });
+        if (!(await _assertPublicUrl(url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
         title = url;
         duration = null;
     }
@@ -7908,6 +7912,7 @@ app.get('/api/admin/yt-session/status', requireSuperadmin, (req, res) => {
 
 app.post('/api/admin/yt-session/test', requireSuperadmin, async (req, res) => {
     const supplied = validateStreamUrl(req.body?.url);
+    if (supplied && !(await _assertPublicUrl(supplied))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     const canary = supplied || YT_TEST_CANARY;
     const r = await ytdlpRun(['--dump-single-json', '--no-playlist', '--no-warnings', '--quiet', canary], { timeoutMs: URL_STREAM_PROBE_TIMEOUT_MS });
     const ok = r.code === 0;
@@ -10352,6 +10357,7 @@ function requireWatchPartyPermission(req, res, next) {
 
 app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (req, res) => {
     const url = String((req.body || {}).url || '').trim();
+    if (!(await _assertPublicUrl(url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     const strategy = req.body?.strategy && WATCH_STRATEGIES.includes(req.body.strategy) ? req.body.strategy : undefined;
     const resolved = await resolveWatchSource(url, strategy);
     if (resolved.sourceType === 'invalid' || resolved.sourceType === 'drm-blocked') {

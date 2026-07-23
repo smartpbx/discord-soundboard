@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-23 — SSRF hardening (DNS rebinding)
+- The private/internal-address block now resolves a hostname before the server fetches, screen-captures, or streams it — closing the last SSRF gap where a public name pointing at an internal IP (a router, Proxmox, another container, cloud metadata) could slip through the watch-capture and URL-stream paths.
+
 ## 2026-07-21 — Mobile "You" menu
 - The mobile **You** tab now has all your account actions — Entrance/exit sounds, Clips, Keyboard shortcuts, What's new, Change password, Superadmin, and Log out — which were unreachable before when the fullscreen soundboard was open (they lived in the header menu the grid covers).
 
