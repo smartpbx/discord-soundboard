@@ -1310,23 +1310,9 @@ app.use(express.static('public', {
     etag: true,
     maxAge: 3600 * 1000,
 }));
-// HLS output of the Watch Together screen-capture proxy. The directory is
-// created on demand under DATA_DIR/captures/<captureId> when the 'capture'
-// strategy resolves a room; cleanup is handled by stopCaptureProxy() when
-// the watch room is closed or swept.
-app.use('/captures', express.static(path.join(__dirname, 'data', 'captures'), {
-    etag: false,
-    maxAge: 0,
-    setHeaders(res, filePath) {
-        if (filePath.endsWith('.m3u8')) {
-            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        } else if (filePath.endsWith('.ts')) {
-            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
-            res.setHeader('Content-Type', 'video/mp2t');
-        }
-    },
-}));
+// NOTE: the /captures HLS mount was moved below the session middleware so it can
+// be gated with requireAuth (it was previously served to anyone). See after
+// app.use(sessionMiddleware).
 app.use(express.json());
 app.use(require('cookie-parser')());
 // Held in a named ref so the WS upgrade handler (yt-session noVNC proxy) can
@@ -1348,6 +1334,24 @@ const sessionMiddleware = require('express-session')({
     },
 });
 app.use(sessionMiddleware);
+
+// HLS output of the Watch Together screen-capture proxy. Gated behind requireAuth
+// (mounted after the session middleware) so the re-streamed video isn't served to
+// anyone who learns a captureId. The directory is created on demand under
+// DATA_DIR/captures/<captureId>; cleanup is handled by stopCaptureProxy().
+app.use('/captures', requireAuth, express.static(path.join(__dirname, 'data', 'captures'), {
+    etag: false,
+    maxAge: 0,
+    setHeaders(res, filePath) {
+        if (filePath.endsWith('.m3u8')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        } else if (filePath.endsWith('.ts')) {
+            res.setHeader('Cache-Control', 'public, max-age=3600, immutable');
+            res.setHeader('Content-Type', 'video/mp2t');
+        }
+    },
+}));
 
 
 // Parse users from env + data/users.json (approved signups)

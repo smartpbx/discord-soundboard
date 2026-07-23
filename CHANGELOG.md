@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-23 — Watch-party captures require a login
+- The re-streamed screen-capture video (Watch Together) is no longer served to anyone who has the link — it now requires a logged-in session (guests in the party still work).
+
 ## 2026-07-23 — Your Suno songs are private to you
 - A generated song is now tied to the account that made it — only you (or a superadmin) can view, save, play, or discard your Suno generations, and the "Recent" list shows only your own. Previously anyone with the task ID could reach another person's generation.
 
