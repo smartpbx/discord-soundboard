@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-23 — Your Suno songs are private to you
+- A generated song is now tied to the account that made it — only you (or a superadmin) can view, save, play, or discard your Suno generations, and the "Recent" list shows only your own. Previously anyone with the task ID could reach another person's generation.
+
 ## 2026-07-23 — SSRF hardening (DNS rebinding)
 - The private/internal-address block now resolves a hostname before the server fetches, screen-captures, or streams it — closing the last SSRF gap where a public name pointing at an internal IP (a router, Proxmox, another container, cloud metadata) could slip through the watch-capture and URL-stream paths.
 

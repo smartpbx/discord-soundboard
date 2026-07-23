@@ -9939,6 +9939,12 @@ function requireValidSunoTaskId(req, res, next) {
     next();
 }
 
+function sunoOwns(taskId, req) {
+    if (req.session.user.role === 'superadmin') return true;
+    const meta = sunoGen.getStagingMeta(taskId);
+    return !meta || !meta.owner || meta.owner === req.session.user.username;
+}
+
 app.get('/api/suno/credits', requireAuth, async (req, res) => {
     try {
         const credits = await sunoGen.getCredits();
@@ -9957,6 +9963,7 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
             instrumental: !!instrumental,
             customMode: customMode !== false,
         });
+        sunoGen.setStagingOwner(taskId, req.session.user.username);
         const used = incrementSunoUsage(req.session.user.username);
         statsDb.recordAdminAction({
             actor: req.session.user.username,
@@ -9973,6 +9980,7 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
 
 app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, async (req, res) => {
     const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
     try {
         // Short-circuit: if we've already downloaded the final audio, return cached meta.
         const cached = sunoGen.getStagingMeta(taskId);
@@ -9996,7 +10004,9 @@ app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, async (
 });
 
 app.get('/api/suno/preview/:taskId/:slot', requireAuth, requireValidSunoTaskId, (req, res) => {
-    const p = sunoGen.getSlotAudioPath(req.params.taskId, parseInt(req.params.slot, 10));
+    const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
+    const p = sunoGen.getSlotAudioPath(taskId, parseInt(req.params.slot, 10));
     if (!p) return res.status(404).json({ error: 'Audio not ready' });
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
@@ -10004,7 +10014,9 @@ app.get('/api/suno/preview/:taskId/:slot', requireAuth, requireValidSunoTaskId, 
 });
 
 app.get('/api/suno/cover/:taskId/:slot', requireAuth, requireValidSunoTaskId, (req, res) => {
-    const p = sunoGen.getSlotCoverPath(req.params.taskId, parseInt(req.params.slot, 10));
+    const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
+    const p = sunoGen.getSlotCoverPath(taskId, parseInt(req.params.slot, 10));
     if (!p) return res.status(404).json({ error: 'Cover not ready' });
     res.setHeader('Content-Type', 'image/jpeg');
     fs.createReadStream(p).pipe(res);
@@ -10012,6 +10024,7 @@ app.get('/api/suno/cover/:taskId/:slot', requireAuth, requireValidSunoTaskId, (r
 
 app.post('/api/suno/save/:taskId', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
     const slot = parseInt((req.body && req.body.slot) || 0, 10);
     const meta = sunoGen.getStagingMeta(taskId);
     if (!meta) return res.status(404).json({ error: 'Staging not found — try again after generation completes.' });
@@ -10076,6 +10089,7 @@ app.post('/api/suno/save/:taskId', requireAuth, requireValidSunoTaskId, (req, re
 
 app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
     const wantRefund = req.query.refund === '1';
     // Only refund a GENUINE early-cancel: the staging must still exist and have
     // produced no audio yet. This stops generate→save→discard?refund=1 from
@@ -10107,6 +10121,7 @@ app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (re
 app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, requireSunoAllowed, async (req, res) => {
     const slot = parseInt(req.params.slot, 10);
     const taskId = req.params.taskId;
+    if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
     let ffInput = sunoGen.getSlotAudioPath(taskId, slot);
     let sourceKind = 'local';
     if (!ffInput) {
@@ -10197,7 +10212,7 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, re
 // "Recent generations" section. Entries stick around for STAGING_TTL_MS
 // (12h) unless explicitly discarded.
 app.get('/api/suno/recent', requireAuth, (req, res) => {
-    try { res.json({ items: sunoGen.listRecent() }); }
+    try { res.json({ items: sunoGen.listRecent().filter(item => sunoOwns(item.taskId, req)) }); }
     catch (e) { res.status(500).json({ error: e.message }); }
 });
 
