@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-23 — Stay logged in across deploys
+- Sessions are now stored on disk (SQLite) instead of in memory, so a server restart or deploy no longer logs everyone out. (Falls back to the old in-memory behavior automatically if the store is ever unavailable.)
+
 ## 2026-07-23 — Watch-party captures require a login
 - The re-streamed screen-capture video (Watch Together) is no longer served to anyone who has the link — it now requires a logged-in session (guests in the party still work).
 

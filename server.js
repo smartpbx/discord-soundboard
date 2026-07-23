@@ -1315,9 +1315,28 @@ app.use(express.static('public', {
 // app.use(sessionMiddleware).
 app.use(express.json());
 app.use(require('cookie-parser')());
+// Persist sessions in SQLite so logins survive restarts/deploys (the default
+// MemoryStore drops every session on restart and leaks expired ones). Wrapped in
+// try/catch: if the store package or DB is unavailable we fall back to the
+// in-memory default so the app always boots. destroySessionsForUsername() is
+// already store-agnostic (uses store.all()), so role-change/disable logout still
+// works with either store.
+let _sessionStore;
+try {
+    const SqliteSessionStore = require('better-sqlite3-session-store')(require('express-session'));
+    const SessionDatabase = require('better-sqlite3');
+    const _sessDb = new SessionDatabase(path.join(DATA_DIR, 'sessions.db'));
+    _sessionStore = new SqliteSessionStore({ client: _sessDb, expired: { clear: true, intervalMs: 15 * 60 * 1000 } });
+    console.log('[session] using SQLite session store (data/sessions.db)');
+} catch (e) {
+    console.warn('[session] SQLite session store unavailable — falling back to in-memory MemoryStore:', e.message);
+    _sessionStore = undefined;
+}
+
 // Held in a named ref so the WS upgrade handler (yt-session noVNC proxy) can
 // authenticate WebSocket clients with the same session cookie.
 const sessionMiddleware = require('express-session')({
+    store: _sessionStore, // undefined => express-session's default MemoryStore
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
