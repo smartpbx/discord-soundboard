@@ -167,6 +167,13 @@
     let videoEl = null;         // when sourceType === 'video'
     let suppressEvents = false; // skip re-broadcasting events we're applying remotely
     let ws = null;
+    let wsReconnectAttempt = 0;
+    let wsReconnectTimer = null;
+    let recentControls = [];
+    const SYNC_DRIFT_THRESHOLD_SECONDS = 0.75;
+    const OWN_ECHO_WINDOW_MS = 2000;
+    const WS_RECONNECT_BASE_MS = 1000;
+    const WS_RECONNECT_MAX_MS = 30000;
 
     function showToast(msg, ms) {
         TOAST.textContent = msg;
@@ -202,9 +209,25 @@
         connectWs();
     }
 
+    function scheduleWsReconnect() {
+        const exponential = Math.min(WS_RECONNECT_MAX_MS, WS_RECONNECT_BASE_MS * (2 ** Math.min(wsReconnectAttempt, 5)));
+        const delay = Math.min(WS_RECONNECT_MAX_MS, Math.round(exponential * (0.75 + Math.random() * 0.5)));
+        wsReconnectAttempt += 1;
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(connectWs, delay);
+    }
+
     function connectWs() {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(proto + '//' + window.location.host + '/api/watch/rooms/' + ROOM_ID + '/socket');
+        try {
+            ws = new WebSocket(proto + '//' + window.location.host + '/api/watch/rooms/' + ROOM_ID + '/socket');
+        } catch {
+            scheduleWsReconnect();
+            return;
+        }
+        ws.onopen = () => { wsReconnectAttempt = 0; };
         ws.onmessage = (evt) => {
             let msg; try { msg = JSON.parse(evt.data); } catch { return; }
             if (msg.type === 'hello') {
@@ -229,7 +252,7 @@
                 }
                 applyState(msg.room.state);
             } else if (msg.type === 'state') {
-                applyState(msg.state);
+                if (!isOwnControlEcho(msg.state)) applyState(msg.state);
             } else if (msg.type === 'host-pos') {
                 // Iframe-mode position beacon from the host. Just surface it
                 // on the status line so viewers can manually scrub to match.
@@ -244,34 +267,61 @@
                 CONTROLS.classList.add('hidden');
             }
         };
-        ws.onclose = () => { setTimeout(connectWs, 2000); };
+        ws.onclose = scheduleWsReconnect;
         ws.onerror = () => {};
+    }
+
+    function isOwnControlEcho(state) {
+        const now = Date.now();
+        recentControls = recentControls.filter((control) => now - control.sentAt <= OWN_ECHO_WINDOW_MS);
+        if (!isHost || !state || !recentControls.length) return false;
+        const position = Number(state.position);
+        const matchIndex = recentControls.findIndex((control) => {
+            const playingMatches = control.action === 'seek' || Boolean(state.playing) === (control.action === 'play');
+            return playingMatches && Number.isFinite(position) && Math.abs(position - control.position) <= SYNC_DRIFT_THRESHOLD_SECONDS;
+        });
+        if (matchIndex < 0) return false;
+        recentControls.splice(matchIndex, 1);
+        return true;
     }
 
     function applyState(state) {
         if (!state || !player) return;
+        const receivedAt = Date.now();
+        const timestamp = [state.positionAt, state.updatedAt, state.serverTime, state.timestamp, state.at]
+            .filter((value) => value != null)
+            .map(Number)
+            .find(Number.isFinite);
+        const eventTimestamp = timestamp == null ? receivedAt : timestamp;
+        const eventAgeSeconds = state.playing ? Math.max(0, (receivedAt - eventTimestamp) / 1000) : 0;
+        const effectivePosition = Math.max(0, Number(state.position) || 0) + eventAgeSeconds;
         const syncLimited = room.sourceType === 'iframe';
         STATUS_STATE.className = 'sync-pill ' + (syncLimited ? 'is-warning' : (state.playing ? 'is-live' : 'is-idle'));
-        STATUS_STATE.textContent = (state.playing ? (syncLimited ? 'MANUAL / sync limited' : 'LIVE / in sync') : 'PAUSED') + ' · ' + fmtTime(state.position);
+        STATUS_STATE.textContent = (state.playing ? (syncLimited ? 'MANUAL / sync limited' : 'LIVE / in sync') : 'PAUSED') + ' · ' + fmtTime(effectivePosition);
         suppressEvents = true;
         try {
             if (player.kind === 'youtube') {
                 const cur = player.api.getCurrentTime ? player.api.getCurrentTime() : 0;
-                if (Math.abs(cur - state.position) > 1.5) player.api.seekTo(state.position, true);
+                if (Math.abs(cur - effectivePosition) > SYNC_DRIFT_THRESHOLD_SECONDS) player.api.seekTo(effectivePosition, true);
                 if (state.playing) player.api.playVideo();
                 else player.api.pauseVideo();
             } else if (player.kind === 'video') {
-                if (Math.abs(videoEl.currentTime - state.position) > 1.0) videoEl.currentTime = state.position;
+                if (Math.abs(videoEl.currentTime - effectivePosition) > SYNC_DRIFT_THRESHOLD_SECONDS) videoEl.currentTime = effectivePosition;
                 if (state.playing && videoEl.paused) videoEl.play().catch(() => {});
                 else if (!state.playing && !videoEl.paused) videoEl.pause();
             } else if (player.kind === 'vimeo') {
-                // Vimeo's getCurrentTime is async; we just trust the broadcast
-                // and seek unconditionally (debounced by suppressEvents).
-                player.vp.setCurrentTime(state.position).catch(() => {});
+                player.vp.getCurrentTime().then((cur) => {
+                    if (Math.abs(cur - effectivePosition) > SYNC_DRIFT_THRESHOLD_SECONDS) {
+                        player.vp.setCurrentTime(effectivePosition).catch(() => {});
+                    }
+                }).catch(() => {});
                 if (state.playing) player.vp.play().catch(() => {});
                 else player.vp.pause().catch(() => {});
             } else if (player.kind === 'twitch') {
-                if (!player.isLive && typeof player.tw.seek === 'function') player.tw.seek(state.position);
+                const cur = typeof player.tw.getCurrentTime === 'function' ? player.tw.getCurrentTime() : effectivePosition;
+                if (!player.isLive && typeof player.tw.seek === 'function' && Math.abs(cur - effectivePosition) > SYNC_DRIFT_THRESHOLD_SECONDS) {
+                    player.tw.seek(effectivePosition);
+                }
                 if (state.playing) player.tw.play(); else player.tw.pause();
             } else if (player.kind === 'iframe') {
                 // No programmatic control — just nudge the user.
@@ -564,13 +614,19 @@
 
     async function sendControl(action, position) {
         if (!isHost) return;
+        const control = { action, position: Math.max(0, Number(position) || 0), sentAt: Date.now() };
+        recentControls.push(control);
+        recentControls = recentControls.filter((item) => control.sentAt - item.sentAt <= OWN_ECHO_WINDOW_MS);
         try {
             const res = await fetch('/api/watch/rooms/' + ROOM_ID + '/control', {
                 method: 'POST', credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, position }),
             });
-            if (!res.ok) showToast('Control failed: ' + res.status);
+            if (!res.ok) {
+                recentControls = recentControls.filter((item) => item !== control);
+                showToast('Control failed: ' + res.status);
+            }
         } catch (e) { showToast(e.message); }
     }
 
@@ -607,7 +663,16 @@
         window.location.href = '/movienight/' + data.id;
     });
 
-    init();
+    async function startInit() {
+        try {
+            await init();
+        } catch (e) {
+            console.error('[watch] initialization failed', e);
+            showOverlay('Could not start watch party', '<p>Something went wrong while loading this room.</p><button type="button" class="btn" id="watchInitRetry">Retry</button>');
+            document.getElementById('watchInitRetry').addEventListener('click', () => window.location.reload());
+        }
+    }
+    startInit();
 })();
 </script>
 </body>

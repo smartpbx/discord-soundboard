@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Smoother watch parties
+- Watch-party sync now accounts for network delay, so late-arriving viewers jump to the host's real position instead of landing a couple seconds behind — and it only nudges playback when you've actually drifted, avoiding constant micro-stutters.
+- The host no longer fights their own echoed controls (which could cause a seek/feedback loop).
+- If the connection drops, both the watch and movie-night pages reconnect with sensible backoff instead of hammering the server, and a startup error now shows a retry button instead of a blank page.
+
 ## 2026-07-24 — TTS reliability & GPU sharing
 - Fixed a bug where switching GPT-SoVITS voices could keep the previous voice's model, so cloned voices now consistently sound like the right person.
 - Idle voice models are now automatically unloaded from the GPU after 10 minutes, freeing VRAM for other work without you having to do anything.

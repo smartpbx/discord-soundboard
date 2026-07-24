@@ -121,6 +121,10 @@
     let myVote = null;
     let ws = null;
     let countdownTimer = null;
+    let wsReconnectAttempt = 0;
+    let wsReconnectTimer = null;
+    const WS_RECONNECT_BASE_MS = 1000;
+    const WS_RECONNECT_MAX_MS = 30000;
 
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     function showToast(msg) {
@@ -141,9 +145,25 @@
         connectWs();
     }
 
+    function scheduleWsReconnect() {
+        const exponential = Math.min(WS_RECONNECT_MAX_MS, WS_RECONNECT_BASE_MS * (2 ** Math.min(wsReconnectAttempt, 5)));
+        const delay = Math.min(WS_RECONNECT_MAX_MS, Math.round(exponential * (0.75 + Math.random() * 0.5)));
+        wsReconnectAttempt += 1;
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(connectWs, delay);
+    }
+
     function connectWs() {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(proto + '//' + window.location.host + '/api/movienight/rooms/' + ROOM_ID + '/socket');
+        try {
+            ws = new WebSocket(proto + '//' + window.location.host + '/api/movienight/rooms/' + ROOM_ID + '/socket');
+        } catch {
+            scheduleWsReconnect();
+            return;
+        }
+        ws.onopen = () => { wsReconnectAttempt = 0; };
         ws.onmessage = (evt) => {
             let msg; try { msg = JSON.parse(evt.data); } catch { return; }
             if (msg.type === 'hello') {
@@ -186,7 +206,7 @@
                 showToast(msg.error);
             }
         };
-        ws.onclose = () => { setTimeout(connectWs, 2000); };
+        ws.onclose = scheduleWsReconnect;
     }
 
     function renderAll() {
@@ -461,7 +481,16 @@
     }
     window.closeRoom = closeRoom;
 
-    init();
+    async function startInit() {
+        try {
+            await init();
+        } catch (e) {
+            console.error('[movienight] initialization failed', e);
+            document.body.innerHTML = '<div style="padding:2rem;text-align:center">Could not start Movie Night.<br><button type="button" class="btn" id="movieNightInitRetry" style="margin-top:1rem">Retry</button></div>';
+            document.getElementById('movieNightInitRetry').addEventListener('click', () => window.location.reload());
+        }
+    }
+    startInit();
 })();
 </script>
 </body>
