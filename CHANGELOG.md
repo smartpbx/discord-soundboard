@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Upload handling security update
+- Upgraded the file-upload library (multer) to 2.x, which fixes denial-of-service bugs where a malformed upload could hang or crash the server. Uploading sounds and voice samples is unchanged.
+
 ## 2026-07-24 — Companion hotkey app hardening
 - The desktop hotkey companion now tells you when a hotkey couldn't reach the server (timeout, connection refused, error status) instead of silently doing nothing.
 - Rapid key mashing can no longer spawn unbounded background threads — presses run through one bounded worker and extra presses are dropped cleanly.
