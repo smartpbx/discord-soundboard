@@ -12,6 +12,7 @@ Setup:
 import os
 import sys
 import json
+import queue
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -31,6 +32,8 @@ def load_env(path):
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(SCRIPT_DIR, '.env')
 CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
+API_TIMEOUT_SECONDS = 5
+ACTION_QUEUE_SIZE = 8
 
 load_env(ENV_PATH)
 
@@ -66,24 +69,73 @@ def save_config(cfg):
     with _os.fdopen(fd, 'w') as f:
         json.dump(cfg, f, indent=2)
 
+def warn_if_token_uses_http(cfg):
+    if cfg.get('token', '').strip() and cfg.get('url', '').strip().lower().startswith('http://'):
+        print(
+            'WARNING: The companion token will be sent over plain HTTP. '
+            'Use https:// or a secure tunnel/VPN.',
+            file=sys.stderr,
+            flush=True,
+        )
+
 # --- API calls ---
 def api_call(cfg, method, path):
+    url = cfg['url'].rstrip('/') + path
     try:
         import requests
         headers = {'Authorization': f'Bearer {cfg["token"]}', 'Content-Type': 'application/json'}
-        r = requests.request(method, cfg['url'].rstrip('/') + path, headers=headers, timeout=5)
-        return r
-    except Exception as e:
+        response = requests.request(
+            method, url, headers=headers, timeout=API_TIMEOUT_SECONDS
+        )
+    except requests.Timeout as exc:
+        print(
+            f'Soundboard API timeout: {method} {path} timed out after '
+            f'{API_TIMEOUT_SECONDS}s ({exc}).',
+            file=sys.stderr,
+            flush=True,
+        )
         return None
+    except requests.ConnectionError as exc:
+        print(
+            f'Soundboard API connection error: {method} {path} failed ({exc}).',
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    except requests.RequestException as exc:
+        print(
+            f'Soundboard API request error: {method} {path} failed ({exc}).',
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+    if not response.ok:
+        reason = f' {response.reason}' if response.reason else ''
+        print(
+            f'Soundboard API error: {method} {path} returned '
+            f'HTTP {response.status_code}{reason}.',
+            file=sys.stderr,
+            flush=True,
+        )
+    return response
 
 def do_stop(cfg):
     api_call(cfg, 'POST', '/api/stop')
 
 def do_pause_resume(cfg):
     r = api_call(cfg, 'GET', '/api/playback-state')
-    if not r or not r.ok:
+    if r is None or not r.ok:
         return
-    status = r.json().get('status')
+    try:
+        status = r.json().get('status')
+    except (AttributeError, ValueError):
+        print(
+            'Soundboard API error: GET /api/playback-state returned invalid JSON.',
+            file=sys.stderr,
+            flush=True,
+        )
+        return
     if status == 'playing':
         api_call(cfg, 'POST', '/api/pause')
     elif status == 'paused':
@@ -96,6 +148,7 @@ class CompanionApp:
         self.root.title('Soundboard Companion')
         self.root.resizable(False, False)
         self.cfg = load_config()
+        warn_if_token_uses_http(self.cfg)
         self.keyboard = None
         self.hotkeys_registered = []
         self.recording_action = None  # which action we're recording a new key for
@@ -118,6 +171,14 @@ class CompanionApp:
                 'Run: pip install keyboard requests\n\n'
                 'Then restart this app.')
             sys.exit(1)
+
+        self.action_queue = queue.Queue(maxsize=ACTION_QUEUE_SIZE)
+        self.action_worker = threading.Thread(
+            target=self._run_action_worker,
+            name='soundboard-hotkey-worker',
+            daemon=True,
+        )
+        self.action_worker.start()
 
         self._build_ui()
         self._apply_hotkeys()
@@ -195,10 +256,13 @@ class CompanionApp:
             return
         test_cfg = {'url': url, 'token': token}
         r = api_call(test_cfg, 'GET', '/api/playback-state')
-        if r and r.ok:
+        if r is not None and r.ok:
             messagebox.showinfo('Success', f'Connected to {url}')
-        elif r:
-            messagebox.showerror('Error', f'Server responded with {r.status_code}.\nCheck your token.')
+        elif r is not None:
+            messagebox.showerror(
+                'Error',
+                f'Server responded with {r.status_code} {r.reason}.\nCheck your token.',
+            )
         else:
             messagebox.showerror('Error', f'Could not connect to {url}.\nCheck the URL and make sure the server is running.')
 
@@ -230,6 +294,30 @@ class CompanionApp:
         self._apply_hotkeys()
         self._update_status()
 
+    def _run_action_worker(self):
+        while True:
+            action, cfg = self.action_queue.get()
+            try:
+                action(cfg)
+            except Exception as exc:
+                print(
+                    f'Soundboard hotkey action failed: {exc}',
+                    file=sys.stderr,
+                    flush=True,
+                )
+            finally:
+                self.action_queue.task_done()
+
+    def _enqueue_action(self, action, cfg):
+        try:
+            self.action_queue.put_nowait((action, cfg))
+        except queue.Full:
+            print(
+                'Soundboard hotkey queue is full; dropping keypress.',
+                file=sys.stderr,
+                flush=True,
+            )
+
     def _apply_hotkeys(self):
         # Remove all existing hotkeys
         for hk in self.hotkeys_registered:
@@ -247,14 +335,20 @@ class CompanionApp:
 
         if bindings.get('stop'):
             try:
-                hk = self.keyboard.add_hotkey(bindings['stop'], lambda: threading.Thread(target=do_stop, args=(cfg,), daemon=True).start())
+                hk = self.keyboard.add_hotkey(
+                    bindings['stop'],
+                    lambda: self._enqueue_action(do_stop, cfg),
+                )
                 self.hotkeys_registered.append(hk)
             except Exception:
                 pass
 
         if bindings.get('pause'):
             try:
-                hk = self.keyboard.add_hotkey(bindings['pause'], lambda: threading.Thread(target=do_pause_resume, args=(cfg,), daemon=True).start())
+                hk = self.keyboard.add_hotkey(
+                    bindings['pause'],
+                    lambda: self._enqueue_action(do_pause_resume, cfg),
+                )
                 self.hotkeys_registered.append(hk)
             except Exception:
                 pass

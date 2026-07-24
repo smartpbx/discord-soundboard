@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Companion hotkey app hardening
+- The desktop hotkey companion now tells you when a hotkey couldn't reach the server (timeout, connection refused, error status) instead of silently doing nothing.
+- Rapid key mashing can no longer spawn unbounded background threads — presses run through one bounded worker and extra presses are dropped cleanly.
+- It warns on startup if you've set a token but are connecting over plain http:// (the token would be sent in the clear) and recommends https/a tunnel.
+
 ## 2026-07-24 — Smoother watch parties
 - Watch-party sync now accounts for network delay, so late-arriving viewers jump to the host's real position instead of landing a couple seconds behind — and it only nudges playback when you've actually drifted, avoiding constant micro-stutters.
 - The host no longer fights their own echoed controls (which could cause a seek/feedback loop).
