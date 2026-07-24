@@ -1199,6 +1199,7 @@ if (fs.existsSync(LEGACY_PENDING) && !fs.existsSync(PENDING_META_PATH)) {
 }
 
 const app = express();
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const upload = multer({ dest: 'sounds/', limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Running-build identity for the web UI's version stamp + What's New.
@@ -5033,7 +5034,7 @@ app.post('/api/sounds/bulk-retag', requireAdmin, (req, res) => {
 // Duplicate detection — group sounds by (filesize, rounded-duration). Two
 // files with the same size to the byte AND the same duration to a tenth of
 // a second are almost certainly the same audio.
-app.get('/api/sounds/duplicates', requireAdmin, async (req, res) => {
+app.get('/api/sounds/duplicates', requireAdmin, wrap(async (req, res) => {
     try {
         const files = fs.readdirSync(SOUNDS_DIR).filter(f => /\.(mp3|wav|ogg)$/i.test(f));
         const meta = loadSoundsMeta();
@@ -5061,7 +5062,7 @@ app.get('/api/sounds/duplicates', requireAdmin, async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
-});
+}));
 
 app.post('/api/sounds/duplicate', requireAdmin, (req, res) => {
     const { filename, newName } = req.body || {};
@@ -6790,7 +6791,7 @@ async function playSoundAsLinkedUser(filename, startedBy) {
     }
 }
 
-app.post('/api/play', requireAuth, async (req, res) => {
+app.post('/api/play', requireAuth, wrap(async (req, res) => {
     const { filename } = req.body;
     if (!filename || typeof filename !== 'string') return res.status(400).json({ error: 'Filename required' });
 
@@ -7052,7 +7053,7 @@ app.post('/api/play', requireAuth, async (req, res) => {
         console.error('Play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play audio' });
     }
-});
+}));
 
 // --- URL streaming (YouTube / TikTok / SoundCloud / anything yt-dlp supports) ---
 const URL_STREAM_PROBE_TIMEOUT_MS = 20_000;
@@ -7493,7 +7494,7 @@ async function performUrlSkip() {
 // Download the URL audio to a server-side cache so the client can render a
 // waveform, scrub locally, and then either stream the trimmed segment to
 // Discord or import it as a sound — all without re-downloading.
-app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
+app.post('/api/stream-url/preview', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
@@ -7568,7 +7569,7 @@ app.post('/api/stream-url/preview', requireAuth, async (req, res) => {
         username: req.session.user.username,
     });
     res.json({ previewId, title, uploader, duration: actualDuration, url });
-});
+}));
 
 app.get('/api/stream-url/preview/:id/audio', requireAuth, (req, res) => {
     const entry = urlPreviewCache.get(String(req.params.id || ''));
@@ -7583,7 +7584,7 @@ app.get('/api/stream-url/preview/:id/audio', requireAuth, (req, res) => {
 
 // Trim a preview and save it to the sounds library. Admin/superadmin get direct
 // save; user/guest goes into the existing pending-upload queue.
-app.post('/api/stream-url/import', requireAuth, async (req, res) => {
+app.post('/api/stream-url/import', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
@@ -7672,9 +7673,9 @@ app.post('/api/stream-url/import', requireAuth, async (req, res) => {
         });
         res.json({ ok: true, pending: true, filename: safeName, displayName: rawName, duration: finalDuration });
     });
-});
+}));
 
-app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
+app.post('/api/stream-url/probe', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
@@ -7699,9 +7700,9 @@ app.post('/api/stream-url/probe', requireAuth, async (req, res) => {
     } catch {
         res.status(502).json({ error: 'Could not parse metadata.' });
     }
-});
+}));
 
-app.post('/api/stream-url', requireAuth, async (req, res) => {
+app.post('/api/stream-url', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot stream URLs.' });
@@ -7815,11 +7816,11 @@ app.post('/api/stream-url', requireAuth, async (req, res) => {
         console.error('[url-stream] fatal', err);
         res.status(err.statusCode || 500).json({ error: err.message || 'Failed to start stream' });
     }
-});
+}));
 
 // Skip the current URL stream (crossfade into the next queued item).
 // Allowed for admins+ and whoever started the current stream.
-app.post('/api/stream-url/skip', requireAuth, async (req, res) => {
+app.post('/api/stream-url/skip', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     const isAdmin = role === 'admin' || role === 'superadmin';
@@ -7840,7 +7841,7 @@ app.post('/api/stream-url/skip', requireAuth, async (req, res) => {
         setImmediate(processUrlQueue);
     }
     res.json({ ok: true, queued: urlStreamQueue.length });
-});
+}));
 
 // Anyone (incl. guests) can request a skip; enough requests and the skip
 // fires on its own. Threshold = half the users active on the web UI in the
@@ -7855,7 +7856,7 @@ function urlSkipVoteThreshold() {
     return Math.max(1, Math.ceil(active / 2));
 }
 
-app.post('/api/stream-url/vote-skip', requireAuth, async (req, res) => {
+app.post('/api/stream-url/vote-skip', requireAuth, wrap(async (req, res) => {
     if (!activeUrlStream) return res.status(400).json({ error: 'No URL stream is playing.' });
     const u = req.session.user;
     const key = presenceKey(req);
@@ -7886,7 +7887,7 @@ app.post('/api/stream-url/vote-skip', requireAuth, async (req, res) => {
         }
     }
     res.json({ ok: true, voted, votes: urlSkipVotes.size, threshold, skipped });
-});
+}));
 
 // Remove one queued item — its requester or an admin+.
 app.delete('/api/stream-url/queue/:id', requireAuth, (req, res) => {
@@ -7933,7 +7934,7 @@ app.get('/api/admin/yt-session/status', requireSuperadmin, (req, res) => {
     });
 });
 
-app.post('/api/admin/yt-session/test', requireSuperadmin, async (req, res) => {
+app.post('/api/admin/yt-session/test', requireSuperadmin, wrap(async (req, res) => {
     const supplied = validateStreamUrl(req.body?.url);
     if (supplied && !(await _assertPublicUrl(supplied))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     const canary = supplied || YT_TEST_CANARY;
@@ -7947,7 +7948,7 @@ app.post('/api/admin/yt-session/test', requireSuperadmin, async (req, res) => {
     }
     ytSessionLastTest = { ts: Date.now(), ok, message, url: canary };
     res.json(ytSessionLastTest);
-});
+}));
 
 app.post('/api/admin/yt-session/restart-chromium', requireSuperadmin, (req, res) => {
     const cp = require('child_process');
@@ -7996,7 +7997,7 @@ function _execProbe(cmd) {
         p.on('error', () => resolve(false));
     });
 }
-app.get('/api/admin/watch/state', requireSuperadmin, async (req, res) => {
+app.get('/api/admin/watch/state', requireSuperadmin, wrap(async (req, res) => {
     const now = Date.now();
     const rooms = [];
     for (const r of watchRooms.values()) {
@@ -8064,7 +8065,7 @@ app.get('/api/admin/watch/state', requireSuperadmin, async (req, res) => {
             strategy: getWatchStrategy(),
         },
     });
-});
+}));
 app.post('/api/admin/watch/captures/:id/stop', requireSuperadmin, (req, res) => {
     const id = String(req.params.id || '');
     if (!/^cap_[a-f0-9]+$/.test(id)) return res.status(400).json({ error: 'Bad capture id' });
@@ -8281,7 +8282,7 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     res.json({ ok: true });
 });
 
-app.post('/api/pause', requireAdmin, async (req, res) => {
+app.post('/api/pause', requireAdmin, wrap(async (req, res) => {
     const role = req.session.user.role;
     const startedBy = playbackState.startedBy;
     if (role === 'admin' && startedBy && startedBy.role === 'superadmin') {
@@ -8309,7 +8310,7 @@ app.post('/api/pause', requireAdmin, async (req, res) => {
         console.error('Pause error:', err);
         res.status(500).json({ error: err.message || 'Could not pause playback.' });
     }
-});
+}));
 
 app.post('/api/resume', requireAdmin, (req, res) => {
     const role = req.session.user.role;
@@ -8414,7 +8415,7 @@ async function ttsFetch(urlPath, opts = {}) {
     }
 }
 
-app.get('/api/tts/status', requireAuth, async (req, res) => {
+app.get('/api/tts/status', requireAuth, wrap(async (req, res) => {
     const available = !!TTS_API_URL;
     const enabled = getTtsEnabled();
     if (!available || !enabled) return res.json({ available, enabled, voices: [] });
@@ -8433,9 +8434,9 @@ app.get('/api/tts/status', requireAuth, async (req, res) => {
     } catch {
         res.json({ available: false, enabled, voices: [] });
     }
-});
+}));
 
-app.get('/api/tts/voices', requireAuth, async (req, res) => {
+app.get('/api/tts/voices', requireAuth, wrap(async (req, res) => {
     if (!TTS_API_URL) return res.json([]);
     try {
         const r = await ttsFetch('/voices', { timeout: 5000 });
@@ -8447,9 +8448,9 @@ app.get('/api/tts/voices', requireAuth, async (req, res) => {
     } catch {
         res.json([]);
     }
-});
+}));
 
-app.post('/api/tts/speak', requireAuth, async (req, res) => {
+app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
     const { text, voiceId, volume: reqVolume, exaggeration: reqExag, forcedEmotion, useExpression } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
@@ -8701,7 +8702,7 @@ app.post('/api/tts/speak', requireAuth, async (req, res) => {
         });
     }
     res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
-});
+}));
 
 // Serve a freshly-synthesized TTS WAV by its short-lived token so the
 // requesting browser can feed it through an AnalyserNode for the live
@@ -8743,7 +8744,7 @@ app.get('/api/tts/recents', requireAuth, (req, res) => {
 });
 
 // Re-queue a stored TTS clip to play in Discord (uses the original WAV).
-app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
+app.post('/api/tts/recents/:id/replay', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot replay TTS recents.' });
     const id = Number(req.params.id);
@@ -8783,10 +8784,10 @@ app.post('/api/tts/recents/:id/replay', requireAuth, async (req, res) => {
     });
     const localWavId = ttsWavCacheStash(wavBuffer, req.session.user.username);
     res.json({ ok: true, queued: true, queuePosition: ttsQueue.length, displayName: queueItem.displayName, localWavId });
-});
+}));
 
 // Save a stored TTS recent as a permanent sound (WAV → MP3, adds tts metadata).
-app.post('/api/tts/recents/:id/save-as-sound', requireAuth, async (req, res) => {
+app.post('/api/tts/recents/:id/save-as-sound', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot save TTS clips.' });
     const id = Number(req.params.id);
@@ -8837,7 +8838,7 @@ app.post('/api/tts/recents/:id/save-as-sound', requireAuth, async (req, res) => 
         details: { recentId: row.id, owner: row.owner, voiceId: row.voice_id, displayName: meta.displayName },
     });
     res.json({ ok: true, filename: finalName, displayName: meta.displayName, duration });
-});
+}));
 
 // Remove a stored recent and its WAV file.
 // Only the clip's owner or a superadmin can delete (protects other users' history).
@@ -9003,7 +9004,7 @@ function _enqueuePreviewJob({ token, durationSec, steps }) {
     return job;
 }
 
-app.post('/api/superadmin/tts/preview/:token/process', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/preview/:token/process', requireSuperadmin, wrap(async (req, res) => {
     const { token } = req.params;
     const isolate = !!(req.body && req.body.isolate);
     const extractSpeaker = !!(req.body && req.body.extractSpeaker);
@@ -9022,7 +9023,7 @@ app.post('/api/superadmin/tts/preview/:token/process', requireSuperadmin, async 
         durationSec,
         queuedBehind: Math.max(0, PREVIEW_JOB_QUEUE.length - 1),
     });
-});
+}));
 
 app.get('/api/superadmin/tts/preview-jobs/:jobId', requireSuperadmin, (req, res) => {
     const job = PREVIEW_JOBS.get(req.params.jobId);
@@ -9116,7 +9117,7 @@ async function maybeIsolatePreview(token) {
 // POST /api/superadmin/tts/preview/:token/process after a preview token is
 // returned. These source/* endpoints only do the cheap fetch+trim path so
 // they always finish well under Cloudflare's 100 s edge timeout.
-app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, wrap(async (req, res) => {
     const { url, startSec, endSec } = req.body || {};
     console.log('[voice-source/youtube] user=%s url=%s range=%s..%s',
         req.session.user.username, String(url || '').slice(0, 80), startSec, endSec);
@@ -9134,9 +9135,9 @@ app.post('/api/superadmin/tts/source/youtube', requireSuperadmin, async (req, re
         console.error('[voice-source/youtube] failed:', (err && err.stack) || err);
         ttsAdminError(res, err);
     }
-});
+}));
 
-app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.single('audio'), wrap(async (req, res) => {
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No audio file uploaded' });
     const { startSec, endSec } = req.body || {};
     ttsVoiceAdmin.ensureStaging();
@@ -9154,9 +9155,9 @@ app.post('/api/superadmin/tts/source/upload', requireSuperadmin, ttsVoiceUpload.
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
-app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, wrap(async (req, res) => {
     const { url, sourceRef, startSec, endSec } = req.body || {};
     try {
         let sourcePath;
@@ -9175,7 +9176,7 @@ app.post('/api/superadmin/tts/source/retrim', requireSuperadmin, async (req, res
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
 app.get('/api/superadmin/tts/preview/:token', requireSuperadmin, (req, res) => {
     const previewPath = ttsVoiceAdmin.getPreviewPath(req.params.token);
@@ -9185,7 +9186,7 @@ app.get('/api/superadmin/tts/preview/:token', requireSuperadmin, (req, res) => {
     fs.createReadStream(previewPath).pipe(res);
 });
 
-app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/voice', requireSuperadmin, wrap(async (req, res) => {
     const { voiceId, name, group, gender, skipRvc, defaultExaggeration, token, source } = req.body || {};
     const dirId = ttsVoiceAdmin.normalizeVoiceId(voiceId);
     if (!dirId) return res.status(400).json({ error: 'Voice id must be lowercase letters, digits, or underscores (e.g. rfk_jr).' });
@@ -9206,12 +9207,12 @@ app.post('/api/superadmin/tts/voice', requireSuperadmin, async (req, res) => {
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
 // Upload a per-emotion reference clip for a Chatterbox voice. Proxies to
 // PUT /voices/chatterbox/:id/refs/:emotion on the TTS server with the
 // admin token. Accepts multipart/form-data from the browser.
-app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoiceUpload.single('audio'), wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const emotion = String(req.params.emotion || '').toLowerCase();
@@ -9239,9 +9240,9 @@ app.put('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, ttsVoi
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
-app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, async (req, res) => {
+app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const emotion = String(req.params.emotion || '').toLowerCase();
@@ -9258,13 +9259,13 @@ app.delete('/api/superadmin/tts/voice/:id/refs/:emotion', requireSuperadmin, asy
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
 // One-click: analyze the voice's dataset chunks and auto-pick a reference
 // clip per emotion (soft / neutral / excited / yell / angry / sad / happy).
 // Only works for voices that were trained via the RVC pipeline (dataset
 // archive lives at tts-server/models/datasets/<voice>/chunks/).
-app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const overwrite = req.body?.overwrite !== false;
@@ -9290,14 +9291,14 @@ app.post('/api/superadmin/tts/voice/:id/auto-emotion-refs', requireSuperadmin, a
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
 // Create OR replace a Fish/GSV voice. multipart/form-data:
 //   - audio (optional) — new reference clip
 //   - metadata (optional, JSON string) — { name, gender, group, ref_text }
 // At least one must be present. Server re-transcribes when audio changes
 // unless the metadata explicitly supplies ref_text.
-app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVoiceUpload.single('audio'), async (req, res) => {
+app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVoiceUpload.single('audio'), wrap(async (req, res) => {
     const engine = req.params.engine;
     if (!['gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine' });
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
@@ -9340,7 +9341,7 @@ app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVo
         });
         res.json(body);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
 // Synth a short test clip and return raw WAV bytes for in-browser preview.
 // Doesn't queue to Discord — purely for auditioning a voice before using it.
@@ -9350,7 +9351,7 @@ app.put('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, ttsVo
 // Safe to call even if the LLM is unavailable: returns the original on any
 // failure, with `changed: false` so the client can decide whether to show a
 // "couldn't humanize" hint.
-app.post('/api/tts/humanize', requireAuth, async (req, res) => {
+app.post('/api/tts/humanize', requireAuth, wrap(async (req, res) => {
     if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests cannot humanize.' });
     const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
     const voiceName = (req.body && typeof req.body.voiceName === 'string') ? req.body.voiceName.slice(0, 80) : '';
@@ -9371,7 +9372,7 @@ app.post('/api/tts/humanize', requireAuth, async (req, res) => {
         console.warn('[tts-humanize] error:', e && e.message);
         res.json({ available: true, text, humanized: text, changed: false, error: (e && e.message) || 'unknown' });
     }
-});
+}));
 
 // Rewrite the TTS message in the selected voice's style — unlike humanize,
 // this can reshape phrasing, length, and vocabulary to match how the
@@ -9379,7 +9380,7 @@ app.post('/api/tts/humanize', requireAuth, async (req, res) => {
 // narration). Client invokes this from the sparkle button on the TTS card;
 // the returned text replaces the textarea value, and the user can still
 // toggle humanize + send as normal.
-app.post('/api/tts/rewrite', requireAuth, async (req, res) => {
+app.post('/api/tts/rewrite', requireAuth, wrap(async (req, res) => {
     if (req.session.user.role === 'guest') return res.status(403).json({ error: 'Guests cannot rewrite.' });
     const text = (req.body && typeof req.body.text === 'string') ? req.body.text : '';
     const voiceName = (req.body && typeof req.body.voiceName === 'string') ? req.body.voiceName.slice(0, 80) : '';
@@ -9397,7 +9398,7 @@ app.post('/api/tts/rewrite', requireAuth, async (req, res) => {
         console.warn('[tts-rewrite] error:', e && e.message);
         res.json({ available: true, text, rewritten: text, changed: false, error: (e && e.message) || 'unknown' });
     }
-});
+}));
 
 // Stitch a list of TTS WAV buffers into one WAV with per-line silence gaps.
 // Uses ffmpeg's adelay+concat filter graph so we don't depend on all lines
@@ -9462,7 +9463,7 @@ async function stitchConversationWavs(wavs) {
 // them into a single WAV (per-line silence pads for pacing). Runs through the
 // normal Discord queue as a single playback entry. Same role / playback-lock
 // gates as /api/tts/speak; cooldown counts the whole conversation as one play.
-app.post('/api/tts/conversation', requireAuth, async (req, res) => {
+app.post('/api/tts/conversation', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     const un = req.session.user.username;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot use conversation mode.' });
@@ -9680,9 +9681,9 @@ app.post('/api/tts/conversation', requireAuth, async (req, res) => {
         },
     });
     res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
-});
+}));
 
-app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
+app.post('/api/tts/test-synth', requireAuth, wrap(async (req, res) => {
     const role = req.session.user.role;
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot synthesize tests.' });
     const { text, voiceId } = req.body || {};
@@ -9707,11 +9708,11 @@ app.post('/api/tts/test-synth', requireAuth, async (req, res) => {
     } catch (e) {
         res.status(503).json({ error: 'TTS service unreachable: ' + e.message });
     }
-});
+}));
 
 // Delete a per-engine voice (gptsovits / fish). Just rm -rf the voice dir
 // on the TTS server. Chatterbox + RVC have their own deletion flows.
-app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, async (req, res) => {
+app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, wrap(async (req, res) => {
     const engine = req.params.engine;
     if (!['gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine for this delete route' });
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
@@ -9738,7 +9739,7 @@ app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, as
         });
         res.json(body);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
 // One-click: create a Fish v2 voice by cloning an existing Chatterbox
 // reference. Whisper-transcribes for ref_text. Fish accepts the full
@@ -9746,7 +9747,7 @@ app.delete('/api/superadmin/tts/voice-engine/:engine/:id', requireSuperadmin, as
 // Stream the current reference.wav for an engine voice. Admin-only.
 // Older voices have no source_* metadata — this is the escape hatch that lets
 // the operator hear what's deployed and optionally re-upload via the UI.
-app.get('/api/superadmin/tts/voice-engine/:engine/:id/reference', requireSuperadmin, async (req, res) => {
+app.get('/api/superadmin/tts/voice-engine/:engine/:id/reference', requireSuperadmin, wrap(async (req, res) => {
     const engine = req.params.engine;
     if (!['chatterbox', 'gptsovits', 'fish'].includes(engine)) return res.status(400).json({ error: 'Unsupported engine' });
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
@@ -9764,28 +9765,28 @@ app.get('/api/superadmin/tts/voice-engine/:engine/:id/reference', requireSuperad
         const buf = Buffer.from(await r.arrayBuffer());
         res.send(buf);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
 // Full list of every rvc_<id> on disk — /voices hides RVC models that
 // have a Chatterbox pair, but the UI still needs the unfiltered list to
 // offer them as Fish refinement targets.
-app.get('/api/superadmin/tts/rvc-models', requireSuperadmin, async (req, res) => {
+app.get('/api/superadmin/tts/rvc-models', requireSuperadmin, wrap(async (req, res) => {
     try {
         const r = await ttsFetch('/admin/rvc-models', { timeout: 5000 });
         const body = await r.json().catch(() => ({}));
         res.status(r.status).json(body);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
-app.get('/api/superadmin/tts/engines/health', requireSuperadmin, async (req, res) => {
+app.get('/api/superadmin/tts/engines/health', requireSuperadmin, wrap(async (req, res) => {
     try {
         const r = await ttsFetch('/health/engines', { timeout: 5000 });
         const body = await r.json().catch(() => ({}));
         res.status(r.status).json(body);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
-app.post('/api/superadmin/tts/voice/:id/clone-to-fish', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/voice/:id/clone-to-fish', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     try {
@@ -9803,11 +9804,11 @@ app.post('/api/superadmin/tts/voice/:id/clone-to-fish', requireSuperadmin, async
         });
         res.json(body);
     } catch (err) { ttsAdminError(res, err); }
-});
+}));
 
 // One-click: create a GPT-SoVITS voice by cloning an existing Chatterbox
 // voice's reference clip. TTS server trims + whisper-transcribes.
-app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async (req, res) => {
+app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     const trimStart = Number(req.body?.trim_start_sec) || 0;
@@ -9832,9 +9833,9 @@ app.post('/api/superadmin/tts/voice/:id/clone-to-gsv', requireSuperadmin, async 
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
-app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, async (req, res) => {
+app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     try {
@@ -9843,9 +9844,9 @@ app.delete('/api/superadmin/tts/voice/:id', requireSuperadmin, async (req, res) 
     } catch (err) {
         ttsAdminError(res, err);
     }
-});
+}));
 
-app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (req, res) => {
+app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
@@ -9877,11 +9878,11 @@ app.patch('/api/superadmin/tts/voice/:id/metadata', requireSuperadmin, async (re
     } catch (e) {
         res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
-});
+}));
 
 // --- Superadmin: RVC-only voice metadata (manifest entries) ---
 
-app.patch('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, res) => {
+app.patch('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
@@ -9912,9 +9913,9 @@ app.patch('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, re
     } catch (e) {
         res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
-});
+}));
 
-app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, res) => {
+app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, wrap(async (req, res) => {
     const dirId = ttsVoiceAdmin.normalizeVoiceId(req.params.id);
     if (!dirId) return res.status(400).json({ error: 'Invalid voice id' });
     if (!TTS_API_URL) return res.status(503).json({ error: 'TTS_API_URL not configured' });
@@ -9932,7 +9933,7 @@ app.delete('/api/superadmin/tts/rvc-voice/:id', requireSuperadmin, async (req, r
     } catch (e) {
         res.status(502).json({ error: 'TTS server unreachable: ' + e.message });
     }
-});
+}));
 
 // --- Suno song generation ---
 
@@ -9975,14 +9976,14 @@ function sunoOwns(taskId, req) {
     return !meta || !meta.owner || meta.owner === req.session.user.username;
 }
 
-app.get('/api/suno/credits', requireAuth, async (req, res) => {
+app.get('/api/suno/credits', requireAuth, wrap(async (req, res) => {
     try {
         const credits = await sunoGen.getCredits();
         res.json({ credits });
     } catch (e) { res.status(e.status || 502).json({ error: e.message }); }
-});
+}));
 
-app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res) => {
+app.post('/api/suno/generate', requireAuth, requireSunoAllowed, wrap(async (req, res) => {
     const { title, lyrics, style, model, instrumental, customMode } = req.body || {};
     try {
         const taskId = await sunoGen.generateSong({
@@ -10006,9 +10007,9 @@ app.post('/api/suno/generate', requireAuth, requireSunoAllowed, async (req, res)
     } catch (e) {
         res.status(e.status || 502).json({ error: e.message });
     }
-});
+}));
 
-app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, async (req, res) => {
+app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, wrap(async (req, res) => {
     const taskId = req.params.taskId;
     if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
     try {
@@ -10031,7 +10032,7 @@ app.get('/api/suno/status/:taskId', requireAuth, requireValidSunoTaskId, async (
     } catch (e) {
         res.status(e.status || 502).json({ error: e.message });
     }
-});
+}));
 
 app.get('/api/suno/preview/:taskId/:slot', requireAuth, requireValidSunoTaskId, (req, res) => {
     const taskId = req.params.taskId;
@@ -10148,7 +10149,7 @@ app.delete('/api/suno/discard/:taskId', requireAuth, requireValidSunoTaskId, (re
 // Prefers the fully-downloaded local MP3, falls back to the Suno stream URL
 // (ffmpeg pulls HTTP directly, so we don't have to wait for the full download).
 // Limited to users with Suno access (same gate as /generate).
-app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, requireSunoAllowed, async (req, res) => {
+app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, requireSunoAllowed, wrap(async (req, res) => {
     const slot = parseInt(req.params.slot, 10);
     const taskId = req.params.taskId;
     if (!sunoOwns(taskId, req)) return res.status(403).json({ error: 'Not your generation.' });
@@ -10236,7 +10237,7 @@ app.post('/api/suno/play/:taskId/:slot', requireAuth, requireValidSunoTaskId, re
         console.error('[Suno play] error:', err);
         res.status(500).json({ error: 'Failed to start Discord playback' });
     }
-});
+}));
 
 // List all unsaved staging generations so the frontend can surface a
 // "Recent generations" section. Entries stick around for STAGING_TTL_MS
@@ -10277,7 +10278,7 @@ app.get('/api/clips', requireAuth, requireClipPermission, (req, res) => {
 // Web-UI equivalent of `/clip` — captures the last N seconds of voice-channel
 // audio into the rolling-clip index. Returns the new clip's metadata so the
 // frontend can scroll the Clips modal to it.
-app.post('/api/clip/capture', requireAuth, requireClipPermission, async (req, res) => {
+app.post('/api/clip/capture', requireAuth, requireClipPermission, wrap(async (req, res) => {
     const requested = Number((req.body || {}).seconds);
     if (!Number.isFinite(requested)) {
         return res.status(400).json({ error: 'seconds (number) required' });
@@ -10292,7 +10293,7 @@ app.post('/api/clip/capture', requireAuth, requireClipPermission, async (req, re
         return res.status(status).json({ error: result.error, code: result.code });
     }
     res.json({ ok: true, clip: result.meta });
-});
+}));
 
 app.get('/api/clips/:id/audio', requireAuth, requireValidClipId, (req, res) => {
     const id = req.params.id;
@@ -10322,7 +10323,7 @@ app.delete('/api/clips/:id', requireAuth, requireValidClipId, (req, res) => {
 // Uses ffmpeg to copy/re-encode the source MP3 into the soundboard sounds
 // directory with the requested trim window; falls back to the full clip
 // duration if start/end are omitted.
-app.post('/api/clips/:id/save-as-sound', requireAuth, requireClipPermission, requireValidClipId, async (req, res) => {
+app.post('/api/clips/:id/save-as-sound', requireAuth, requireClipPermission, requireValidClipId, wrap(async (req, res) => {
     const id = req.params.id;
     const arr = loadClipsIndex();
     const clip = arr.find(c => c.id === id);
@@ -10378,7 +10379,7 @@ app.post('/api/clips/:id/save-as-sound', requireAuth, requireClipPermission, req
 
     console.log(`[clip] saved-as-sound ${id} -> ${outName} (${displayName}) trim=${startSec}-${endSec}`);
     res.json({ ok: true, filename: outName, displayName, duration });
-});
+}));
 
 // Watch Together page — same static SPA for every room id. The page reads
 // the id from window.location and uses /api/watch/rooms/:id + the WS upgrade
@@ -10400,7 +10401,7 @@ function requireWatchPartyPermission(req, res, next) {
     next();
 }
 
-app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (req, res) => {
+app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, wrap(async (req, res) => {
     const url = String((req.body || {}).url || '').trim();
     if (!(await _assertPublicUrl(url))) return res.status(400).json({ error: 'Private or internal addresses are not allowed.' });
     const strategy = req.body?.strategy && WATCH_STRATEGIES.includes(req.body.strategy) ? req.body.strategy : undefined;
@@ -10423,7 +10424,7 @@ app.post('/api/watch/rooms', requireAuth, requireWatchPartyPermission, async (re
     watchRooms.set(id, room);
     console.log(`[watch] room ${id} created by ${room.hostUsername} (${room.sourceType}, via=${room.sourceMeta.via || 'detect'}) -> ${url}`);
     res.json(_watchRoomPublic(room));
-});
+}));
 
 const WATCH_ID_RE = /^w_[a-f0-9]{8}$/i;
 function requireValidWatchRoomId(req, res, next) {
@@ -10524,7 +10525,7 @@ app.get('/api/movienight/rooms/:id', requireAuth, requireValidMnRoomId, (req, re
     res.json(_mnRoomPublic(room));
 });
 
-app.post('/api/movienight/rooms/:id/candidates', requireAuth, requireValidMnRoomId, requireMovieNightPermission, async (req, res) => {
+app.post('/api/movienight/rooms/:id/candidates', requireAuth, requireValidMnRoomId, requireMovieNightPermission, wrap(async (req, res) => {
     const room = movieNightRooms.get(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found' });
     if (room.phase !== 'gathering') return res.status(400).json({ error: 'Candidates locked — vote already in progress' });
@@ -10548,7 +10549,7 @@ app.post('/api/movienight/rooms/:id/candidates', requireAuth, requireValidMnRoom
     room.lastActivity = Date.now();
     _mnBroadcast(room, { type: 'candidates', candidates: room.candidates });
     res.json({ ok: true, candidate, candidates: room.candidates });
-});
+}));
 
 app.delete('/api/movienight/rooms/:id/candidates/:idx', requireAuth, requireValidMnRoomId, (req, res) => {
     const room = movieNightRooms.get(req.params.id);
@@ -10644,7 +10645,7 @@ app.get('/movienight/:id', (req, res) => {
 // Search weflix's catalog by title. Scrapes their listing page since they
 // don't expose a JSON API. Falls back to /movies?q=<query> which their
 // search UI uses. Title + poster + canonical /movie/<slug> URL returned.
-app.get('/api/movienight/catalog-search', requireAuth, requireMovieNightPermission, async (req, res) => {
+app.get('/api/movienight/catalog-search', requireAuth, requireMovieNightPermission, wrap(async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (!q || q.length > 100) return res.status(400).json({ error: 'Bad query' });
     try {
@@ -10679,7 +10680,7 @@ app.get('/api/movienight/catalog-search', requireAuth, requireMovieNightPermissi
         console.error('[movienight] catalog-search failed:', err.message);
         res.status(502).json({ error: 'Catalog search failed: ' + err.message });
     }
-});
+}));
 
 app.delete('/api/watch/rooms/:id', requireAuth, requireValidWatchRoomId, (req, res) => {
     const room = watchRooms.get(req.params.id);
