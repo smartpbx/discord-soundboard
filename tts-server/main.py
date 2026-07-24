@@ -7,6 +7,7 @@ import re
 import shutil
 import time
 import logging
+from contextlib import contextmanager
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -18,6 +19,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("tts-server")
 
 app = FastAPI(title="TTS Service", version="2.0.0")
+
+MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_audio_upload(upload: UploadFile) -> bytes:
+    """Read an uploaded audio file without allowing an unbounded allocation."""
+    size = getattr(upload, "size", None)
+    if isinstance(size, int) and size > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio upload exceeds 25 MB")
+
+    chunks = []
+    total = 0
+    while chunk := await upload.read(_UPLOAD_READ_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Audio upload exceeds 25 MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 # ---------------------------------------------------------------------------
 # Engine loading (lazy -- first request triggers model load)
@@ -142,6 +163,9 @@ _TRAINING_MODE_SINCE = None
 # parallel synth requests would race for headroom and OOM the GPU.
 _TRAINING_SYNTH_LOCK = threading.Lock()
 _TRAINING_SYNTH_TIMEOUT_SEC = 30
+# Serializes model eviction/release against synthesis. RLock is intentional:
+# release paths call eviction helpers that take the same lock.
+_GPU_OPERATION_LOCK = threading.RLock()
 
 
 class TrainingModeRequest(BaseModel):
@@ -152,21 +176,22 @@ class TrainingModeRequest(BaseModel):
 @app.post("/admin/training-mode")
 def set_training_mode(req: TrainingModeRequest):
     global _TRAINING_MODE, _TRAINING_MODE_SINCE
-    if req.active:
-        if not _TRAINING_MODE:
-            log.info("Entering training mode (%s) — freeing GPU caches", req.reason or "no reason given")
-            try: chatterbox_engine.free_caches()
-            except Exception as e: log.warning("chatterbox free_caches failed: %s", e)
-            try: rvc_engine.free_caches()
-            except Exception as e: log.warning("rvc free_caches failed: %s", e)
-        _TRAINING_MODE = True
-        _TRAINING_MODE_SINCE = time.time()
-    else:
-        if _TRAINING_MODE:
-            log.info("Leaving training mode (%s) — caches will lazy-reload on next synth", req.reason or "no reason given")
-        _TRAINING_MODE = False
-        _TRAINING_MODE_SINCE = None
-    return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
+    with _GPU_OPERATION_LOCK:
+        if req.active:
+            if not _TRAINING_MODE:
+                log.info("Entering training mode (%s) — freeing GPU caches", req.reason or "no reason given")
+                try: chatterbox_engine.free_caches()
+                except Exception as e: log.warning("chatterbox free_caches failed: %s", e)
+                try: rvc_engine.free_caches()
+                except Exception as e: log.warning("rvc free_caches failed: %s", e)
+            _TRAINING_MODE = True
+            _TRAINING_MODE_SINCE = time.time()
+        else:
+            if _TRAINING_MODE:
+                log.info("Leaving training mode (%s) — caches will lazy-reload on next synth", req.reason or "no reason given")
+            _TRAINING_MODE = False
+            _TRAINING_MODE_SINCE = None
+        return {"training_mode": _TRAINING_MODE, "since": _TRAINING_MODE_SINCE}
 
 
 @app.get("/admin/training-mode")
@@ -198,36 +223,35 @@ def release_gpu(req: ReleaseGpuRequest):
     first claim; subsequent claims from other callers are tracked but don't
     re-free (already free). Synthesize calls return 503 while any holder is
     active."""
-    with _GPU_HOLDERS_LOCK:
-        first = not _GPU_HOLDERS
-        _GPU_HOLDERS[req.caller] = {"since": time.time(), "reason": req.reason}
-        holders = list(_GPU_HOLDERS.keys())
-    if first:
-        log.info("GPU released to external consumers (first holder=%s, reason=%s) — freeing caches + stopping fish-speech", req.caller, req.reason)
-        _free_gpu_caches()
-        # Fish-speech holds ~19 GiB resident with --compile and is a separate
-        # systemd unit, so freeing tts-server's Python caches alone won't
-        # actually return the 3090 to ComfyUI. Reuse the existing eviction
-        # path; fish-speech will lazy-restart on the next Fish synth via
-        # _evict_for_fish (matching the chatterbox<->fish mutual exclusion).
-        _evict_for_non_fish()
-    else:
-        log.info("GPU holder added: %s (reason=%s) — already free, holders=%s", req.caller, req.reason, holders)
-    return {"holders": holders}
+    with _GPU_OPERATION_LOCK:
+        with _GPU_HOLDERS_LOCK:
+            first = not _GPU_HOLDERS
+            _GPU_HOLDERS[req.caller] = {"since": time.time(), "reason": req.reason}
+            holders = list(_GPU_HOLDERS.keys())
+        if first:
+            log.info("GPU released to external consumers (first holder=%s, reason=%s) — freeing caches + stopping external GPU engines", req.caller, req.reason)
+            _free_gpu_caches()
+            # Fish/GSV hold their weights in separate systemd processes.
+            _evict_for_non_fish()
+            _stop_gsv()
+        else:
+            log.info("GPU holder added: %s (reason=%s) — already free, holders=%s", req.caller, req.reason, holders)
+        return {"holders": holders}
 
 
 @app.delete("/admin/release-gpu")
 def resume_gpu(caller: str):
     """Drop a holder's claim. When the last holder is gone, synth resumes
     normally on the next call (models lazy-reload)."""
-    with _GPU_HOLDERS_LOCK:
-        existed = _GPU_HOLDERS.pop(caller, None) is not None
-        holders = list(_GPU_HOLDERS.keys())
-    if existed and not holders:
-        log.info("GPU all holders released (last=%s) — synth resumes; models lazy-reload on next request", caller)
-    elif existed:
-        log.info("GPU holder removed: %s — remaining holders=%s", caller, holders)
-    return {"holders": holders, "removed": existed}
+    with _GPU_OPERATION_LOCK:
+        with _GPU_HOLDERS_LOCK:
+            existed = _GPU_HOLDERS.pop(caller, None) is not None
+            holders = list(_GPU_HOLDERS.keys())
+        if existed and not holders:
+            log.info("GPU all holders released (last=%s) — synth resumes; models lazy-reload on next request", caller)
+        elif existed:
+            log.info("GPU holder removed: %s — remaining holders=%s", caller, holders)
+        return {"holders": holders, "removed": existed}
 
 
 @app.get("/admin/release-gpu")
@@ -256,7 +280,19 @@ import subprocess as _sp
 
 FISH_SERVICE = os.environ.get("FISH_SERVICE_UNIT", "fish-speech.service")
 FISH_HEALTH_URL = os.environ.get("FISH_HEALTH_URL", "http://localhost:8881/v1/models")
+GSV_SERVICE = os.environ.get("GPT_SOVITS_SERVICE_UNIT", "gptsovits.service")
+GSV_HEALTH_URL = os.environ.get("GPT_SOVITS_URL", "http://localhost:9880").rstrip("/") + "/"
+GPU_ENGINE_IDLE_TTL_SEC = int(os.environ.get("TTS_GPU_IDLE_TTL_SEC", 10 * 60))
+GPU_IDLE_CHECK_INTERVAL_SEC = 60
 _fish_ready_lock = threading.Lock()
+_gsv_ready_lock = threading.Lock()
+_engine_activity_lock = threading.Lock()
+_engine_activity = {
+    "chatterbox": {"last_used": None, "in_flight": 0},
+    "fish": {"last_used": None, "in_flight": 0},
+    "gptsovits": {"last_used": None, "in_flight": 0},
+}
+_idle_monitor_thread = None
 
 
 def _systemctl(action: str, unit: str = FISH_SERVICE, timeout: int = 30) -> bool:
@@ -272,18 +308,35 @@ def _systemctl(action: str, unit: str = FISH_SERVICE, timeout: int = 30) -> bool
         return False
 
 
-def _fish_is_active() -> bool:
+def _service_is_active(unit: str) -> bool:
     try:
-        r = _sp.run(["systemctl", "is-active", FISH_SERVICE], capture_output=True, text=True, timeout=5)
+        r = _sp.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5)
         return r.stdout.strip() == "active"
     except Exception:
         return False
+
+
+def _fish_is_active() -> bool:
+    return _service_is_active(FISH_SERVICE)
+
+
+def _gsv_is_active() -> bool:
+    return _service_is_active(GSV_SERVICE)
 
 
 def _fish_is_responsive(timeout: float = 2.0) -> bool:
     try:
         import requests
         r = requests.get(FISH_HEALTH_URL, timeout=timeout)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _gsv_is_responsive(timeout: float = 2.0) -> bool:
+    try:
+        import requests
+        r = requests.get(GSV_HEALTH_URL, timeout=timeout)
         return r.status_code < 500
     except Exception:
         return False
@@ -299,47 +352,171 @@ def _wait_for_fish(timeout_sec: int = 180) -> bool:
     return False
 
 
+def _wait_for_gsv(timeout_sec: int = 120) -> bool:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if _gsv_is_responsive(timeout=2.0):
+            return True
+        time.sleep(2.0)
+    return False
+
+
+def _stop_gsv() -> bool:
+    with _GPU_OPERATION_LOCK:
+        with _gsv_ready_lock:
+            if not _gsv_is_active():
+                return True
+            log.info("Stopping gptsovits.service to free VRAM")
+            stopped = _systemctl("stop", GSV_SERVICE)
+            if stopped:
+                gptsovits_engine.invalidate_loaded_weights()
+            return stopped
+
+
+def _ensure_gsv_ready():
+    with _GPU_OPERATION_LOCK:
+        with _gsv_ready_lock:
+            if not _gsv_is_active():
+                log.info("Starting gptsovits.service")
+                if not _systemctl("start", GSV_SERVICE):
+                    raise HTTPException(status_code=503, detail="GPT-SoVITS service failed to start")
+                gptsovits_engine.invalidate_loaded_weights()
+            if not _wait_for_gsv(timeout_sec=120):
+                raise HTTPException(status_code=503, detail="GPT-SoVITS failed to become ready within 120s")
+
+
 def _evict_for_fish():
     """Free Chatterbox/RVC so Fish has room, then ensure Fish is up and ready."""
-    try: chatterbox_engine.free_caches()
-    except Exception as e: log.warning("evict->fish: chatterbox free_caches failed: %s", e)
-    try: rvc_engine.free_caches()
-    except Exception as e: log.warning("evict->fish: rvc free_caches failed: %s", e)
-    # Serialize the "is Fish up?" check so concurrent synth requests don't
-    # trigger duplicate starts.
-    with _fish_ready_lock:
-        if not _fish_is_active():
-            log.info("evict->fish: starting fish-speech.service")
-            _systemctl("start")
-        if not _wait_for_fish(timeout_sec=180):
-            raise HTTPException(status_code=503, detail="Fish-Speech failed to become ready within 180s")
+    with _GPU_OPERATION_LOCK:
+        try: chatterbox_engine.free_caches()
+        except Exception as e: log.warning("evict->fish: chatterbox free_caches failed: %s", e)
+        try: rvc_engine.free_caches()
+        except Exception as e: log.warning("evict->fish: rvc free_caches failed: %s", e)
+        # Serialize the "is Fish up?" check so concurrent synth requests don't
+        # trigger duplicate starts.
+        with _fish_ready_lock:
+            if not _fish_is_active():
+                log.info("evict->fish: starting fish-speech.service")
+                _systemctl("start")
+            if not _wait_for_fish(timeout_sec=180):
+                raise HTTPException(status_code=503, detail="Fish-Speech failed to become ready within 180s")
 
 
 def _evict_for_non_fish():
     """Stop fish-speech to free its ~19 GiB for Chatterbox/RVC/GSV."""
-    with _fish_ready_lock:
-        if _fish_is_active():
-            log.info("evict->non-fish: stopping fish-speech.service to free VRAM")
-            _systemctl("stop")
+    with _GPU_OPERATION_LOCK:
+        with _fish_ready_lock:
+            if _fish_is_active():
+                log.info("evict->non-fish: stopping fish-speech.service to free VRAM")
+                _systemctl("stop")
 
 
 def _evict_for_voice(voice_id: str):
     """Dispatch eviction based on which engine the target voice lives on."""
-    fish_ids = fish_engine.get_voice_ids()
-    if voice_id in fish_ids:
-        _evict_for_fish()
-        return
-    # Kokoro runs on CPU and uses no VRAM, so stopping the ~19 GiB fish-speech
-    # model for a Kokoro synth is pure waste — it just forced a 180s fish reload
-    # on the next fish request (e.g. conversation mode alternating kokoro/fish).
-    # Since Kokoro needs no GPU, fish can safely stay resident alongside it.
-    # Chatterbox / RVC / GSV / unknown still evict fish (they need the VRAM).
-    try:
-        if voice_id in kokoro_engine.get_voice_ids():
+    with _GPU_OPERATION_LOCK:
+        fish_ids = fish_engine.get_voice_ids()
+        if voice_id in fish_ids:
+            _evict_for_fish()
             return
-    except Exception:
-        pass
-    _evict_for_non_fish()
+        try:
+            gsv_ids = gptsovits_engine.get_voice_ids()
+        except Exception:
+            gsv_ids = set()
+        if voice_id in gsv_ids:
+            _evict_for_non_fish()
+            if gptsovits_engine.requires_default_reset(voice_id):
+                _stop_gsv()
+            _ensure_gsv_ready()
+            return
+        # Kokoro runs on CPU and uses no VRAM, so stopping the ~19 GiB fish-speech
+        # model for a Kokoro synth is pure waste — it just forced a 180s fish reload
+        # on the next fish request (e.g. conversation mode alternating kokoro/fish).
+        # Since Kokoro needs no GPU, fish can safely stay resident alongside it.
+        # Chatterbox / RVC / unknown still evict fish (they need the VRAM).
+        try:
+            if voice_id in kokoro_engine.get_voice_ids():
+                return
+        except Exception:
+            pass
+        _evict_for_non_fish()
+
+
+@contextmanager
+def _engine_in_use(engine: str):
+    with _engine_activity_lock:
+        state = _engine_activity[engine]
+        state["in_flight"] += 1
+        state["last_used"] = time.monotonic()
+    try:
+        yield
+    finally:
+        with _engine_activity_lock:
+            state = _engine_activity[engine]
+            state["in_flight"] -= 1
+            state["last_used"] = time.monotonic()
+
+
+def _engine_is_loaded(engine: str) -> bool:
+    if engine == "chatterbox":
+        return chatterbox_engine._model is not None
+    if engine == "fish":
+        return _fish_is_active()
+    if engine == "gptsovits":
+        return _gsv_is_active()
+    return False
+
+
+def _release_idle_engine(engine: str) -> bool:
+    if engine == "chatterbox":
+        chatterbox_engine.free_caches()
+        return True
+    if engine == "fish":
+        _evict_for_non_fish()
+        return not _fish_is_active()
+    if engine == "gptsovits":
+        return _stop_gsv()
+    return False
+
+
+def _release_idle_gpu_engines():
+    now = time.monotonic()
+    with _GPU_OPERATION_LOCK:
+        for engine in _engine_activity:
+            if not _engine_is_loaded(engine):
+                continue
+            with _engine_activity_lock:
+                state = _engine_activity[engine]
+                if state["last_used"] is None:
+                    state["last_used"] = now
+                    continue
+                idle_for = now - state["last_used"]
+                if state["in_flight"] or idle_for < GPU_ENGINE_IDLE_TTL_SEC:
+                    continue
+            log.info("Idle GPU release: %s unused for %.0fs", engine, idle_for)
+            if _release_idle_engine(engine):
+                with _engine_activity_lock:
+                    _engine_activity[engine]["last_used"] = None
+
+
+def _idle_gpu_monitor():
+    while True:
+        try:
+            _release_idle_gpu_engines()
+        except Exception as e:
+            log.warning("Idle GPU release check failed: %s", e)
+        time.sleep(GPU_IDLE_CHECK_INTERVAL_SEC)
+
+
+@app.on_event("startup")
+def _start_idle_gpu_monitor():
+    global _idle_monitor_thread
+    if _idle_monitor_thread is None or not _idle_monitor_thread.is_alive():
+        _idle_monitor_thread = threading.Thread(
+            target=_idle_gpu_monitor,
+            name="tts-gpu-idle-release",
+            daemon=True,
+        )
+        _idle_monitor_thread.start()
 
 
 @app.get("/health/engines")
@@ -467,7 +644,7 @@ async def upsert_engine_voice(
             raise HTTPException(status_code=400, detail="metadata must be an object")
     new_audio_written = False
     if audio is not None:
-        audio_bytes = await audio.read()
+        audio_bytes = await _read_audio_upload(audio)
         if len(audio_bytes) < 1024:
             raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
         # Always write the raw upload; for GSV trim+resample after
@@ -550,11 +727,9 @@ async def extract_speaker_endpoint(
     running in the GPT-SoVITS venv (where resemblyzer is installed).
     """
     _check_admin(x_admin_token)
-    audio_bytes = await audio.read()
+    audio_bytes = await _read_audio_upload(audio)
     if len(audio_bytes) < 1024:
         raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
-    if len(audio_bytes) > 120 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Audio too large (>120 MB)")
     tmp_dir = os.path.join("/tmp", f"diar_{int(time.time())}_{os.getpid()}")
     os.makedirs(tmp_dir, exist_ok=True)
     in_path = os.path.join(tmp_dir, "input" + (os.path.splitext(audio.filename or "x.wav")[1] or ".wav"))
@@ -615,11 +790,9 @@ async def isolate_vocals_endpoint(
     Invoked by the soundboard's Generate-Preview flow when operator ticks
     'Isolate vocals' + by the trainer via lite_voice_deploy.py --isolate-vocals."""
     _check_admin(x_admin_token)
-    audio_bytes = await audio.read()
+    audio_bytes = await _read_audio_upload(audio)
     if len(audio_bytes) < 1024:
         raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
-    if len(audio_bytes) > 120 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Audio too large (>120 MB) — trim before isolating")
     tmp_dir = os.path.join("/tmp", f"iso_{int(time.time())}_{os.getpid()}")
     os.makedirs(tmp_dir, exist_ok=True)
     in_path = os.path.join(tmp_dir, "input" + (os.path.splitext(audio.filename or "x.wav")[1] or ".wav"))
@@ -910,16 +1083,24 @@ def _free_gpu_caches():
 
 @app.post("/synthesize")
 def synthesize(req: SynthesizeRequest):
-    if _GPU_HOLDERS:
-        # An external consumer (ComfyUI etc.) is using the 3090. Queue would
-        # block past the train-mode 30s timeout for typical SDXL/Flux runs,
-        # so fast-fail and let the Discord bot retry-with-backoff.
-        with _GPU_HOLDERS_LOCK:
-            holders = list(_GPU_HOLDERS.keys())
-        raise HTTPException(
-            status_code=503,
-            detail=f"GPU temporarily released to {holders}. Try again in a moment.",
-        )
+    def _run(free_after: bool = False):
+        with _GPU_OPERATION_LOCK:
+            # An external consumer (ComfyUI etc.) is using the 3090. Queue would
+            # block past the train-mode 30s timeout for typical SDXL/Flux runs,
+            # so fast-fail and let the Discord bot retry-with-backoff.
+            with _GPU_HOLDERS_LOCK:
+                holders = list(_GPU_HOLDERS.keys())
+            if holders:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"GPU temporarily released to {holders}. Try again in a moment.",
+                )
+            try:
+                return _do_synthesize(req)
+            finally:
+                if free_after:
+                    _free_gpu_caches()
+
     if _TRAINING_MODE:
         # Training is using ~8-10 GB of the 3090. TTS needs to share the
         # remaining ~14 GB without OOM'ing the train loop, so we:
@@ -935,11 +1116,10 @@ def synthesize(req: SynthesizeRequest):
                 detail="Training-mode synthesis queue is busy. Try again in a moment.",
             )
         try:
-            return _do_synthesize(req)
+            return _run(free_after=True)
         finally:
-            _free_gpu_caches()
             _TRAINING_SYNTH_LOCK.release()
-    return _do_synthesize(req)
+    return _run()
 
 
 def _concat_wavs(wav_parts, pause_ms_list, crossfade_ms=30):
@@ -997,18 +1177,19 @@ def _synthesize_segmented(req: SynthesizeRequest):
         _evict_for_voice(req.voice_id)
     parts = []
     pauses = []
-    for seg in req.segments:
-        exag, cfg, temp = _resolve_segment_params(seg)
-        try:
-            wav = chatterbox_engine.synthesize(
-                seg.text, req.voice_id,
-                exaggeration=exag, cfg_weight=cfg, temperature=temp,
-                emotion=seg.emotion, seed=req.seed,
-            )
-        except FileNotFoundError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        parts.append(wav)
-        pauses.append(max(0, min(2000, int(seg.pause_ms_after or 0))))
+    with _engine_in_use("chatterbox"):
+        for seg in req.segments:
+            exag, cfg, temp = _resolve_segment_params(seg)
+            try:
+                wav = chatterbox_engine.synthesize(
+                    seg.text, req.voice_id,
+                    exaggeration=exag, cfg_weight=cfg, temperature=temp,
+                    emotion=seg.emotion, seed=req.seed,
+                )
+            except FileNotFoundError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            parts.append(wav)
+            pauses.append(max(0, min(2000, int(seg.pause_ms_after or 0))))
     wav_combined = _concat_wavs(parts, pauses)
     # Optional RVC pass on the stitched output
     rvc_ids = rvc_engine.get_rvc_model_ids()
@@ -1051,13 +1232,14 @@ def _do_synthesize(req: SynthesizeRequest):
                  voice_id, len(text), text)
 
         try:
-            wav_bytes = chatterbox_engine.synthesize(
-                text, voice_id,
-                exaggeration=req.exaggeration,
-                cfg_weight=(req.cfg_weight if req.cfg_weight is not None else 0.5),
-                temperature=(req.temperature if req.temperature is not None else 0.8),
-                seed=req.seed,
-            )
+            with _engine_in_use("chatterbox"):
+                wav_bytes = chatterbox_engine.synthesize(
+                    text, voice_id,
+                    exaggeration=req.exaggeration,
+                    cfg_weight=(req.cfg_weight if req.cfg_weight is not None else 0.5),
+                    temperature=(req.temperature if req.temperature is not None else 0.8),
+                    seed=req.seed,
+                )
         except Exception as e:
             log.error("Chatterbox synthesis failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Chatterbox synthesis failed: {e}")
@@ -1115,7 +1297,8 @@ def _do_synthesize(req: SynthesizeRequest):
                  voice_id, len(text), text)
 
         try:
-            wav_bytes = gptsovits_engine.synthesize(text, voice_id)
+            with _engine_in_use("gptsovits"):
+                wav_bytes = gptsovits_engine.synthesize(text, voice_id)
         except Exception as e:
             log.error("GPT-SoVITS synthesis failed: %s", e)
             raise HTTPException(status_code=500, detail=f"GPT-SoVITS synthesis failed: {e}")
@@ -1131,7 +1314,8 @@ def _do_synthesize(req: SynthesizeRequest):
         log.info("synthesize [fish] voice=%s text_len=%d text_preview=%.60s",
                  voice_id, len(text), text)
         try:
-            wav_bytes = fish_engine.synthesize(text, voice_id)
+            with _engine_in_use("fish"):
+                wav_bytes = fish_engine.synthesize(text, voice_id)
         except Exception as e:
             log.error("Fish synthesis failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Fish synthesis failed: {e}")
@@ -1260,11 +1444,9 @@ async def upload_chatterbox_voice(
                 pass
     clean_meta["updated_at"] = int(time.time())
 
-    audio_bytes = await reference.read()
+    audio_bytes = await _read_audio_upload(reference)
     if len(audio_bytes) < 1024:
         raise HTTPException(status_code=400, detail="Reference audio is empty or too small")
-    if len(audio_bytes) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Reference audio exceeds 50MB")
 
     voice_dir = os.path.join(chatterbox_engine.get_models_dir(), dir_id)
     os.makedirs(voice_dir, exist_ok=True)
@@ -1324,7 +1506,7 @@ async def upload_chatterbox_emotion_ref(
         raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
     refs_dir = os.path.join(voice_dir, "refs")
     os.makedirs(refs_dir, exist_ok=True)
-    audio_bytes = await audio.read()
+    audio_bytes = await _read_audio_upload(audio)
     if len(audio_bytes) < 1024:
         raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
     tmp_path = os.path.join(refs_dir, f"{emo}.wav.tmp")
@@ -1462,7 +1644,7 @@ async def upload_fish_emotion_ref(
         raise HTTPException(status_code=404, detail=f"Voice not found: {voice_id}")
     refs_dir = os.path.join(voice_dir, "refs")
     os.makedirs(refs_dir, exist_ok=True)
-    audio_bytes = await audio.read()
+    audio_bytes = await _read_audio_upload(audio)
     if len(audio_bytes) < 1024:
         raise HTTPException(status_code=400, detail="Audio too small (<1 KB)")
     final_path = os.path.join(refs_dir, f"{emo}.wav")

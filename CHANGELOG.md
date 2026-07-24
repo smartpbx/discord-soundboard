@@ -5,6 +5,12 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — TTS reliability & GPU sharing
+- Fixed a bug where switching GPT-SoVITS voices could keep the previous voice's model, so cloned voices now consistently sound like the right person.
+- Idle voice models are now automatically unloaded from the GPU after 10 minutes, freeing VRAM for other work without you having to do anything.
+- Repeated lines with the same Chatterbox voice are a bit faster (speaker settings are cached instead of recomputed every time).
+- Voice-sample uploads over 25 MB are rejected cleanly instead of straining the server.
+
 ## 2026-07-24 — Frontend polish & accessibility
 - Failed saves (settings, preferences, reordering, renaming tags) now show a clear "couldn't save" message instead of silently doing nothing.
 - Better screen-reader support: pop-up dialogs and toast messages are now announced, and icon-only buttons (favorite, preview, edit) have proper labels.

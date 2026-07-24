@@ -8,6 +8,7 @@ import io
 import os
 import json
 import logging
+from collections import OrderedDict
 
 import torch
 import torchaudio as ta
@@ -17,10 +18,11 @@ log = logging.getLogger("tts-server")
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", "chatterbox")
 
 _model = None
+CONDITIONALS_CACHE_MAX = 32
 # Conditionals are keyed by (voice_id, emotion) so per-emotion reference
 # clips each get their own cached prepared state. "neutral" is the legacy
 # single-ref key and also the fallback when no emotion-specific ref exists.
-_conditionals = {}  # (voice_id, emotion) -> pre-computed conditionals
+_conditionals = OrderedDict()  # (voice_id, emotion) -> pre-computed conditionals
 
 # Emotions we look for in a voice's refs/ subdirectory. Missing ones fall
 # back to "neutral" (the legacy reference.wav).
@@ -50,12 +52,19 @@ def _get_conditionals(voice_id: str, ref_path: str, emotion: str = "neutral"):
     """
     key = (voice_id, emotion)
     if key in _conditionals:
-        return _conditionals[key]
+        conds = _conditionals.pop(key)
+        _conditionals[key] = conds
+        return conds
 
     model = _get_model()
     log.info("Pre-computing conditionals for %s [%s] from %s", voice_id, emotion, ref_path)
-    conds = model.prepare_conditionals(ref_path, exaggeration=0.5)
+    prepared = model.prepare_conditionals(ref_path, exaggeration=0.5)
+    # Released Chatterbox versions store the result on model.conds and return
+    # None; accepting a direct return keeps this wrapper compatible with forks.
+    conds = prepared if prepared is not None else model.conds
     _conditionals[key] = conds
+    while len(_conditionals) > CONDITIONALS_CACHE_MAX:
+        _conditionals.popitem(last=False)
     return conds
 
 
@@ -144,7 +153,9 @@ def invalidate_voice(voice_id: str = None):
     global _voices_cache
     _voices_cache = None
     if voice_id:
-        _conditionals.pop(voice_id, None)
+        for key in list(_conditionals):
+            if key[0] == voice_id:
+                _conditionals.pop(key, None)
     else:
         _conditionals.clear()
 
@@ -242,8 +253,9 @@ def synthesize(
         emotion: Which emotion-tagged reference clip to use (falls back to neutral/legacy)
         seed: Optional torch seed for reproducible takes (used by regenerate button)
     """
-    model = _get_model()
     ref_path = get_ref_path(voice_id, emotion=emotion)
+    model = _get_model()
+    model.conds = _get_conditionals(voice_id, ref_path, emotion=emotion)
 
     log.info("Chatterbox synthesize: voice=%s emotion=%s ref=%s exag=%.2f cfg=%.2f temp=%.2f text_len=%d",
              voice_id, emotion, os.path.basename(ref_path), exaggeration, cfg_weight, temperature, len(text))
@@ -259,7 +271,6 @@ def synthesize(
     with torch.inference_mode():
         wav = model.generate(
             text,
-            audio_prompt_path=ref_path,
             exaggeration=exaggeration,
             cfg_weight=cfg_weight,
             temperature=temperature,

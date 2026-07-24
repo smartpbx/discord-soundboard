@@ -34,6 +34,17 @@ _synthesizers = {}  # cache: model_id -> (net_g, if_f0, target_sr)
 _faiss_indexes = {}  # cache: index_path -> (index, big_npy)
 
 
+def _managed_model_path(relative_path: str) -> str:
+    """Resolve a manifest path while preventing absolute/path-traversal loads."""
+    if not isinstance(relative_path, str) or not relative_path or os.path.isabs(relative_path):
+        raise ValueError(f"Invalid RVC model path: {relative_path!r}")
+    models_root = os.path.realpath(MODELS_DIR)
+    resolved = os.path.realpath(os.path.join(models_root, relative_path))
+    if os.path.commonpath((models_root, resolved)) != models_root:
+        raise ValueError(f"RVC model path escapes managed models directory: {relative_path!r}")
+    return resolved
+
+
 def free_caches():
     """Drop all cached RVC models + FAISS indexes + HuBERT from GPU memory.
 
@@ -77,7 +88,11 @@ def get_voices():
     manifest = _load_manifest()
     voices = []
     for entry in manifest:
-        pth_path = os.path.join(MODELS_DIR, entry["pth"])
+        try:
+            pth_path = _managed_model_path(entry["pth"])
+        except (KeyError, ValueError) as e:
+            log.warning("Skipping invalid RVC manifest entry: %s", e)
+            continue
         if not os.path.exists(pth_path):
             continue
         voices.append({
@@ -341,6 +356,8 @@ def _load_synthesizer(model_id: str, pth_path: str):
     device = _get_device()
     log.info("Loading RVC model: %s from %s", model_id, pth_path)
 
+    # RVC checkpoints legitimately pickle their config; keep weights_only=False.
+    # _managed_model_path confines this load to the app-owned RVC models tree.
     cpt = torch.load(pth_path, map_location="cpu", weights_only=False)
     config = cpt.get("config")
     if config is None:
@@ -398,8 +415,8 @@ def convert(audio_bytes: bytes, rvc_model_id: str) -> bytes:
     if not entry:
         raise ValueError(f"RVC model not found: {model_id}")
 
-    pth_path = os.path.join(MODELS_DIR, entry["pth"])
-    index_path = os.path.join(MODELS_DIR, entry["index"]) if entry.get("index") else ""
+    pth_path = _managed_model_path(entry["pth"])
+    index_path = _managed_model_path(entry["index"]) if entry.get("index") else ""
 
     if not os.path.exists(pth_path):
         raise FileNotFoundError(f"Model file not found: {pth_path}")
