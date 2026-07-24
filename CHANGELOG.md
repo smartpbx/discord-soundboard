@@ -5,6 +5,13 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Frontend polish & accessibility
+- Failed saves (settings, preferences, reordering, renaming tags) now show a clear "couldn't save" message instead of silently doing nothing.
+- Better screen-reader support: pop-up dialogs and toast messages are now announced, and icon-only buttons (favorite, preview, edit) have proper labels.
+- Keyboard focus stays on the sound you're on when the grid refreshes, so tabbing no longer loses your place.
+- The soundboard shows a friendly empty state ("No sounds yet" or "No matches for this filter") instead of a blank area.
+- Green "live/playing" text is now readable in light mode.
+
 ## 2026-07-24 — Robustness batch
 - Changing your password now signs out your other sessions.
 - If a URL stream fails, the now-playing area shows the reason instead of just going silent.
