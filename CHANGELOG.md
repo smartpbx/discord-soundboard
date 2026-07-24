@@ -5,6 +5,13 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Robustness batch
+- Changing your password now signs out your other sessions.
+- If a URL stream fails, the now-playing area shows the reason instead of just going silent.
+- Renaming a tag works for any tag (not only reordered ones) and won't silently merge into an existing name.
+- A sound whose length can't be read is blocked for length-limited roles instead of slipping past the limit.
+- Cleaner shutdowns on deploy (drains audio + connections), and a mid-stream disconnect no longer leaves orphaned ffmpeg/TTS work running.
+
 ## 2026-07-24 — Faster TTS (no needless model reloads)
 - Using a Kokoro voice no longer unloads the heavy Fish voice model from the GPU (Kokoro runs on CPU and needs no GPU), so switching between voices — especially in conversation mode that alternates them — no longer triggers a slow ~3-minute Fish reload.
 

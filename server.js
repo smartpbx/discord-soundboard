@@ -1323,10 +1323,11 @@ app.use(require('cookie-parser')());
 // already store-agnostic (uses store.all()), so role-change/disable logout still
 // works with either store.
 let _sessionStore;
+let _sessDb = null;
 try {
     const SqliteSessionStore = require('better-sqlite3-session-store')(require('express-session'));
     const SessionDatabase = require('better-sqlite3');
-    const _sessDb = new SessionDatabase(path.join(DATA_DIR, 'sessions.db'));
+    _sessDb = new SessionDatabase(path.join(DATA_DIR, 'sessions.db'));
     _sessionStore = new SqliteSessionStore({ client: _sessDb, expired: { clear: true, intervalMs: 15 * 60 * 1000 } });
     console.log('[session] using SQLite session store (data/sessions.db)');
 } catch (e) {
@@ -1467,8 +1468,9 @@ function setManagedUserDisabled(username, disabled) {
     return true;
 }
 
-function destroySessionsForUsername(sessionStore, username) {
+function destroySessionsForUsername(sessionStore, username, exceptSessionId) {
     const un = String(username || '').trim().toLowerCase();
+    const keepSid = String(exceptSessionId || '');
     if (!un || !sessionStore || typeof sessionStore.destroy !== 'function') return;
     if (sessionStore.sessions && typeof sessionStore.sessions === 'object') {
         for (const [sid, raw] of Object.entries(sessionStore.sessions)) {
@@ -1477,7 +1479,7 @@ function destroySessionsForUsername(sessionStore, username) {
                 try { sess = JSON.parse(raw); } catch { sess = null; }
             }
             const su = sess && sess.user && String(sess.user.username || '').trim().toLowerCase();
-            if (su === un) sessionStore.destroy(sid, () => {});
+            if (su === un && sid !== keepSid) sessionStore.destroy(sid, () => {});
         }
         return;
     }
@@ -1487,7 +1489,7 @@ function destroySessionsForUsername(sessionStore, username) {
         if (Array.isArray(sessions)) return;
         Object.entries(sessions).forEach(([sid, sess]) => {
             const su = sess && sess.user && String(sess.user.username || '').trim().toLowerCase();
-            if (su === un) sessionStore.destroy(sid, () => {});
+            if (su === un && sid !== keepSid) sessionStore.destroy(sid, () => {});
         });
     });
 }
@@ -1804,6 +1806,7 @@ const player = createAudioPlayer({
 let currentConnection = null;
 let currentVolume = 0.5;
 let playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+let lastStreamError = null;
 let multiPlayEnabled = false;
 
 // --- PCM Mixer for multi-play ---
@@ -4596,6 +4599,7 @@ player.on('error', error => {
 
 player.on('stateChange', (oldState, newState) => {
     console.log('[DIAG] player.stateChange', oldState.status, '->', newState.status);
+    if (newState.status === AudioPlayerStatus.Playing) lastStreamError = null;
     if (newState.status === AudioPlayerStatus.Idle) {
         finalizeAllOpenPlays();
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
@@ -4879,6 +4883,7 @@ app.get('/api/sounds/audio/:filename', requireAuth, (req, res) => {
         args.push('-f', 'mp3', '-');
         res.setHeader('Content-Type', 'audio/mpeg');
         const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        req.on('close', () => { try { ff.kill('SIGKILL'); } catch {} });
         ff.stdout.pipe(res);
         ff.stderr.on('data', () => {});
         ff.on('error', (err) => { console.error('ffmpeg trim error', err); });
@@ -5194,9 +5199,11 @@ app.patch('/api/tags/rename', requireAdmin, (req, res) => {
     if (oldN === newN) return res.json({ ok: true });
     const meta = loadSoundsMeta();
     const order = getTagOrder(meta);
-    if (!order.includes(oldN)) return res.status(404).json({ error: 'Tag not found' });
-    if (order.includes(newN)) return res.status(400).json({ error: 'Target tag name already exists' });
-    meta._tagOrder = order.map(f => f === oldN ? newN : f);
+    const allTags = getAllTagsFromSounds(meta);
+    const hidden = getHiddenTags(meta);
+    if (!order.includes(oldN) && !allTags.includes(oldN)) return res.status(404).json({ error: 'Tag not found' });
+    if (order.includes(newN) || allTags.includes(newN) || hidden.includes(newN)) return res.status(409).json({ error: 'A tag by that name already exists' });
+    if (Array.isArray(meta._tagOrder)) meta._tagOrder = meta._tagOrder.map(f => f === oldN ? newN : f);
     Object.keys(meta).forEach(key => {
         if (key.startsWith('_')) return;
         const m = meta[key];
@@ -5208,7 +5215,7 @@ app.patch('/api/tags/rename', requireAdmin, (req, res) => {
         meta._tagHidden = meta._tagHidden.map(t => t === oldN ? newN : t);
     }
     saveSoundsMeta(meta);
-    res.json({ ok: true, tags: meta._tagOrder });
+    res.json({ ok: true, tags: getTagOrder(meta) });
 });
 
 app.patch('/api/tags/:name/hidden', requireAdmin, (req, res) => {
@@ -5704,6 +5711,7 @@ app.patch('/api/superadmin/users/:username', requireSuperadmin, (req, res) => {
         const newPw = String(body.password);
         const forceChange = body.forceChange === true;
         if (!updateManagedUserPassword(un, newPw, forceChange)) return res.status(400).json({ error: 'User not found, env-configured, or password too short (min 6 chars)' });
+        destroySessionsForUsername(req.sessionStore, un);
         statsDb.recordAdminAction({ actor, actorRole, action: 'user.password-reset', target: un, details: { forceChange } });
     }
     if (body.disabled !== undefined) {
@@ -5721,7 +5729,11 @@ app.patch('/api/me/password', requireAuth, (req, res) => {
     if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required' });
     if (!updateOwnPassword(un, String(currentPassword), String(newPassword))) return res.status(400).json({ error: 'Current password incorrect or new password too short (min 6 chars)' });
     req.session.user.mustChangePassword = false;
-    res.json({ ok: true });
+    destroySessionsForUsername(req.sessionStore, un, req.sessionID);
+    req.session.save((err) => {
+        if (err) return res.status(500).json({ error: 'Password changed, but the current session could not be saved' });
+        res.json({ ok: true });
+    });
 });
 
 // --- Per-user permission overrides ---------------------------------------
@@ -6609,6 +6621,10 @@ app.post('/api/upload', requireAuth, uploadHandler, (req, res) => {
         if (err) return res.status(500).json({ error: 'Error saving file' });
         const duration = probeDuration(targetPath);
         const maxDur = role === 'guest' ? getGuestMaxUploadDuration() : getUserMaxUploadDuration(un2);
+        if (duration == null) {
+            try { fs.unlinkSync(targetPath); } catch {}
+            return res.status(400).json({ error: "Couldn't read this file's length, so it can't be played under the length limit — ask an admin." });
+        }
         if (duration != null && duration > maxDur) {
             fs.unlinkSync(targetPath);
             return res.status(400).json({ error: `File too long. Max ${maxDur} seconds. This file is ${Math.ceil(duration)}s.` });
@@ -6849,6 +6865,9 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
         effectiveDuration = Math.max(0, end - start);
     }
     const maxDur = isGuest ? getGuestMaxDuration() : getUserMaxDuration(req.session?.user?.username);
+    if ((role === 'user' || isGuest) && effectiveDuration == null) {
+        return res.status(403).json({ error: "Couldn't read this file's length, so it can't be played under the length limit — ask an admin." });
+    }
     if ((role === 'user' || isGuest) && effectiveDuration != null && effectiveDuration > maxDur) {
         return res.status(403).json({ error: `Only sounds ${maxDur} seconds or shorter are allowed. This sound is ${Math.ceil(effectiveDuration)}s.` });
     }
@@ -7230,9 +7249,17 @@ function processUrlQueue() {
     }
     console.log('[url-queue] starting "%s" (%d left in queue)', item.title, urlStreamQueue.length);
     startUrlStreamPlayback(item).catch((err) => {
+        lastStreamError = ('Failed to start stream: ' + (err.message || err)).slice(0, 300);
         console.error('[url-queue] failed to start "%s":', item.title, err.message || err);
         setImmediate(processUrlQueue);
     });
+}
+
+function summarizeStreamFailure(label, code, signal, spawnError, stderr) {
+    if (!spawnError && code === 0) return null;
+    const detail = String(stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-2).join(' / ');
+    const status = spawnError || `${label} exited ${code != null ? code : (signal || 'unknown')}`;
+    return (status + (detail ? ': ' + detail : '')).slice(0, 300);
 }
 
 // Spawn the yt-dlp/ffmpeg pipeline for a queue item without touching the
@@ -7241,6 +7268,7 @@ function processUrlQueue() {
 function spawnUrlStreamPipeline(item) {
     const { url, trimStart, trimEnd, previewFilePath } = item;
     let ytdlp = null, ff;
+    const errorState = { ytdlpCode: null, ytdlpSignal: null, ytdlpSpawnError: null, ytdlpStderr: '', ffmpegSpawnError: null, ffmpegStderr: '' };
     if (previewFilePath) {
         // Stream from cached WAV through ffmpeg with trim.
         const ffArgs = ['-nostdin'];
@@ -7249,18 +7277,19 @@ function spawnUrlStreamPipeline(item) {
         if (trimEnd != null) ffArgs.push('-t', String(trimEnd - trimStart));
         ffArgs.push('-vn', '-f', 'mp3', '-');
         ff = spawn('ffmpeg', ffArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-        ff.stderr.on('data', () => {});
-        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+        ff.stderr.on('data', (d) => { errorState.ffmpegStderr = (errorState.ffmpegStderr + d.toString()).slice(-2000); });
+        ff.on('error', (err) => { errorState.ffmpegSpawnError = err.message; console.error('[url-stream] ffmpeg error', err); });
     } else {
         ytdlp = spawn(YT_DLP_BIN, [...ytdlpCommonArgs(), '-f', 'bestaudio/best', '--no-playlist', '--no-warnings', '--quiet', '-o', '-', url], { stdio: ['ignore', 'pipe', 'pipe'] });
-        ytdlp.stderr.on('data', () => {});
-        ytdlp.on('error', (err) => console.error('[url-stream] yt-dlp error', err));
+        ytdlp.stderr.on('data', (d) => { errorState.ytdlpStderr = (errorState.ytdlpStderr + d.toString()).slice(-2000); });
+        ytdlp.on('error', (err) => { errorState.ytdlpSpawnError = err.message; console.error('[url-stream] yt-dlp error', err); });
+        ytdlp.on('exit', (code, signal) => { errorState.ytdlpCode = code; errorState.ytdlpSignal = signal; });
         ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-vn', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
         ytdlp.stdout.pipe(ff.stdin).on('error', () => {});
-        ff.stderr.on('data', () => {});
-        ff.on('error', (err) => console.error('[url-stream] ffmpeg error', err));
+        ff.stderr.on('data', (d) => { errorState.ffmpegStderr = (errorState.ffmpegStderr + d.toString()).slice(-2000); });
+        ff.on('error', (err) => { errorState.ffmpegSpawnError = err.message; console.error('[url-stream] ffmpeg error', err); });
     }
-    return { ytdlp, ff };
+    return { ytdlp, ff, errorState };
 }
 
 function killUrlPipeline(pipeline) {
@@ -7333,7 +7362,7 @@ function fadeInResource(resource, target, ms) {
 // state. Assumes the caller has already dealt with whatever was playing.
 function attachUrlStreamPipeline(item, pipeline, { fadeInMs = 0 } = {}) {
     const { url, title, effectiveDuration, trimStart, trimEnd, previewFilePath, requestedBy, maxDur, mystery } = item;
-    const { ytdlp, ff } = pipeline;
+    const { ytdlp, ff, errorState } = pipeline;
     // Mystery picks hide the title from everyone while queued and while
     // playing; the real title only lands in Recently Played once the
     // stream ends (the reveal). Stats/audit rows keep the real title.
@@ -7358,10 +7387,21 @@ function attachUrlStreamPipeline(item, pipeline, { fadeInMs = 0 } = {}) {
     urlSkipVotes.clear();
     activeUrlStream = { ytdlp, ff, killTimer, previewFilePath: previewFilePath || null };
 
-    ff.on('close', () => {
+    ff.on('close', (code, signal) => {
+        const wasActive = activeUrlStream && activeUrlStream.ff === ff;
+        if (wasActive) {
+            const failures = [];
+            if (ytdlp && (errorState.ytdlpSpawnError || errorState.ytdlpCode !== 0)) {
+                failures.push(summarizeStreamFailure('yt-dlp', errorState.ytdlpCode, errorState.ytdlpSignal, errorState.ytdlpSpawnError, errorState.ytdlpStderr));
+            }
+            if (errorState.ffmpegSpawnError || code !== 0) {
+                failures.push(summarizeStreamFailure('ffmpeg', code, signal, errorState.ffmpegSpawnError, errorState.ffmpegStderr));
+            }
+            if (failures.length) lastStreamError = failures.filter(Boolean).join(' / ').slice(0, 300);
+        }
         clearTimeout(killTimer);
         try { ytdlp?.kill('SIGTERM'); } catch {}
-        if (activeUrlStream && activeUrlStream.ff === ff) activeUrlStream = null;
+        if (wasActive) activeUrlStream = null;
         if (currentSinglePlayId === newPlayId) {
             statsDb.recordPlayEnd(newPlayId, { stoppedEarly: false });
             currentSinglePlayId = null;
@@ -7813,6 +7853,7 @@ app.post('/api/stream-url', requireAuth, wrap(async (req, res) => {
         const result = await startUrlStreamPlayback(item);
         res.json({ ok: true, ...result });
     } catch (err) {
+        lastStreamError = ('Failed to start stream: ' + (err.message || err)).slice(0, 300);
         console.error('[url-stream] fatal', err);
         res.status(err.statusCode || 500).json({ error: err.message || 'Failed to start stream' });
     }
@@ -8104,6 +8145,7 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     };
     let status = statusMap[player.state.status] || 'idle';
     let state = { ...playbackState, status };
+    state.lastStreamError = lastStreamError;
     if (state.mystery) state.duration = null;
     if (status === 'playing' && player.state.resource?.metadata) {
         const meta = player.state.resource.metadata;
@@ -8451,6 +8493,8 @@ app.get('/api/tts/voices', requireAuth, wrap(async (req, res) => {
 }));
 
 app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
+    let aborted = false;
+    req.on('close', () => { aborted = true; });
     const { text, voiceId, volume: reqVolume, exaggeration: reqExag, forcedEmotion, useExpression } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
@@ -8631,6 +8675,7 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
     } else {
         console.log('[TTS] synth cache hit voice=%s text_len=%d sha=%s…', voiceId, trimmed.length, cacheKey.slice(0, 12));
     }
+    if (aborted) return;
 
     // Cache for legacy "save last TTS" feature
     ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
@@ -11039,6 +11084,39 @@ httpServer.on('upgrade', (req, socket, head) => {
         socket.on('error', () => { try { upstream.destroy(); } catch {} });
     });
 });
+
+let _shutdownStarted = false;
+let _sessionDbClosed = false;
+function closeSessionDb() {
+    if (_sessionDbClosed || !_sessDb) return;
+    _sessionDbClosed = true;
+    try { _sessDb.close(); } catch {}
+}
+function gracefulShutdown(signal) {
+    if (_shutdownStarted) return;
+    _shutdownStarted = true;
+    console.log(`[shutdown] ${signal} received`);
+    const forceExit = setTimeout(() => {
+        closeSessionDb();
+        process.exit(0);
+    }, 5000);
+    try { player.stop(); } catch {}
+    try {
+        if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
+    } catch {}
+    for (const wss of [watchWss, mnWss, eventsWss]) {
+        wss.clients.forEach((ws) => { try { ws.terminate(); } catch {} });
+        try { wss.close(); } catch {}
+    }
+    const finish = () => {
+        clearTimeout(forceExit);
+        closeSessionDb();
+        process.exit(0);
+    };
+    try { httpServer.close(finish); } catch { finish(); }
+}
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 sodium.ready.then(() => {
