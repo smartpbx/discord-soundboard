@@ -328,8 +328,18 @@ def _evict_for_voice(voice_id: str):
     fish_ids = fish_engine.get_voice_ids()
     if voice_id in fish_ids:
         _evict_for_fish()
-    else:
-        _evict_for_non_fish()
+        return
+    # Kokoro runs on CPU and uses no VRAM, so stopping the ~19 GiB fish-speech
+    # model for a Kokoro synth is pure waste — it just forced a 180s fish reload
+    # on the next fish request (e.g. conversation mode alternating kokoro/fish).
+    # Since Kokoro needs no GPU, fish can safely stay resident alongside it.
+    # Chatterbox / RVC / GSV / unknown still evict fish (they need the VRAM).
+    try:
+        if voice_id in kokoro_engine.get_voice_ids():
+            return
+    except Exception:
+        pass
+    _evict_for_non_fish()
 
 
 @app.get("/health/engines")

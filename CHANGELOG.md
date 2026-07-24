@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Faster TTS (no needless model reloads)
+- Using a Kokoro voice no longer unloads the heavy Fish voice model from the GPU (Kokoro runs on CPU and needs no GPU), so switching between voices — especially in conversation mode that alternates them — no longer triggers a slow ~3-minute Fish reload.
+
 ## 2026-07-24 — Real-time updates (live connection)
 - The soundboard now updates over a live WebSocket connection instead of polling every second — now-playing, the queue, vote-skip counts, and who's online refresh near-instantly, with less network chatter. Falls back to the old polling automatically if the connection ever drops.
 
