@@ -4903,6 +4903,7 @@
             await checkAuth();
             await loadServerPrefs();
             applyPrefs();
+            connectEventsSocket();
             startPlaybackPolling();
             startSoundsPolling();
             startPresencePolling();
@@ -4959,6 +4960,7 @@
             await checkAuth();
             await loadServerPrefs();
             applyPrefs();
+            connectEventsSocket();
             startPlaybackPolling();
             startSoundsPolling();
             startPresencePolling();
@@ -8616,6 +8618,53 @@
         let pendingCountPollingStarted = false;
         let soundsPollingStarted = false;
         let presencePollingStarted = false;
+        let _eventsWsOpen = false;
+        let _eventsWs = null;
+        let _eventsWsReconnectTimer = null;
+        let _eventsWsReconnectBackoff = 1000;
+        function _scheduleEventsSocketReconnect(ws) {
+            if (ws && _eventsWs && _eventsWs !== ws) return;
+            _eventsWsOpen = false;
+            if (_eventsWs === ws) _eventsWs = null;
+            if (!user || _eventsWsReconnectTimer) return;
+            const delay = _eventsWsReconnectBackoff;
+            _eventsWsReconnectBackoff = Math.min(15000, _eventsWsReconnectBackoff * 2);
+            _eventsWsReconnectTimer = setTimeout(() => {
+                _eventsWsReconnectTimer = null;
+                connectEventsSocket();
+            }, delay);
+        }
+        function connectEventsSocket() {
+            if (!user || _eventsWs || _eventsWsReconnectTimer) return;
+            let ws;
+            try {
+                ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/api/events');
+            } catch (e) {
+                _scheduleEventsSocketReconnect(null);
+                return;
+            }
+            _eventsWs = ws;
+            ws.onopen = () => {
+                if (_eventsWs !== ws) return;
+                _eventsWsOpen = true;
+                _eventsWsReconnectBackoff = 1000;
+                try { refreshPlaybackState(); } catch (e) {}
+                try { fetchOnlineUsers(); } catch (e) {}
+            };
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type !== 'nudge') return;
+                    if (data.what === 'playback') refreshPlaybackState();
+                    else if (data.what === 'presence') fetchOnlineUsers();
+                } catch (e) {}
+            };
+            ws.onclose = () => { _scheduleEventsSocketReconnect(ws); };
+            ws.onerror = () => {
+                _scheduleEventsSocketReconnect(ws);
+                try { ws.close(); } catch (e) {}
+            };
+        }
         function startSoundsPolling() {
             if (soundsPollingStarted) return;
             soundsPollingStarted = true;
@@ -8626,13 +8675,14 @@
             if (playbackPollingStarted) return;
             playbackPollingStarted = true;
             refreshPlaybackState();
-            // Poll 1s while visible, back off to 5s while the tab is hidden
+            // Poll 1s while visible without events, 8s while events are live,
+            // and keep the existing 5s backoff while the tab is hidden
             // (this runs on the same event loop as Discord audio on the server;
             // hidden tabs were hammering it every second for nothing). Refresh
             // immediately when the tab becomes visible again so state is fresh.
             setTimeout(function _pollPlayback() {
                 refreshPlaybackState();
-                setTimeout(_pollPlayback, document.hidden ? 5000 : 1000);
+                setTimeout(_pollPlayback, document.hidden ? 5000 : (_eventsWsOpen ? 8000 : 1000));
             }, 600);
             document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshPlaybackState(); });
         }
@@ -8649,7 +8699,10 @@
             sendHeartbeat();
             fetchOnlineUsers();
             setInterval(sendHeartbeat, 15000);
-            setInterval(fetchOnlineUsers, 15000);
+            setTimeout(function _pollPresence() {
+                fetchOnlineUsers();
+                setTimeout(_pollPresence, _eventsWsOpen ? 45000 : 15000);
+            }, 15000);
             document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && user) { sendHeartbeat(); fetchOnlineUsers(); } });
         }
         function sendHeartbeat() {
@@ -12616,6 +12669,7 @@
             await loadServerPrefs();
             applyPrefs();
             renderRecentlyPlayed();
+            connectEventsSocket();
             startPlaybackPolling();
             startSoundsPolling();
             startPresencePolling();

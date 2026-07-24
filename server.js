@@ -10846,6 +10846,17 @@ const httpServer = app.listen(PORT, () => {
 // WebSocket upgrade for Watch Together rooms.
 const { WebSocketServer } = require('ws');
 const watchWss = new WebSocketServer({ noServer: true });
+const eventsWss = new WebSocketServer({ noServer: true });
+const eventsClients = new Set();
+eventsWss.on('connection', (ws) => {
+    eventsClients.add(ws);
+    ws._alive = true;
+    ws.on('pong', () => { ws._alive = true; });
+    const cleanup = () => eventsClients.delete(ws);
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
+    try { ws.send(JSON.stringify({ type: 'hello' })); } catch {}
+});
 watchWss.on('connection', (ws, req, room, username, role) => {
     ws._un = username;
     ws._role = role || null;
@@ -10898,12 +10909,52 @@ mnWss.on('connection', (ws, req, room, username, role) => {
     ws.on('error', cleanup);
 });
 
-// Heartbeat: ping every watch/movie-night viewer; terminate any that miss a
+function _eventsBroadcast(message) {
+    const json = JSON.stringify(message);
+    for (const ws of eventsClients) {
+        if (ws.readyState === 1) {
+            try { ws.send(json); } catch {}
+        }
+    }
+}
+
+let _eventsPlaybackSig = null;
+let _eventsPresenceSig = null;
+setInterval(() => {
+    const playbackSig = JSON.stringify({
+        st: playbackState.status,
+        fn: playbackState.filename,
+        dn: playbackState.displayName,
+        by: playbackState.startedBy && playbackState.startedBy.username,
+        dur: playbackState.duration,
+        dk: playbackState.duration != null && playbackState.duration > 0,
+        uq: urlStreamQueue.length,
+        uv: urlSkipVotes.size,
+        tq: ttsQueue.length,
+        tp: ttsIsPlaying,
+        paused: playbackState.status === 'paused',
+    });
+    const now = Date.now();
+    const presenceSig = JSON.stringify([...activePresence.values()]
+        .filter((presence) => now - presence.lastSeen <= PRESENCE_TIMEOUT_MS)
+        .map((presence) => presence.username)
+        .sort());
+    if (playbackSig !== _eventsPlaybackSig) {
+        _eventsPlaybackSig = playbackSig;
+        _eventsBroadcast({ type: 'nudge', what: 'playback' });
+    }
+    if (presenceSig !== _eventsPresenceSig) {
+        _eventsPresenceSig = presenceSig;
+        _eventsBroadcast({ type: 'nudge', what: 'presence' });
+    }
+}, 750).unref();
+
+// Heartbeat: ping every watch/movie-night viewer and event client; terminate any that miss a
 // round so a viewer whose network dropped uncleanly stops pinning the room —
 // and its Xvfb+Chromium+ffmpeg capture quartet — open forever. Once the last
 // real viewer is gone the room sweep can reclaim everything.
 const _roomWssHeartbeat = setInterval(() => {
-    for (const wss of [watchWss, mnWss]) {
+    for (const wss of [watchWss, mnWss, eventsWss]) {
         wss.clients.forEach((ws) => {
             if (ws._alive === false) { try { ws.terminate(); } catch {} return; }
             ws._alive = false;
@@ -10944,6 +10995,17 @@ httpServer.on('upgrade', (req, socket, head) => {
             if (room.viewers.size >= WATCH_ROOM_MAX_VIEWERS) { socket.write('HTTP/1.1 503 Too Many Viewers\r\n\r\n'); try { socket.destroy(); } catch {} return; }
             watchWss.handleUpgrade(req, socket, head, (ws) => {
                 watchWss.emit('connection', ws, req, room, user.username, user.role);
+            });
+        });
+        return;
+    }
+    if (req.url === '/api/events') {
+        const stubRes = { setHeader: () => {}, getHeader: () => undefined, writeHead: () => {}, end: () => {}, on: () => {}, once: () => {}, emit: () => {} };
+        sessionMiddleware(req, stubRes, () => {
+            const user = req.session?.user;
+            if (!user) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); try { socket.destroy(); } catch {} return; }
+            eventsWss.handleUpgrade(req, socket, head, (ws) => {
+                eventsWss.emit('connection', ws, req);
             });
         });
         return;

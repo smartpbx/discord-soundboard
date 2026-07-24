@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Real-time updates (live connection)
+- The soundboard now updates over a live WebSocket connection instead of polling every second — now-playing, the queue, vote-skip counts, and who's online refresh near-instantly, with less network chatter. Falls back to the old polling automatically if the connection ever drops.
+
 ## 2026-07-24 — Honest "LIVE" state for open-ended streams
 - When a URL stream or TTS plays with no fixed length, the now-playing readout shows the elapsed time with a green "● LIVE" badge instead of a progress bar frozen near zero (which was the main waveform glitch). Sounds with a known length still show a normal progress bar.
 
