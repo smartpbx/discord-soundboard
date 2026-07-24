@@ -423,6 +423,8 @@
         .np-scrub::before { content: ''; position: absolute; left: -7px; right: -7px; top: 6px; height: 6px; border-radius: 999px; background: var(--surface-hover); border: 1px solid var(--border); box-shadow: var(--well, inset 0 2px 5px rgba(0,0,0,0.55)); }
         .np-scrub-fill { position: absolute; left: -6px; top: 7px; width: 0%; height: 4px; border-radius: 999px; background: var(--live); box-shadow: 0 0 7px var(--live-glow); pointer-events: none; }
         .np-scrub-knob { position: absolute; left: 0%; top: 1px; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid var(--surface); box-shadow: var(--elev-1), 0 1px 5px rgba(0,0,0,0.55); transform: translateX(-50%); pointer-events: none; }
+        .np-scrub.duration-unknown { cursor: default; }
+        .np-scrub.duration-unknown .np-scrub-knob { display: none; }
         .player-idle .np-scrub { cursor: default; opacity: 0.45; }
         .waveform-wrap {
             height: 48px;
@@ -448,6 +450,7 @@
             font-size: 0.8rem;
         }
         .progress-time { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; min-height: 26px; padding: 0.25rem 0.5rem; font: 0.7rem/1.2 var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; color: var(--text); background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--well, inset 0 2px 5px rgba(0,0,0,0.55)); margin-bottom: 0.65rem; }
+        .progress-time .np-live-badge { color: var(--live); font-weight: 700; }
         .progress-time .np-queued-by { color: var(--text-muted); }
         .player-buttons { display: flex; align-items: center; gap: 0.5rem; }
         #playerCard .player-buttons .btn-icon { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 50%; box-shadow: var(--elev-1); transition: transform 0.06s ease, box-shadow 0.12s ease, background 0.15s; }
@@ -3046,7 +3049,7 @@
         let userMaxDuration = 7;
         let userCooldownSec = 0;
         let userLastPlayTime = 0;
-        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null, tts: false, ttsVoice: null };
+        let playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, durationKnown: false, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null, tts: false, ttsVoice: null };
         let playbackLockedBy = null;
         let playbackSuperadminOnly = false;
         let guestLastPlayTime = 0;
@@ -8180,6 +8183,7 @@
                 playback.originalStartTimeOffset = prevOriginalStart != null ? prevOriginalStart : playback.startTimeOffset;
             } else {
                 playback.duration = (data.duration != null ? data.duration : null);
+                playback.durationKnown = playback.duration != null && playback.duration > 0;
                 playback.originalStartTimeOffset = playback.startTimeOffset;
             }
             playback.serverCurrentTime = undefined;
@@ -8304,8 +8308,9 @@
             }
             const drawBarCount = slicedPeaks.length;
             const barW = drawBarCount > 0 ? Math.max(1, Math.floor(w / drawBarCount) - Math.ceil(dpr)) : 0;
+            const durationKnown = playback.durationKnown !== false && playback.duration != null && playback.duration > 0;
             const total = totalDuration != null && totalDuration > 0 ? totalDuration : trimDuration;
-            const progress = total > 0 ? (isTrimmed && trimDuration > 0 ? Math.min(1, Math.max(0, (currentTime - trimStart) / trimDuration)) : Math.min(1, currentTime / total)) : 0;
+            const progress = durationKnown && total > 0 ? (isTrimmed && trimDuration > 0 ? Math.min(1, Math.max(0, (currentTime - trimStart) / trimDuration)) : Math.min(1, currentTime / total)) : 0;
             const playheadX = progress * w;
             ctx.clearRect(0, 0, w, h);
             for (let i = 0; i < drawBarCount; i++) {
@@ -8313,12 +8318,14 @@
                 const x = (i / drawBarCount) * w;
                 const center = h / 2;
                 const halfH = Math.max(dpr, (Math.abs(peak.max - peak.min) / 2) * (h * 0.4));
-                const isPast = x + barW < playheadX;
+                const isPast = durationKnown && x + barW < playheadX;
                 ctx.fillStyle = isPast ? 'rgba(124, 58, 237, 0.6)' : 'rgba(42, 42, 50, 0.8)';
                 ctx.fillRect(x, center - halfH, barW, halfH * 2);
             }
-            ctx.fillStyle = 'rgba(255,255,255,0.9)';
-            ctx.fillRect(Math.max(0, playheadX - dpr), 0, Math.max(2, Math.ceil(2 * dpr)), h);
+            if (durationKnown) {
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.fillRect(Math.max(0, playheadX - dpr), 0, Math.max(2, Math.ceil(2 * dpr)), h);
+            }
         }
 
         let lastServerCurrentTimeReceivedAt = 0;
@@ -8332,9 +8339,8 @@
                     if (!Number.isFinite(start)) return 0;
                     const offset = playback.startTimeOffset || 0;
                     const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
-                    const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                     let current = offset + (Date.now() - start) / 1000;
-                    current = Math.min(current, maxPos);
+                    if (playback.durationKnown !== false && playback.duration != null && playback.duration > 0) current = Math.min(current, origStart + playback.duration);
                     return Math.max(0, current);
                 }
                 if (playback.status === 'paused') return pausedAt;
@@ -8344,9 +8350,8 @@
                 if (playback.status === 'playing') {
                     const elapsed = (Date.now() - lastServerCurrentTimeReceivedAt) / 1000;
                     const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
-                    const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                     let current = playback.serverCurrentTime + elapsed;
-                    current = Math.min(current, maxPos);
+                    if (playback.durationKnown !== false && playback.duration != null && playback.duration > 0) current = Math.min(current, origStart + playback.duration);
                     return Math.max(0, current);
                 }
                 return playback.serverCurrentTime;
@@ -8356,9 +8361,8 @@
                 if (!Number.isFinite(start)) return 0;
                 const offset = playback.startTimeOffset || 0;
                 const origStart = playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0;
-                const maxPos = playback.duration != null ? origStart + playback.duration : 999999;
                 let current = offset + (Date.now() - start) / 1000;
-                current = Math.min(current, maxPos);
+                if (playback.durationKnown !== false && playback.duration != null && playback.duration > 0) current = Math.min(current, origStart + playback.duration);
                 return Math.max(0, current);
             }
             if (playback.status === 'paused') return pausedAt;
@@ -8431,7 +8435,7 @@
             }
             const res = await api('/api/stop', { method: 'POST' });
             if (!res) return;
-            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
+            playback = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, durationKnown: false, startTimeOffset: 0, originalStartTimeOffset: 0, startedBy: null };
             pausedAt = 0;
             waveformData = null;
             waveformDuration = 0;
@@ -8582,26 +8586,29 @@
         function updatePlayerProgress(current, dur) {
             current = Number.isFinite(Number(current)) ? Number(current) : 0;
             dur = Number.isFinite(Number(dur)) && Number(dur) > 0 ? Number(dur) : null;
+            const durationKnown = playback.durationKnown !== false && dur != null;
+            const isLive = playback.status !== 'idle' && !durationKnown;
             const trimStart = (playback.originalStartTimeOffset ?? playback.startTimeOffset ?? 0) || 0;
             const isTrimmed = trimStart > 0 || (dur != null && waveformDuration > 0 && dur < waveformDuration - 0.01);
             const displayCurrent = Math.max(0, isTrimmed ? current - trimStart : current);
-            const progressTotal = dur != null ? dur : (waveformDuration > 0 ? waveformDuration : 0);
+            const progressTotal = durationKnown ? dur : 0;
             const fraction = progressTotal > 0 ? Math.max(0, Math.min(1, displayCurrent / progressTotal)) : 0;
-            const str = formatTime(displayCurrent) + ' / ' + (dur != null ? formatTime(dur) : '—');
+            const str = durationKnown ? formatTime(displayCurrent) + ' / ' + formatTime(dur) : (isLive ? formatTime(displayCurrent) + ' · ● LIVE' : formatTime(displayCurrent) + ' / —');
             const queuedBy = playback.startedBy && playback.startedBy.username
                 ? String(playback.startedBy.username).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 : '';
-            const html = str + (queuedBy ? ' <span class="np-queued-by">· queued by ' + queuedBy + '</span>' : '');
+            const html = (isLive ? formatTime(displayCurrent) + ' · <span class="np-live-badge">● LIVE</span>' : str) + (queuedBy ? ' <span class="np-queued-by">· queued by ' + queuedBy + '</span>' : '');
             const timeEl = document.getElementById('progressTime');
             if (timeEl && timeEl.innerHTML !== html) timeEl.innerHTML = html;
             lastProgressTimeStr = str;
             if (!npScrubDragging) setNowPlayingScrubFraction(fraction);
             const scrub = document.getElementById('npScrub');
             if (scrub) {
+                scrub.classList.toggle('duration-unknown', isLive);
                 scrub.setAttribute('aria-valuemax', String(progressTotal || 0));
                 scrub.setAttribute('aria-valuenow', String(Math.min(progressTotal || 0, displayCurrent).toFixed(2)));
                 scrub.setAttribute('aria-valuetext', str);
-                scrub.setAttribute('aria-disabled', playback.status === 'idle' ? 'true' : 'false');
+                scrub.setAttribute('aria-disabled', playback.status === 'idle' || !durationKnown ? 'true' : 'false');
             }
         }
 
@@ -8697,7 +8704,8 @@
                 else if (playback.startTimeOffset === undefined) playback.startTimeOffset = 0;
                 if (state.filename && waveformFilename !== state.filename && state.startTimeOffset != null) playback.originalStartTimeOffset = Number(state.startTimeOffset);
                 else if (playback.originalStartTimeOffset === undefined) playback.originalStartTimeOffset = playback.startTimeOffset || 0;
-                if (state.duration != null) playback.duration = state.duration;
+                playback.durationKnown = state.durationKnown !== undefined ? !!state.durationKnown : (state.duration != null && state.duration > 0);
+                if (state.duration != null || !playback.durationKnown) playback.duration = state.duration;
                 if (!amLocal && state.currentTime != null) { playback.serverCurrentTime = Number(state.currentTime); lastServerCurrentTimeReceivedAt = Date.now(); if (state.status === 'paused') pausedAt = playback.serverCurrentTime; }
                 if (amLocal && state.status === 'paused' && state.currentTime != null) pausedAt = Number(state.currentTime);
                 if (state.status === 'idle') { pausedAt = 0; playback.startTime = null; playback.startedBy = null; playback.serverCurrentTime = undefined; lastServerCurrentTimeReceivedAt = 0; waveformData = null; waveformFilename = null; if (_playQueueActive) _advancePlayQueue(); }
@@ -12705,7 +12713,7 @@
             </div>
             <div class="mobile-you-user">Signed in as <strong id="mobileYouUsername">Guest</strong></div>
             <div class="mobile-create-list">
-                <button type="button" class="mobile-create-pad" onclick="toggleTheme()"><span class="mobile-create-icon">◐</span><span>Toggle theme</span></button>
+                <button type="button" class="mobile-create-pad" id="mobileYouTheme" onclick="switchMobileTab('board'); toggleTheme();"><span class="mobile-create-icon">◐</span><span>Toggle theme</span></button>
                 <button type="button" class="mobile-create-pad hidden" id="mobileYouChangePassword" onclick="switchMobileTab('board'); openChangePasswordModal();"><span class="mobile-create-icon">🔑</span><span>Change password</span></button>
                 <button type="button" class="mobile-create-pad hidden" id="mobileYouEntranceExit" onclick="switchMobileTab('board'); openEntranceExitModal();"><span class="mobile-create-icon">🔊</span><span>Entrance / exit sounds</span></button>
                 <button type="button" class="mobile-create-pad" id="mobileYouClips" onclick="switchMobileTab('board'); openClips();"><span class="mobile-create-icon">✂️</span><span>Clips</span></button>

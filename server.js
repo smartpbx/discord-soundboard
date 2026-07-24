@@ -8103,19 +8103,23 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     };
     let status = statusMap[player.state.status] || 'idle';
     let state = { ...playbackState, status };
+    if (state.mystery) state.duration = null;
     if (status === 'playing' && player.state.resource?.metadata) {
         const meta = player.state.resource.metadata;
         state.filename = meta.filename;
         state.displayName = meta.displayName ?? meta.filename;
         state.startTime = typeof playbackState.startTime === 'number' ? playbackState.startTime : Date.now();
         if (state.duration == null && playbackState.filename === meta.filename) state.duration = playbackState.duration;
+        if (state.mystery) state.duration = null;
         const offset = playbackState.startTimeOffset || 0;
-        const maxPos = (state.duration != null && state.duration > 0) ? offset + state.duration : 999999;
+        const durationKnown = state.duration != null && state.duration > 0;
         const elapsed = (Date.now() - (playbackState.startTime || Date.now())) / 1000;
-        state.currentTime = Math.max(0, Math.min(maxPos, offset + elapsed));
+        const currentTime = offset + elapsed;
+        state.currentTime = Math.max(0, durationKnown ? Math.min(offset + state.duration, currentTime) : currentTime);
     } else if (status === 'paused' && playbackState.pausedAt != null) {
         state.currentTime = playbackState.pausedAt;
     }
+    state.durationKnown = state.duration != null && state.duration > 0;
     if (req.session.user.role === 'admin' || req.session.user.role === 'superadmin') {
         state.voiceConnected = !!(activeGuildId && getVoiceConnection(activeGuildId));
         if (state.voiceConnected && lastChannelId) {
@@ -8141,7 +8145,8 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
     state.urlQueue = { length: urlStreamQueue.length, items: urlStreamQueue.map(q => {
         const isOwn = q.requestedBy?.username === req.session.user.username;
         const hide = q.mystery && !isOwn;
-        return { id: q.id, title: hide ? null : q.title, duration: hide ? null : q.effectiveDuration, username: q.requestedBy?.username || null, mystery: !!q.mystery };
+        const duration = hide ? null : q.effectiveDuration;
+        return { id: q.id, title: hide ? null : q.title, duration, durationKnown: duration != null && duration > 0, username: q.requestedBy?.username || null, mystery: !!q.mystery };
     }) };
     // Include all active tracks for multi-play
     if (multiPlayEnabled && activeTracks.size > 0) {
@@ -8150,7 +8155,8 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         for (const [id, t] of activeTracks) {
             const offset = t.startTimeOffset || 0;
             const elapsed = (now - (t.startTime || now)) / 1000;
-            const maxPos = (t.duration != null && t.duration > 0) ? offset + t.duration : 999999;
+            const durationKnown = t.duration != null && t.duration > 0;
+            const currentTime = offset + elapsed;
             state.tracks.push({
                 id,
                 filename: t.filename,
@@ -8158,7 +8164,8 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
                 startTime: t.startTime,
                 startTimeOffset: t.startTimeOffset,
                 duration: t.duration,
-                currentTime: Math.max(0, Math.min(maxPos, offset + elapsed)),
+                durationKnown,
+                currentTime: Math.max(0, durationKnown ? Math.min(offset + t.duration, currentTime) : currentTime),
                 startedBy: t.startedBy,
             });
         }

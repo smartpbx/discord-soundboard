@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-24 — Honest "LIVE" state for open-ended streams
+- When a URL stream or TTS plays with no fixed length, the now-playing readout shows the elapsed time with a green "● LIVE" badge instead of a progress bar frozen near zero (which was the main waveform glitch). Sounds with a known length still show a normal progress bar.
+
 ## 2026-07-23 — Stay logged in across deploys
 - Sessions are now stored on disk (SQLite) instead of in memory, so a server restart or deploy no longer logs everyone out. (Falls back to the old in-memory behavior automatically if the store is ever unavailable.)
 
