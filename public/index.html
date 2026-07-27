@@ -86,6 +86,9 @@
             .app .main-view:not(.hidden) { display: flex; gap: 1.5rem; align-items: flex-start; }
             .app .sidebar { width: 340px; min-width: 340px; position: sticky; top: 1.5rem; max-height: calc(100vh - 3rem); overflow-y: auto; scrollbar-width: thin; }
             .app .main-panel { flex: 1; min-width: 0; }
+            /* Voice picker: contain the 40+ cards to a compact, scannable, scrollable
+               panel on desktop instead of a sprawling wall that pushes Speak off-screen. */
+            .tts-voice-cards { max-height: 292px; overflow-y: auto; scrollbar-width: thin; padding-right: 4px; }
         }
         .app.hidden { display: none; }
         .hidden { display: none !important; }
@@ -1172,13 +1175,13 @@
         }
         .tts-ctrl-row select:focus { outline: none; border-color: var(--accent); }
         .tts-visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
-        .tts-voice-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem; width: 100%; }
+        .tts-voice-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.5rem; width: 100%; }
         .tts-voice-card { display: flex; flex-direction: column; justify-content: center; min-height: 54px; padding: 0.5rem 0.65rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--elev-1); cursor: pointer; user-select: none; transition: transform 0.06s ease, box-shadow 0.12s ease, background 0.12s ease, border-color 0.12s ease; }
         .tts-voice-card:hover { background: var(--surface-hover); border-color: var(--accent); }
         .tts-voice-card:active { transform: translateY(1px); box-shadow: var(--press); }
         .tts-voice-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         .tts-voice-card.is-active { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-color: var(--accent); box-shadow: var(--elev-1), 0 0 0 1px var(--accent); }
-        .tts-voice-card-label { color: var(--text); font-size: 0.82rem; font-weight: 600; line-height: 1.2; }
+        .tts-voice-card-label { color: var(--text); font-size: 0.82rem; font-weight: 600; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
         .tts-voice-card-engine { margin-top: 0.2rem; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.08em; line-height: 1; text-transform: uppercase; }
         @media (prefers-reduced-motion: reduce) { .tts-voice-card { transition: none; } }
         .tts-act-spacer { flex: 1; }
@@ -1531,11 +1534,6 @@
                         <span class="tts-ctrl-label">Preset</span>
                         <select id="ttsPresetSelect" onchange="ttsPresetOnChange(this.value)" title="Saved voice + knob combos. Pick one to apply; save the current setup with a name; or manage existing."><option value="">— select —</option></select>
                     </div>
-                    <div class="tts-ctrl-field is-grow" id="ttsCtrlVoiceField">
-                        <span class="tts-ctrl-label">Voice</span>
-                        <select id="ttsVoiceSelect" class="tts-visually-hidden"><option value="">Loading voices…</option></select>
-                        <div id="ttsVoiceCards" class="tts-voice-cards"></div>
-                    </div>
                     <div class="tts-ctrl-field is-slider hidden" id="ttsExpressionWrap" title="Emotion intensity (Chatterbox only): 0.25 calm → 2.0 very expressive">
                         <span class="tts-ctrl-label">🎭 Expression</span>
                         <div class="tts-ctrl-slider-row">
@@ -1555,6 +1553,13 @@
                             <option value="sad">Sad</option>
                             <option value="happy">Happy</option>
                         </select>
+                    </div>
+                </div>
+                <div class="tts-ctrl-row tts-voice-row">
+                    <div class="tts-ctrl-field is-grow" id="ttsCtrlVoiceField">
+                        <span class="tts-ctrl-label">Voice</span>
+                        <select id="ttsVoiceSelect" class="tts-visually-hidden"><option value="">Loading voices…</option></select>
+                        <div id="ttsVoiceCards" class="tts-voice-cards"></div>
                     </div>
                 </div>
                 <div class="tts-ctrl-row tts-ctrl-act">
@@ -9212,11 +9217,16 @@
             const sel = document.getElementById('ttsVoiceSelect');
             const cards = document.getElementById('ttsVoiceCards');
             if (!sel || !cards) return;
+            let activeCard = null;
             cards.querySelectorAll('[data-value]').forEach(card => {
                 const active = card.dataset.value === sel.value;
                 card.classList.toggle('is-active', active);
                 card.setAttribute('aria-pressed', active ? 'true' : 'false');
+                if (active) activeCard = card;
             });
+            // The desktop voice grid is a fixed-height scroll region — make sure a
+            // restored/selected voice is actually visible instead of hidden below the fold.
+            if (activeCard) { try { activeCard.scrollIntoView({ block: 'nearest' }); } catch (_) {} }
         }
 
         function populateTtsVoices() {
@@ -9250,7 +9260,7 @@
             if (cards) {
                 cards.innerHTML = Array.from(sel.options).filter(opt => opt.value).map(opt => {
                     const engine = opt.dataset.engine || '';
-                    return '<div class="tts-voice-card" role="button" tabindex="0" data-value="' + _ttsEscAttr(opt.value) + '" aria-pressed="false">'
+                    return '<div class="tts-voice-card" role="button" tabindex="0" data-value="' + _ttsEscAttr(opt.value) + '" title="' + _ttsEscAttr(opt.textContent) + '" aria-pressed="false">'
                         + '<span class="tts-voice-card-label">' + _ttsEscAttr(opt.textContent) + '</span>'
                         + (engine ? '<span class="tts-voice-card-engine">' + _ttsEscAttr(engine) + '</span>' : '')
                         + '</div>';

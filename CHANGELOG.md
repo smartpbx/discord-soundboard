@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-26 — Cleaner TTS layout on desktop
+- The Text-to-Speech voice picker is no longer a cramped wall of tiny cards squeezed next to the Preset/Emotion menus. Voice cards are now wider and readable (long names clamp to two lines with a hover tooltip), the picker gets its own full-width row, and on desktop it's a compact scrollable panel so the Speak button and controls stay in view.
+- Opening TTS with a saved voice now scrolls that voice into view in the picker.
+
 ## 2026-07-24 — Upload handling security update
 - Upgraded the file-upload library (multer) to 2.x, which fixes denial-of-service bugs where a malformed upload could hang or crash the server. Uploading sounds and voice samples is unchanged.
 
