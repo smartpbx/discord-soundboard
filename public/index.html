@@ -10122,6 +10122,9 @@
                     if (data.cooldownRemaining) {
                         setTtsStatus(`Wait ${data.cooldownRemaining}s before using TTS again.`, true);
                     }
+                } else if (data.generating) {
+                    setTtsStatus('<span class="tts-spinner"></span> Fish is warming up — it will play in Discord automatically.');
+                    showToast('Fish is warming up; TTS will play automatically', 'info');
                 } else {
                     if (data.queuePosition && data.queuePosition > 1) {
                         setTtsStatus('Queued (#' + data.queuePosition + ')');

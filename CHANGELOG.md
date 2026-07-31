@@ -8,6 +8,7 @@ see `CLAUDE.md` for conventions.
 ## 2026-07-30 — TTS recovery and playback-lock reliability
 - Fish-Speech no longer starts in a high-memory compile mode that could exhaust the TTS container and make every voice disappear. Failed Fish startups now clean themselves up instead of starving the other TTS engines.
 - Fish-Speech now loads its 4.56B-parameter model without first allocating a duplicate full-precision copy in system RAM, so Fish voices can start reliably within the TTS container's memory limit and still unload automatically for ComfyUI.
+- Cold Fish requests now continue in the server-side queue after the web request is acknowledged, so a proxy/mobile timeout during the model's 40–50 second warm-up no longer discards the finished speech or reports a false failure.
 - Superadmins can play sounds, TTS, conversations, and URL streams while their admin-only playback lock is enabled; lower roles remain blocked as configured.
 
 ## 2026-07-26 — Cleaner TTS layout on desktop

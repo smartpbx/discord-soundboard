@@ -8493,8 +8493,12 @@ app.get('/api/tts/voices', requireAuth, wrap(async (req, res) => {
 }));
 
 app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
-    let aborted = false;
-    req.on('close', () => { aborted = true; });
+    let clientDisconnected = false;
+    let backgroundAccepted = false;
+    req.on('aborted', () => { clientDisconnected = true; });
+    res.on('close', () => {
+        if (!res.writableEnded) clientDisconnected = true;
+    });
     const { text, voiceId, volume: reqVolume, exaggeration: reqExag, forcedEmotion, useExpression } = req.body;
     if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text required' });
     if (!voiceId || typeof voiceId !== 'string') return res.status(400).json({ error: 'Voice ID required' });
@@ -8641,6 +8645,33 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
     const cacheKey = ttsCache.keyFor(synthPayload);
     let wavBuffer = ttsCache.get(cacheKey);
     let cacheHit = !!wavBuffer;
+    const startedBy = { username: req.session.user.username, role };
+    const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
+
+    // A cold Fish start takes roughly 40-50 seconds. Some reverse proxies and
+    // mobile connections give up around 30 seconds even though synthesis later
+    // succeeds, which used to make us discard the completed WAV. Acknowledge
+    // uncached Fish requests immediately and let the existing serialized synth
+    // queue finish them server-side. Warm/cache hits keep the synchronous path
+    // so the browser can still receive a local waveform token.
+    if (!wavBuffer && voiceId.startsWith('fish_')) {
+        const maxQueue = getTtsMaxQueueSize();
+        const reservedPosition = ttsQueue.length + ttsSynthPending + 1;
+        if (reservedPosition > maxQueue) {
+            return res.status(429).json({ error: `TTS queue is full (max ${maxQueue}). Wait for current clips to finish.` });
+        }
+        backgroundAccepted = true;
+        console.log('[TTS] accepted background Fish synth voice=%s position=%d', voiceId, reservedPosition);
+        res.status(202).json({
+            ok: true,
+            queued: true,
+            generating: true,
+            queuePosition: reservedPosition,
+            displayName: ttsDisplayName,
+            startedBy,
+            multiPlay: multiPlayEnabled,
+        });
+    }
 
     if (!wavBuffer) {
         // Call TTS service (serialized — parallel generations on the same GPU garble).
@@ -8662,6 +8693,7 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
         if (!ttsRes || !ttsRes.ok) {
             const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';
             console.error('[TTS] synthesis failed:', detail);
+            if (backgroundAccepted) return;
             return res.status(502).json({ error: `TTS synthesis failed: ${detail}` });
         }
         try {
@@ -8669,13 +8701,14 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
             wavBuffer = Buffer.from(ab);
         } catch (e) {
             console.error('[TTS] buffer error:', e);
+            if (backgroundAccepted) return;
             return res.status(502).json({ error: 'Failed to read TTS audio' });
         }
         try { ttsCache.put(cacheKey, wavBuffer); } catch {}
     } else {
         console.log('[TTS] synth cache hit voice=%s text_len=%d sha=%s…', voiceId, trimmed.length, cacheKey.slice(0, 12));
     }
-    if (aborted) return;
+    if (clientDisconnected && !backgroundAccepted) return;
 
     // Cache for legacy "save last TTS" feature
     ttsLastBuffer.set(req.session.user.username, { wavBuffer, text: trimmed, voiceId, timestamp: Date.now() });
@@ -8684,11 +8717,12 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
     // AnalyserNode taps the samples).
     const localWavId = ttsWavCacheStash(wavBuffer, req.session.user.username);
 
-    const startedBy = { username: req.session.user.username, role };
-    const ttsDisplayName = `TTS: "${trimmed.length > 40 ? trimmed.slice(0, 40) + '...' : trimmed}"`;
-
     // Check queue size
     if (ttsQueue.length >= getTtsMaxQueueSize()) {
+        if (backgroundAccepted) {
+            console.error('[TTS] completed background synth could not enqueue because the playback queue filled');
+            return;
+        }
         return res.status(429).json({ error: `TTS queue is full (max ${getTtsMaxQueueSize()}). Wait for current clips to finish.` });
     }
 
@@ -8746,7 +8780,9 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
             details: { voiceId, textLength: trimmed.length, preview: trimmed.slice(0, 80), recentId },
         });
     }
-    res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
+    if (!backgroundAccepted) {
+        res.json({ ok: true, queued: true, queuePosition, displayName: ttsDisplayName, startedBy, multiPlay: multiPlayEnabled, localWavId });
+    }
 }));
 
 // Serve a freshly-synthesized TTS WAV by its short-lived token so the
