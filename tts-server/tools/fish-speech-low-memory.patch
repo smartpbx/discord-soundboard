@@ -1,0 +1,47 @@
+diff --git a/fish_speech/models/text2semantic/inference.py b/fish_speech/models/text2semantic/inference.py
+index 59653d5..f5bf21e 100644
+--- a/fish_speech/models/text2semantic/inference.py
++++ b/fish_speech/models/text2semantic/inference.py
+@@ -39,0 +40 @@ from fish_speech.models.text2semantic.llama import (
++    precompute_freqs_cis,
+@@ -364,0 +366,26 @@ def init_model(checkpoint_path, device, precision, compile=False):
++    # Low-memory checkpoint loading constructs S2 Pro on the meta device. Its
++    # three non-persistent buffers are intentionally absent from the checkpoint,
++    # so materialize them directly on the target GPU before Module.to() walks
++    # the model. Creating the 32k causal mask on CPU would add another 1 GiB to
++    # the loader's host-RAM peak.
++    if any(buffer.is_meta for buffer in model.buffers()):
++        config = model.config
++        model.freqs_cis = precompute_freqs_cis(
++            config.max_seq_len,
++            config.head_dim,
++            config.rope_base,
++        ).to(device)
++        model.causal_mask = torch.tril(
++            torch.ones(
++                config.max_seq_len,
++                config.max_seq_len,
++                dtype=torch.bool,
++                device=device,
++            )
++        )
++        model.fast_freqs_cis = precompute_freqs_cis(
++            config.num_codebooks,
++            config.fast_head_dim,
++            config.rope_base,
++        ).to(device)
++
+diff --git a/fish_speech/models/text2semantic/llama.py b/fish_speech/models/text2semantic/llama.py
+index c96aa46..5987fe7 100644
+--- a/fish_speech/models/text2semantic/llama.py
++++ b/fish_speech/models/text2semantic/llama.py
+@@ -521,2 +521,7 @@ class BaseTransformer(nn.Module):
+-        # Initialize model without passing tokenizer explicitly to __init__
+-        model = model_cls(config)
++        # Build the module structure without materializing its randomly
++        # initialized fp32 parameters. S2 Pro has 4.56B parameters, so a normal
++        # construction briefly consumes about 17 GiB of host RAM before the
++        # checkpoint replaces those tensors. The checkpoint load below uses
++        # assign=True, which materializes the real weights onto the meta model.
++        with torch.device("meta"):
++            model = model_cls(config)
