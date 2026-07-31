@@ -8866,6 +8866,29 @@
                     if (superadminStatus) {
                         superadminStatus.textContent = hasActivity ? parts.join(' \u2022 ') : 'Queue idle.';
                     }
+                    // A cold Fish request is acknowledged before synthesis finishes.
+                    // Follow its server-side queue state so the warm-up banner does
+                    // not remain stuck after the clip has played. Do not clear it on
+                    // the first idle poll: that poll can race the background worker.
+                    if (ttsBackgroundAcceptedAt) {
+                        if (hasActivity) {
+                            ttsBackgroundActivitySeen = true;
+                            if (state.ttsQueue.playing || playback.tts) {
+                                setTtsStatus('<span class="tts-spinner"></span> Speaking in Discord…');
+                            } else if (state.ttsQueue.length > 0 && synth === 0) {
+                                setTtsStatus('Queued for TTS');
+                            }
+                        } else if (ttsBackgroundActivitySeen) {
+                            ttsBackgroundAcceptedAt = 0;
+                            ttsBackgroundActivitySeen = false;
+                            setTtsStatus('');
+                            showToast('TTS finished', 'success');
+                            fetchTtsRecents();
+                        } else if ((Date.now() - ttsBackgroundAcceptedAt) > 180000) {
+                            ttsBackgroundAcceptedAt = 0;
+                            setTtsStatus('TTS did not start. Try again.', true);
+                        }
+                    }
                 }
                 if (state.urlQueue) renderUrlQueue(state.urlQueue, state);
                 if (state.recentlyPlayed && Array.isArray(state.recentlyPlayed)) setRecentlyPlayedFromServer(state.recentlyPlayed);
@@ -9185,6 +9208,8 @@
         let ttsBusy = false;
         let ttsVolume = 1.0;
         let ttsExpression = 0.5;
+        let ttsBackgroundAcceptedAt = 0;
+        let ttsBackgroundActivitySeen = false;
 
         async function fetchTtsStatus() {
             try {
@@ -10123,9 +10148,13 @@
                         setTtsStatus(`Wait ${data.cooldownRemaining}s before using TTS again.`, true);
                     }
                 } else if (data.generating) {
+                    ttsBackgroundAcceptedAt = Date.now();
+                    ttsBackgroundActivitySeen = false;
                     setTtsStatus('<span class="tts-spinner"></span> Fish is warming up — it will play in Discord automatically.');
                     showToast('Fish is warming up; TTS will play automatically', 'info');
                 } else {
+                    ttsBackgroundAcceptedAt = 0;
+                    ttsBackgroundActivitySeen = false;
                     if (data.queuePosition && data.queuePosition > 1) {
                         setTtsStatus('Queued (#' + data.queuePosition + ')');
                         showToast('Queued for TTS (#' + data.queuePosition + ')', 'info');
