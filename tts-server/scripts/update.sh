@@ -18,9 +18,9 @@ echo "[*] Installing Python dependencies..."
 $PIP install --no-deps -r "${TTS_DIR}/requirements.txt"
 if [[ -d "$FISH_DIR/.git" && -f "$FISH_PATCH" ]]; then
   echo "[*] Ensuring Fish-Speech low-memory loader patch is installed..."
-  if git -C "$FISH_DIR" apply --unidiff-zero --check "$FISH_PATCH"; then
+  if git -C "$FISH_DIR" apply --unidiff-zero --check "$FISH_PATCH" 2>/dev/null; then
     git -C "$FISH_DIR" apply --unidiff-zero "$FISH_PATCH"
-  elif git -C "$FISH_DIR" apply --unidiff-zero --reverse --check "$FISH_PATCH"; then
+  elif git -C "$FISH_DIR" apply --unidiff-zero --reverse --check "$FISH_PATCH" 2>/dev/null; then
     echo "[=] Fish-Speech low-memory loader patch is already installed."
   else
     echo "[!] Fish-Speech source does not match the tested patch; refusing an unsafe partial update." >&2
