@@ -397,8 +397,15 @@ def _evict_for_fish():
         with _fish_ready_lock:
             if not _fish_is_active():
                 log.info("evict->fish: starting fish-speech.service")
-                _systemctl("start")
+                if not _systemctl("start"):
+                    raise HTTPException(status_code=503, detail="Fish-Speech service failed to start")
             if not _wait_for_fish(timeout_sec=180):
+                # A failed startup can otherwise leave the 4.4B model wedged
+                # halfway through loading, consuming all container RAM/swap.
+                # Stop it before returning so Kokoro/Chatterbox and the
+                # ComfyUI/Ollama GPU-sharing coordinator remain responsive.
+                log.error("Fish-Speech failed readiness; stopping the incomplete service")
+                _systemctl("stop")
                 raise HTTPException(status_code=503, detail="Fish-Speech failed to become ready within 180s")
 
 

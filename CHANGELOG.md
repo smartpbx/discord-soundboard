@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-07-30 — TTS recovery and playback-lock reliability
+- Fish-Speech no longer starts in a high-memory compile mode that could exhaust the TTS container and make every voice disappear. Failed Fish startups now clean themselves up instead of starving the other TTS engines.
+- Superadmins can play sounds, TTS, conversations, and URL streams while their admin-only playback lock is enabled; lower roles remain blocked as configured.
+
 ## 2026-07-26 — Cleaner TTS layout on desktop
 - The Text-to-Speech voice picker is no longer a cramped wall of tiny cards squeezed next to the Preset/Emotion menus. Voice cards are now wider and readable (long names clamp to two lines with a hover tooltip), the picker gets its own full-width row, and on desktop it's a compact scrollable panel so the Speak button and controls stay in view.
 - Opening TTS with a saved voice now scrolls that voice into view in the picker.

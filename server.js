@@ -6672,7 +6672,7 @@ async function playSoundAsLinkedUser(filename, startedBy) {
         if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return { ok: false, reason: 'superadmin-only' };
         if (getPlaybackLocked(meta)) {
             const lockedBy = getPlaybackLockedBy(meta);
-            if (lockedBy === 'superadmin') return { ok: false, reason: 'locked' };
+            if (lockedBy === 'superadmin' && role !== 'superadmin') return { ok: false, reason: 'locked' };
             if (role === 'user') return { ok: false, reason: 'locked' };
         }
 
@@ -6877,7 +6877,7 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
     }
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
-        if (lockedBy === 'superadmin') {
+        if (lockedBy === 'superadmin' && role !== 'superadmin') {
             return res.status(403).json({ error: 'Playback is locked by superadmin.' });
         }
         if (role === 'user' || isGuest) {
@@ -7772,7 +7772,7 @@ app.post('/api/stream-url', requireAuth, wrap(async (req, res) => {
     if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
-        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (lockedBy === 'superadmin' && role !== 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
         if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
     }
 
@@ -8561,7 +8561,7 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
     }
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
-        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (lockedBy === 'superadmin' && role !== 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
         if (role === 'user' || isGuest) return res.status(403).json({ error: 'Playback is locked by an admin.' });
     }
 
@@ -9564,7 +9564,7 @@ app.post('/api/tts/conversation', requireAuth, wrap(async (req, res) => {
     if (getPlaybackSuperadminOnly(meta) && role !== 'superadmin') return res.status(403).json({ error: 'Only superadmin can play.' });
     if (getPlaybackLocked(meta)) {
         const lockedBy = getPlaybackLockedBy(meta);
-        if (lockedBy === 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
+        if (lockedBy === 'superadmin' && role !== 'superadmin') return res.status(403).json({ error: 'Playback is locked by superadmin.' });
         if (role === 'user') return res.status(403).json({ error: 'Playback is locked by an admin.' });
     }
     const conn = getVoiceConnection(activeGuildId);
