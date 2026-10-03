@@ -5,6 +5,10 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-10-03 — Live audio feeds (DiscoPipe)
+- The bot can now play a live audio feed streamed from a desktop — DiscoPipe on Clayton's workstation pipes browser audio straight into the voice channel, so music plays out of the bot instead of through someone's mic. New API: `POST /api/live/start` (the request body is the audio stream), `POST /api/live/stop`, `GET /api/live/status`.
+- Sounds and TTS keep working while a live feed plays: they mix on top, and TTS ducks the feed like it ducks music. The Stop button also ends a live feed; URL streams are blocked while one is playing.
+
 ## 2026-07-30 — TTS recovery and playback-lock reliability
 - Fish-Speech no longer starts in a high-memory compile mode that could exhaust the TTS container and make every voice disappear. Failed Fish startups now clean themselves up instead of starving the other TTS engines.
 - Fish-Speech now loads its 4.56B-parameter model without first allocating a duplicate full-precision copy in system RAM, so Fish voices can start reliably within the TTS container's memory limit and still unload automatically for ComfyUI.

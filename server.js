@@ -1954,6 +1954,37 @@ let activeMixer = null;
 let activeTracks = new Map(); // trackId -> { filename, displayName, startTime, startTimeOffset, duration, startedBy, volume, playId }
 let currentSinglePlayId = null; // DB row id for the in-flight single-play track (null in multi-play mode)
 
+// --- Live audio ingest (DiscoPipe) ---------------------------------------
+// A long-lived chunked POST whose body is an audio stream (any ffmpeg-readable
+// container; DiscoPipe sends Ogg/Opus). It decodes to PCM and rides the mixer
+// as a non-priority track, so sounds and TTS overlay/duck it like they do
+// with music. While a live feed is active the play paths run with multi-play
+// semantics regardless of the toggle — a direct player.play() would silence
+// the feed.
+let activeLive = null; // { ff, req, res, trackId, displayName, startedAt, bytes }
+
+function stopLiveIngest(reason) {
+    const live = activeLive;
+    if (!live) return false;
+    activeLive = null;
+    console.log('[live] stopped (%s) after %ds, %d bytes received', reason,
+        Math.round((Date.now() - live.startedAt) / 1000), live.bytes);
+    try { live.req.destroy(); } catch {}
+    try { live.ff.kill('SIGKILL'); } catch {}
+    if (activeMixer && live.trackId != null) activeMixer.removeTrack(live.trackId);
+    try { live.res.end(); } catch {}
+    return true;
+}
+
+// Stop-others teardown that spares the live feed: clear every sound track
+// but keep the mixer (and the live track on it) running.
+function clearMixerTracksExceptLive() {
+    if (!activeMixer) return;
+    for (const [id] of [...activeMixer.tracks]) {
+        if (!activeLive || id !== activeLive.trackId) activeMixer.removeTrack(id);
+    }
+}
+
 function finalizeAllOpenPlays(stoppedEarly) {
     const opts = typeof stoppedEarly === 'boolean' ? { stoppedEarly } : {};
     if (currentSinglePlayId != null) {
@@ -4579,6 +4610,7 @@ player.on('error', error => {
     console.log('[DIAG] player.error', error.message, 'resource:', meta);
     finalizeAllOpenPlays(true);
     playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+    stopLiveIngest('player-error');
     if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
     activeTracks.clear();
     ttsIsPlaying = false;
@@ -4603,6 +4635,7 @@ player.on('stateChange', (oldState, newState) => {
     if (newState.status === AudioPlayerStatus.Idle) {
         finalizeAllOpenPlays();
         playbackState = { status: 'idle', filename: null, displayName: null, startTime: null, duration: null, startedBy: null };
+        stopLiveIngest('player-idle');
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
         // Whenever the shared player is idle, TTS can't be playing either.
@@ -4630,7 +4663,7 @@ function playTtsBuffer(item) {
     const { wavBuffer, displayName, startedBy, voiceId, ttsVolume } = item;
     ttsIsPlaying = true;
     try {
-        if (multiPlayEnabled) {
+        if (multiPlayEnabled || activeLive) {
             const soundStopOthers = false;
             const currentStatus = player.state.status;
             const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
@@ -4684,9 +4717,10 @@ function processTtsQueue() {
         ttsIsPlaying = false;
     }
     if (ttsIsPlaying) return;
-    // Don't start TTS if a non-TTS sound is currently playing
+    // Don't start TTS if a non-TTS sound is currently playing — except over a
+    // live feed, where TTS joins the mixer as a priority track and ducks it.
     const playerStatus = player.state.status;
-    if ((playerStatus === AudioPlayerStatus.Playing || playerStatus === AudioPlayerStatus.Buffering) && !playbackState.tts) return;
+    if ((playerStatus === AudioPlayerStatus.Playing || playerStatus === AudioPlayerStatus.Buffering) && !playbackState.tts && !activeLive) return;
     const item = ttsQueue.shift();
     console.log('[TTS Queue] playing next item, %d remaining', ttsQueue.length);
     addToRecentlyPlayedServer('tts', item.displayName, item.startedBy?.username ?? null, Date.now());
@@ -6679,12 +6713,13 @@ async function playSoundAsLinkedUser(filename, startedBy) {
         const currentStatus = player.state.status;
         const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
         const startedByRole = playbackState.startedBy?.role;
+        const mixAll = multiPlayEnabled || !!activeLive; // live feed forces mixer semantics
 
-        if (!multiPlayEnabled && isSomeonePlaying) {
+        if (!mixAll && isSomeonePlaying) {
             if ((startedByRole === 'admin' || startedByRole === 'superadmin') && role === 'user') return { ok: false, reason: 'lower-role' };
             if (startedByRole === 'superadmin' && role === 'admin') return { ok: false, reason: 'lower-role' };
         }
-        if (multiPlayEnabled && isSomeonePlaying) {
+        if (mixAll && isSomeonePlaying) {
             let highestActiveRole = startedByRole;
             for (const [, t] of activeTracks) {
                 if (t.startedBy?.role === 'superadmin') { highestActiveRole = 'superadmin'; break; }
@@ -6723,7 +6758,7 @@ async function playSoundAsLinkedUser(filename, startedBy) {
             plannedDurationMs,
         });
 
-        if (multiPlayEnabled) {
+        if (mixAll) {
             const ffArgs = ['-nostdin'];
             if (startTime > 0) ffArgs.push('-ss', String(startTime));
             ffArgs.push('-i', filePath);
@@ -6735,9 +6770,15 @@ async function playSoundAsLinkedUser(filename, startedBy) {
 
             if (soundStopOthers || !isSomeonePlaying) {
                 finalizeAllOpenPlays(true);
-                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
-                activeTracks.clear();
-                player.stop();
+                if (activeLive) {
+                    // Keep the live feed: clear only the sound tracks.
+                    clearMixerTracksExceptLive();
+                    activeTracks.clear();
+                } else {
+                    if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                    activeTracks.clear();
+                    player.stop();
+                }
             }
             if (!activeMixer || activeMixer.destroyed) {
                 activeMixer = new AudioMixer();
@@ -6889,8 +6930,9 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
     const isSomeonePlaying = currentStatus === AudioPlayerStatus.Playing || currentStatus === AudioPlayerStatus.Paused || currentStatus === AudioPlayerStatus.Buffering || currentStatus === AudioPlayerStatus.AutoPaused;
     const startedByRole = playbackState.startedBy?.role;
 
+    const mixAll = multiPlayEnabled || !!activeLive; // live feed forces mixer semantics
     // In single-play mode, enforce override rules
-    if (!multiPlayEnabled && isSomeonePlaying) {
+    if (!mixAll && isSomeonePlaying) {
         if ((startedByRole === 'admin' || startedByRole === 'superadmin') && (role === 'user' || isGuest)) {
             return res.status(403).json({ error: 'An admin or superadmin is playing. You cannot override their playback.' });
         }
@@ -6899,7 +6941,7 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
         }
     }
     // In multi-play mode, users/guests still can't play while a higher role is playing
-    if (multiPlayEnabled && isSomeonePlaying) {
+    if (mixAll && isSomeonePlaying) {
         // Check highest role among active tracks
         let highestActiveRole = startedByRole;
         for (const [, t] of activeTracks) {
@@ -6955,7 +6997,7 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
             plannedDurationMs,
         });
 
-        if (multiPlayEnabled) {
+        if (mixAll) {
             // --- Multi-play mode: use PCM mixer ---
             // Build ffmpeg args to produce raw PCM s16le 48kHz stereo
             const ffArgs = ['-nostdin'];
@@ -6971,9 +7013,15 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
             if (soundStopOthers || !isSomeonePlaying) {
                 // Stop existing mixer if any — finalize any open plays as stopped-early first
                 finalizeAllOpenPlays(true);
-                if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
-                activeTracks.clear();
-                player.stop();
+                if (activeLive) {
+                    // Keep the live feed: clear only the sound tracks.
+                    clearMixerTracksExceptLive();
+                    activeTracks.clear();
+                } else {
+                    if (activeMixer) { activeMixer.removeAllTracks(); activeMixer.destroy(); activeMixer = null; }
+                    activeTracks.clear();
+                    player.stop();
+                }
             }
 
             // Create mixer if needed
@@ -7067,7 +7115,7 @@ app.post('/api/play', requireAuth, wrap(async (req, res) => {
         }
         addToRecentlyPlayedServer(safeFilename, displayName, startedBy?.username ?? null, Date.now());
         const playDurationRes = playDuration != null ? playDuration : duration;
-        res.json({ ok: true, duration: playDurationRes, displayName, startTimeOffset: startTime, startedBy, multiPlay: multiPlayEnabled });
+        res.json({ ok: true, duration: playDurationRes, displayName, startTimeOffset: startTime, startedBy, multiPlay: mixAll });
     } catch (err) {
         console.error('Play error:', err);
         res.status(500).json({ error: err.message || 'Failed to play audio' });
@@ -7235,6 +7283,7 @@ function killActiveUrlStream() {
 function processUrlQueue() {
     if (urlStreamQueue.length === 0) return;
     if (voiceTeardownInProgress) return;
+    if (activeLive) return; // a URL stream would replace the mixer and cut the live feed
     if (urlSkipInProgress) return; // crossfade orchestration owns the player right now
     if (activeUrlStream) return;
     if (player.state.status !== AudioPlayerStatus.Idle) return;
@@ -7748,6 +7797,7 @@ app.post('/api/stream-url', requireAuth, wrap(async (req, res) => {
     if (role === 'guest') return res.status(403).json({ error: 'Guests cannot stream URLs.' });
     if (!getUrlStreamEnabled(role, un)) return res.status(403).json({ error: 'URL streaming is disabled for your role.' });
     if (!activeGuildId || !getVoiceConnection(activeGuildId)) return res.status(400).json({ error: 'Join a voice channel first.' });
+    if (activeLive) return res.status(409).json({ error: 'A live audio feed is playing. Stop it before streaming a URL.' });
 
     const body = req.body || {};
     const previewId = body.previewId ? String(body.previewId).trim() : '';
@@ -8191,8 +8241,13 @@ app.get('/api/playback-state', requireAuth, (req, res) => {
         const duration = hide ? null : q.effectiveDuration;
         return { id: q.id, title: hide ? null : q.title, duration, durationKnown: duration != null && duration > 0, username: q.requestedBy?.username || null, mystery: !!q.mystery };
     }) };
-    // Include all active tracks for multi-play
-    if (multiPlayEnabled && activeTracks.size > 0) {
+    // Live ingest feed (DiscoPipe), shown separately from sound tracks
+    state.live = activeLive ? {
+        displayName: activeLive.displayName,
+        startedAt: activeLive.startedAt,
+    } : null;
+    // Include all active tracks for multi-play (a live feed forces mixer mode)
+    if ((multiPlayEnabled || activeLive) && activeTracks.size > 0) {
         const now = Date.now();
         state.tracks = [];
         for (const [id, t] of activeTracks) {
@@ -8303,6 +8358,7 @@ function stopAllPlayback() {
     // handler it fires synchronously would otherwise start the next queued URL
     // stream we're trying to stop.
     if (urlSkipInProgress) urlSkipAbort = true; // cancel an in-flight crossfade
+    stopLiveIngest('stop-all');
     killActiveUrlStream();
     urlStreamQueue.length = 0;
     urlSkipVotes.clear();
@@ -8322,6 +8378,57 @@ app.post('/api/stop', requireAdmin, (req, res) => {
     }
     stopAllPlayback();
     res.json({ ok: true });
+});
+
+// --- Live audio ingest endpoints (DiscoPipe) ---
+// POST /api/live/start?name=... — the request body IS the audio stream
+// (chunked transfer, any ffmpeg-readable container; DiscoPipe sends
+// Ogg/Opus). The request stays open for the whole session; the response
+// is sent when the feed ends. Companion-token Bearer auth works here.
+app.post('/api/live/start', requireAdmin, (req, res) => {
+    if (!activeGuildId || !getVoiceConnection(activeGuildId)) {
+        return res.status(409).json({ error: 'Bot is not in a voice channel. Join one first.' });
+    }
+    if (activeUrlStream || urlStreamQueue.length > 0) {
+        return res.status(409).json({ error: 'A URL stream is playing or queued. Stop it / clear the queue first.' });
+    }
+    stopLiveIngest('replaced');
+    const displayName = String(req.query.name || 'Live feed').slice(0, 80);
+    const ff = spawn('ffmpeg', ['-nostdin', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    ff.stderr.on('data', () => {});
+    ff.on('error', (err) => console.error('[live] ffmpeg error', err));
+    const live = { ff, req, res, trackId: null, displayName, startedAt: Date.now(), bytes: 0 };
+    req.on('data', (c) => { live.bytes += c.length; });
+    req.pipe(ff.stdin).on('error', () => {});
+    if (!activeMixer || activeMixer.destroyed) {
+        activeMixer = new AudioMixer();
+        const resource = createAudioResource(activeMixer, { inputType: StreamType.Raw, inlineVolume: true });
+        resource.volume.setVolume(currentVolume);
+        player.play(resource);
+    }
+    live.trackId = activeMixer.addTrack(ff.stdout, { filename: 'live', displayName }, ff, { priority: false });
+    activeLive = live;
+    console.log('[live] started "%s" from %s', displayName, getClientIP(req));
+    const cleanup = (why) => { if (activeLive === live) stopLiveIngest(why); };
+    ff.on('close', () => cleanup('decoder-exit'));
+    req.on('close', () => cleanup('client-disconnect'));
+    req.on('error', () => cleanup('request-error'));
+    // No res.json here — stopLiveIngest ends the response when the feed stops.
+});
+
+app.post('/api/live/stop', requireAdmin, (req, res) => {
+    const stopped = stopLiveIngest('api-stop');
+    res.json({ ok: true, stopped });
+});
+
+app.get('/api/live/status', requireAuth, (req, res) => {
+    res.json(activeLive ? {
+        active: true,
+        displayName: activeLive.displayName,
+        startedAt: activeLive.startedAt,
+        bytes: activeLive.bytes,
+        seconds: Math.round((Date.now() - activeLive.startedAt) / 1000),
+    } : { active: false });
 });
 
 app.post('/api/pause', requireAdmin, wrap(async (req, res) => {
@@ -8389,8 +8496,9 @@ app.get('/api/settings/multi-play', requireAuth, (req, res) => res.json({ multiP
 app.post('/api/settings/multi-play', requireAdmin, (req, res) => {
     multiPlayEnabled = !!req.body.enabled;
     saveServerState({ multiPlay: multiPlayEnabled });
-    // If disabling multi-play and there are active mixed tracks, stop them
-    if (!multiPlayEnabled && activeMixer && activeTracks.size > 0) {
+    // If disabling multi-play and there are active mixed tracks, stop them —
+    // unless a live feed is riding the mixer; it keeps mixer semantics anyway.
+    if (!multiPlayEnabled && !activeLive && activeMixer && activeTracks.size > 0) {
         player.stop();
         if (activeMixer) { activeMixer.destroy(); activeMixer = null; }
         activeTracks.clear();
@@ -10924,6 +11032,11 @@ const PORT = process.env.PORT || 3000;
 const httpServer = app.listen(PORT, () => {
     console.log(`🌐 Web UI running at http://localhost:${PORT}`);
 });
+// The live ingest (POST /api/live/start) holds one request open for the whole
+// feed; Node's default 5-minute requestTimeout would cut it off mid-stream.
+// headersTimeout still bounds the pre-body phase.
+httpServer.requestTimeout = 0;
+httpServer.headersTimeout = 60_000;
 
 // WebSocket upgrade for Watch Together rooms.
 const { WebSocketServer } = require('ws');
