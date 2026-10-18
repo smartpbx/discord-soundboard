@@ -10,10 +10,10 @@ WorkingDirectory=/opt/fish-speech
 # a contiguous block — critical on the shared 3090 where Chatterbox/GSV/ollama
 # also live. Without this, fragmentation OOMs Fish during model load.
 Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# S2 Pro is ~4.4B params at fp16 and uses ~7-8 GiB VRAM without torch.compile.
-# Do not add --compile here: its startup working set exceeds CT 110's 12 GiB
-# RAM limit before the model reaches the GPU, which can wedge the entire TTS
-# API in an OOM/restart loop.
+# S2 Pro is ~4.4B params at fp16. --compile makes decoding several times
+# faster (eager mode was ~3.5 tok/s). It used to exceed CT 110's RAM limit
+# during startup; the low-memory loader patch removed the duplicate host copy
+# and CT 110 now has 16 GiB. If startup OOMs again, drop --compile first.
 ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --mode tts \
     --llama-checkpoint-path checkpoints/s2-pro \
@@ -21,7 +21,8 @@ ExecStart=/opt/fish-speech/.venv/bin/python -m tools.api_server \
     --decoder-config-name modded_dac_vq \
     --listen 0.0.0.0:8881 \
     --device cuda \
-    --half
+    --half \
+    --compile
 # tts-server starts Fish lazily on the next Fish request. Do not automatically
 # restart an OOM-killed loader; that just repeats the allocation and starves
 # every other TTS engine.

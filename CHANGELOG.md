@@ -5,6 +5,11 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-10-18 — Faster Fish TTS
+- Fish voices generate several times faster once loaded: Fish-Speech now runs compiled instead of in its slow default mode. The first load after a restart takes longer while it compiles.
+- Fish starts loading as soon as you pick a Fish voice (or click into the text box with one selected), so most of the warm-up happens while you type.
+- The TTS panel only says "Fish is warming up" when Fish actually has to load. If Fish is already loaded from a recent request, it says "Fish is generating". Fish stays loaded for 10 minutes after its last use.
+
 ## 2026-10-03 — Live audio feeds (DiscoPipe)
 - The bot can now play a live audio feed streamed from a desktop — DiscoPipe on Clayton's workstation pipes browser audio straight into the voice channel, so music plays out of the bot instead of through someone's mic. New API: `POST /api/live/start` (the request body is the audio stream), `POST /api/live/stop`, `GET /api/live/status`.
 - Sounds and TTS keep working while a live feed plays: they mix on top, and TTS ducks the feed like it ducks music. The Stop button also ends a live feed; URL streams are blocked while one is playing.

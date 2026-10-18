@@ -10063,6 +10063,21 @@
         if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', updateTtsExpressionVisibility);
         if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', syncVoiceCards);
 
+        // Start loading Fish as soon as a Fish voice is picked (or the text box
+        // is focused with one selected) so the cold start overlaps typing. The
+        // server ignores repeats while Fish is loading or loaded; we throttle
+        // anyway so focus/blur churn doesn't spam it.
+        let _fishPrewarmAt = 0;
+        function prewarmFishIfSelected() {
+            const id = ttsVoiceSelectEl?.value || '';
+            if (!id.startsWith('fish_') || !user) return;
+            if (Date.now() - _fishPrewarmAt < 60000) return;
+            _fishPrewarmAt = Date.now();
+            api('/api/tts/fish/prewarm', { method: 'POST' }).catch(() => {});
+        }
+        if (ttsVoiceSelectEl) ttsVoiceSelectEl.addEventListener('change', prewarmFishIfSelected);
+        document.getElementById('ttsTextInput')?.addEventListener('focus', prewarmFishIfSelected);
+
         function setTtsStatus(msg, isError) {
             const el = document.getElementById('ttsStatus');
             if (!el) return;
@@ -10150,8 +10165,13 @@
                 } else if (data.generating) {
                     ttsBackgroundAcceptedAt = Date.now();
                     ttsBackgroundActivitySeen = false;
-                    setTtsStatus('<span class="tts-spinner"></span> Fish is warming up — it will play in Discord automatically.');
-                    showToast('Fish is warming up; TTS will play automatically', 'info');
+                    if (data.fishWarm) {
+                        setTtsStatus('<span class="tts-spinner"></span> Fish is generating — it will play in Discord automatically.');
+                        showToast('Fish is generating; TTS will play automatically', 'info');
+                    } else {
+                        setTtsStatus('<span class="tts-spinner"></span> Fish is warming up — it will play in Discord automatically.');
+                        showToast('Fish is warming up; TTS will play automatically', 'info');
+                    }
                 } else {
                     ttsBackgroundAcceptedAt = 0;
                     ttsBackgroundActivitySeen = false;
@@ -11467,7 +11487,7 @@
                     ['[pitch up] / [in a small voice] / [professional tone]', 'free-form — invent your own'],
                 ],
                 knobs: 'Synth knobs: temperature 0.8, top_p 0.8 (defaults). Fish ignores per-emotion ref clips — its tags drive expression.',
-                speed: 'Heaviest engine (~19 GiB VRAM). Auto-stopped when other engines synth, auto-restarted on next Fish call (~30 s warmup with --compile).',
+                speed: 'Heaviest engine (~19 GiB VRAM). Auto-stopped when other engines synth, auto-restarted on next Fish call or when a Fish voice is picked.',
             },
             gptsovits: {
                 ref: 'Reference: 3–10 s, mono, 32 kHz (auto-trimmed/resampled). Quality matters more than length — pick a clean, expressive line.',

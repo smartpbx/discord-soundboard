@@ -8769,11 +8769,19 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
             return res.status(429).json({ error: `TTS queue is full (max ${maxQueue}). Wait for current clips to finish.` });
         }
         backgroundAccepted = true;
-        console.log('[TTS] accepted background Fish synth voice=%s position=%d', voiceId, reservedPosition);
+        // Tell the UI whether Fish is already resident so it doesn't claim a
+        // warm-up on every uncached request. Unknown (probe failed) → cold.
+        let fishWarm = false;
+        try {
+            const h = await ttsFetch('/health/engines', { timeout: 3000 });
+            if (h && h.ok) fishWarm = (await h.json())?.engines?.fish?.status === 'ready';
+        } catch (_) {}
+        console.log('[TTS] accepted background Fish synth voice=%s position=%d warm=%s', voiceId, reservedPosition, fishWarm);
         res.status(202).json({
             ok: true,
             queued: true,
             generating: true,
+            fishWarm,
             queuePosition: reservedPosition,
             displayName: ttsDisplayName,
             startedBy,
@@ -8791,7 +8799,7 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(synthPayload),
-                    timeout: 200000, // > fish-speech ~180s cold start (was 120000, guaranteed 504 on cold engine load)
+                    timeout: 480000, // > fish-speech cold start (FISH_READY_TIMEOUT_SEC=420 with --compile)
                 });
             });
         } catch (e) {
@@ -8896,6 +8904,16 @@ app.post('/api/tts/speak', requireAuth, wrap(async (req, res) => {
 // Serve a freshly-synthesized TTS WAV by its short-lived token so the
 // requesting browser can feed it through an AnalyserNode for the live
 // waveform. Not a persistent asset — fetch once and play.
+// The UI calls this when a Fish voice is picked so the model loads while the
+// user is still typing. Best-effort: failures are reported but harmless.
+app.post('/api/tts/fish/prewarm', requireAuth, wrap(async (req, res) => {
+    if (req.session.user.role === 'guest' && !getGuestEnabled()) return res.status(403).json({ error: 'Guest access is disabled.' });
+    const r = await ttsFetch('/admin/fish/prewarm', { method: 'POST', timeout: 10000 });
+    if (!r) return res.status(503).json({ error: 'TTS not configured' });
+    const body = await r.json().catch(() => ({}));
+    res.status(r.ok ? 200 : 503).json(body);
+}));
+
 app.get('/api/tts/wav/:id', requireAuth, (req, res) => {
     const entry = ttsWavCache.get(req.params.id);
     if (!entry) return res.status(404).json({ error: 'WAV expired or not found' });
@@ -9778,7 +9796,7 @@ app.post('/api/tts/conversation', requireAuth, wrap(async (req, res) => {
             } else {
                 const ttsRes = await runTtsSynthSerially(() => ttsFetch('/synthesize', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(synthPayload), timeout: 200000, // > fish-speech ~180s cold start (was 120000, guaranteed 504 on cold engine load)
+                    body: JSON.stringify(synthPayload), timeout: 480000, // > fish-speech cold start (FISH_READY_TIMEOUT_SEC=420 with --compile)
                 }));
                 if (!ttsRes || !ttsRes.ok) {
                     const detail = ttsRes ? (await ttsRes.text().catch(() => ttsRes.statusText)) : 'unreachable';

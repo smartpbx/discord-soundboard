@@ -284,6 +284,9 @@ GSV_SERVICE = os.environ.get("GPT_SOVITS_SERVICE_UNIT", "gptsovits.service")
 GSV_HEALTH_URL = os.environ.get("GPT_SOVITS_URL", "http://localhost:9880").rstrip("/") + "/"
 GPU_ENGINE_IDLE_TTL_SEC = int(os.environ.get("TTS_GPU_IDLE_TTL_SEC", 10 * 60))
 GPU_IDLE_CHECK_INTERVAL_SEC = 60
+# --compile adds a JIT pass to Fish's startup; the first boot after a code or
+# torch change can take several minutes before the inductor cache is warm.
+FISH_READY_TIMEOUT_SEC = int(os.environ.get("FISH_READY_TIMEOUT_SEC", 420))
 _fish_ready_lock = threading.Lock()
 _gsv_ready_lock = threading.Lock()
 _engine_activity_lock = threading.Lock()
@@ -399,14 +402,62 @@ def _evict_for_fish():
                 log.info("evict->fish: starting fish-speech.service")
                 if not _systemctl("start"):
                     raise HTTPException(status_code=503, detail="Fish-Speech service failed to start")
-            if not _wait_for_fish(timeout_sec=180):
+            if not _wait_for_fish(timeout_sec=FISH_READY_TIMEOUT_SEC):
                 # A failed startup can otherwise leave the 4.4B model wedged
                 # halfway through loading, consuming all container RAM/swap.
                 # Stop it before returning so Kokoro/Chatterbox and the
                 # ComfyUI/Ollama GPU-sharing coordinator remain responsive.
                 log.error("Fish-Speech failed readiness; stopping the incomplete service")
                 _systemctl("stop")
-                raise HTTPException(status_code=503, detail="Fish-Speech failed to become ready within 180s")
+                raise HTTPException(status_code=503, detail=f"Fish-Speech failed to become ready within {FISH_READY_TIMEOUT_SEC}s")
+
+
+_fish_prewarm_thread = None
+
+
+def _fish_prewarm_watch():
+    """Wait for a pre-warmed Fish without holding the GPU lock, so Kokoro and
+    other synths aren't blocked by a speculative start. Mirrors
+    _evict_for_fish's cleanup: a load that never becomes ready is stopped."""
+    if _wait_for_fish(timeout_sec=FISH_READY_TIMEOUT_SEC):
+        log.info("Fish pre-warm: ready")
+        return
+    with _GPU_OPERATION_LOCK:
+        with _fish_ready_lock:
+            if _fish_is_active() and not _fish_is_responsive():
+                log.error("Fish pre-warm: failed readiness; stopping the incomplete service")
+                _systemctl("stop")
+
+
+@app.post("/admin/fish/prewarm")
+def fish_prewarm():
+    """Start fish-speech ahead of a likely Fish request (a Fish voice was just
+    picked in the UI). Returns immediately; the next synth waits for readiness
+    as usual. Counts as Fish activity so the idle release restarts its timer."""
+    global _fish_prewarm_thread
+    if _TRAINING_MODE:
+        return {"status": "skipped", "reason": "training mode"}
+    with _GPU_HOLDERS_LOCK:
+        if _GPU_HOLDERS:
+            return {"status": "skipped", "reason": "gpu released"}
+    with _engine_activity_lock:
+        _engine_activity["fish"]["last_used"] = time.monotonic()
+    if _fish_prewarm_thread is not None and _fish_prewarm_thread.is_alive():
+        return {"status": "loading"}
+    with _GPU_OPERATION_LOCK:
+        with _fish_ready_lock:
+            if _fish_is_active():
+                return {"status": "ready" if _fish_is_responsive(timeout=1.0) else "loading"}
+            try: chatterbox_engine.free_caches()
+            except Exception as e: log.warning("prewarm: chatterbox free_caches failed: %s", e)
+            try: rvc_engine.free_caches()
+            except Exception as e: log.warning("prewarm: rvc free_caches failed: %s", e)
+            log.info("Fish pre-warm: starting fish-speech.service")
+            if not _systemctl("start"):
+                raise HTTPException(status_code=503, detail="Fish-Speech service failed to start")
+    _fish_prewarm_thread = threading.Thread(target=_fish_prewarm_watch, name="fish-prewarm", daemon=True)
+    _fish_prewarm_thread.start()
+    return {"status": "starting"}
 
 
 def _evict_for_non_fish():
@@ -559,7 +610,7 @@ def health_engines():
             },
             "fish": {
                 "status": "ready" if fish_ready else ("loading" if fish_active else "stopped"),
-                "note": "evicted when other engines synth" if not fish_active else ("warming up (compile JIT ~30s)" if not fish_ready else "warm"),
+                "note": "evicted when other engines synth" if not fish_active else ("warming up" if not fish_ready else "warm"),
             },
         },
     }
