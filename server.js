@@ -7132,8 +7132,10 @@ const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
 
 // Args applied to every yt-dlp invocation. Three layers stack here to defeat
 // YouTube's 2025-era anti-scraping:
-//   1. android/ios/web player_client list -- avoids the bare-web bot wall and
-//      exposes Shorts formats.
+//   1. tv_simply/android/ios/web player_client list -- tv_simply first because
+//      YouTube began forcing SABR-only streaming on android/ios/web (2026-10),
+//      leaving them with storyboard formats only; android/ios still avoid the
+//      bare-web bot wall and expose Shorts formats when SABR isn't forced.
 //   2. bgutil-pot-provider script path (auto-detected when present) -- supplies
 //      the GVS PO Tokens YouTube now requires for non-storyboard formats.
 //      Paired with the local 127.0.0.1:4416 HTTP server that the pip plugin
@@ -7145,7 +7147,7 @@ const YT_DLP_BIN = process.env.YT_DLP_BIN || 'yt-dlp';
 //      Chromium session); YTDLP_COOKIES_FILE accepts a Netscape cookies.txt.
 const BGUTIL_POT_SCRIPT = '/opt/bgutil-pot-server/server/build/generate_once.js';
 function ytdlpCommonArgs() {
-    const args = ['--extractor-args', 'youtube:player_client=android,ios,web'];
+    const args = ['--extractor-args', 'youtube:player_client=tv_simply,android,ios,web'];
     try {
         if (fs.existsSync(BGUTIL_POT_SCRIPT)) {
             args.push('--extractor-args', `youtubepot-bgutilscript:script_path=${BGUTIL_POT_SCRIPT}`);

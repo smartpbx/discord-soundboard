@@ -5,6 +5,9 @@ User-facing changes, newest first. The web UI surfaces this through a
 Every commit that ships a user-visible change should add an entry here —
 see `CLAUDE.md` for conventions.
 
+## 2026-10-18 — YouTube URL streaming fixed
+- YouTube links play again in the URL streamer and watch party. YouTube had started refusing the download method the bot used.
+
 ## 2026-10-18 — Faster Fish TTS
 - Fish voices generate several times faster once loaded: Fish-Speech now runs compiled instead of in its slow default mode. The first load after a restart takes longer while it compiles.
 - Fish starts loading as soon as you pick a Fish voice (or click into the text box with one selected), so most of the warm-up happens while you type.
